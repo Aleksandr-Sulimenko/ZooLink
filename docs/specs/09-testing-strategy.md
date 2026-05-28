@@ -1,3 +1,10 @@
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "System Analyst"
+status: "Approved"
+---
+
 # Spec: Testing Strategy
 
 ## Outcome
@@ -19,6 +26,27 @@ Define a comprehensive testing strategy for ZooLink that ensures high code quali
 - Accessibility testing (a11y) - deferred but considered in component design
 - Usability testing - deferred to product team
 - Visual regression testing - deferred to phase 2
+
+## План нагрузочного и стресс‑тестирования (k6/Locust)
+
+Для оценки производительности системы под нагрузкой в фазе 2 и выше рекомендуется использовать k6 или Locust для имитации реалистичных сценариев использования.
+
+### Рекомендуемые сценарии
+1. **Всплеск регистрации пользователей** – 1000 новых пользователей за 5 минут (Simulating peak load during marketing campaigns)
+2. **Конкурентное создание объявлений** – 500 активных пользователей одновременно создающих объявления
+3. **Гео‑поиск под нагрузкой** – 1000 запросов/сек с более чем 100k объявлений в базе
+4. **Смешанный рабочий нагруз** – Комбинация просмотра объявлений, поиска, создания объявлений и аутентификации
+
+### Целевые показатели
+- 95-й перцентиль задержки < 2s для критических пользовательских потоков
+- Частота ошибок < 0.1%
+- Stability: система остается отзывчивой во время часового теста устойчивой нагрузки
+- Потребление ресурсов: CPU < 70%, RAM < 80% при пиковой нагрузке
+
+### Инструменты
+- **k6** – предпочтителен для скриптового тестирования на JavaScript/TypeScript, хорошая интеграция с CI
+- **Locust** – удобен для сценарного тестирования на Python, распределенное тестирование
+
 
 ## Constraints
 - **Coverage Target:** ≥ 90–95% overall code coverage (with exceptions only for trivial code like getters/setters)

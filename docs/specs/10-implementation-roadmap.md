@@ -1,3 +1,10 @@
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "System Analyst"
+status: "Approved"
+---
+
 # Spec: Implementation Roadmap
 
 ## Outcome
@@ -88,6 +95,8 @@ Provide a phased implementation plan for ZooLink that delivers value early, mana
 - System handles 100 concurrent users with acceptable response times (<2s for core flows)
 - Basic automated test coverage: unit tests >80% for critical paths
 - Compliance check: basic adherence to 152-ФЗ (minimal PII storage, consent flows)
+- Уровень надежности: uptime > 99.0%, RPO < 2 часа, RTO < 1 час
+
 
 **Risks to Address:**
 - Security: Phone verification security, rate limiting on SMS
@@ -131,13 +140,15 @@ Provide a phased implementation plan for ZooLink that delivers value early, mana
    - Enhanced monitoring and alerting
    - Database indexing improvements
    - CI/CD enhancements (staging environments, canary releases)
-   - Feature flags for risky changes
-
 **Success Criteria:**
 - User retention metrics show improvement (DAU/WAU)
 - Listing conversion rate (views → contacts) improves
 - Moderation efficiency increases (time to review decreases)
 - System handles 500 concurrent users
+- Test coverage improves: unit tests >90%, integration tests >80%
+- PWA scores well on Lighthouse (>90 performance, >95 accessibility)
+- Уровень надежности: uptime > 99.5%, RPO < 1 час, RTO < 30 минут
+
 - Test coverage improves: unit tests >90%, integration tests >80%
 - PWA scores well on Lighthouse (>90 performance, >95 accessibility)
 
@@ -184,6 +195,8 @@ Provide a phased implementation plan for ZooLink that delivers value early, mana
 - New verticals show early traction
 - Monetization pathways validated
 - Performance maintains <2s core flows at scale
+- Уровень надежности: uptime > 99.9%, RPO < 30 минут, RTO < 15 минут
+- Уровень надежности: RPO (Recovery Point Objective) и RTO (Recovery Time Objective) соответствуют требованиям восстановления после сбоев при масштабированных нагрузках.
 
 ## Dependencies and Risk Mitigation
 - **Technical Debt:** Allocate 20% of each sprint to refactoring and debt reduction

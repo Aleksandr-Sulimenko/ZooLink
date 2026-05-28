@@ -1,3 +1,10 @@
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "Системный аналитик"
+status: "Approved"
+---
+
 # Спецификации ZooLink
 
 Этот каталог содержит артефакты Spec-Driven Development (SDD) для проекта ZooLink.

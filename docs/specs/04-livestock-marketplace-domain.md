@@ -1,3 +1,10 @@
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "System Analyst"
+status: "Approved"
+---
+
 # Spec: Livestock Marketplace Domain
 
 ## Outcome

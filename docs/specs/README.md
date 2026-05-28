@@ -1,3 +1,10 @@
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "System Analyst"
+status: "Approved"
+---
+
 # ZooLink Specifications
 
 This directory contains Spec-Driven Development (SDD) artifacts for the ZooLink project.

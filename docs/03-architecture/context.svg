@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+---
+version: "1.2"
+lastUpdated: "2026-05-28"
+author: "Системный аналитик"
+status: "Approved"
+---
+-->
+<svg width="1000" height="600" xmlns="http://www.w3.org/2000/svg">
+  <!-- Styles -->
+  <style type="text/css"><![CDATA[
+    .box { rx: 10; ry: 10; fill: #f8f9fa; stroke: #6c757d; stroke-width: 2; }
+    .text { font-family: Arial, sans-serif; font-size: 14px; fill: #212529; }
+    .title { font-weight: bold; font-size: 16px; }
+    .arrow { fill: none; stroke: #6c757d; stroke-width: 2; marker-end: url(#arrowhead); }
+    .label { font-size: 12px; }
+  ]]></style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6c757d" />
+    </marker>
+  </defs>
+
+  <!-- User -->
+  <rect x="50" y="150" width="200" height="100" class="box" />
+  <text x="150" y="190" text-anchor="middle" class="text title">Пользователь</text>
+  <text x="150" y="215" text-anchor="middle" class="text">Владелец животного, заводчик, фермер, модератор, администратор</text>
+
+  <!-- ZooLink System -->
+  <rect x="300" y="150" width="300" height="200" class="box" />
+  <text x="450" y="190" text-anchor="middle" class="text title">ZooLink System</text>
+  <text x="450" y="215" text-anchor="middle" class="text">Основное приложение для управления объявлениями, поиска и подбора животных</text>
+  <text x="450" y="240" text-anchor="middle" class="text">Бэкенд (NestJS) + Фронтенд (React) + База данных (PostgreSQL/Redis)</text>
+
+  <!-- External Systems -->
+  <!-- SMS Provider -->
+  <rect x="650" y="100" width="200" height="80" class="box" />
+  <text x="750" y="135" text-anchor="middle" class="text title">SMS провайдер (Twilio)</text>
+  <text x="750" y="155" text-anchor="middle" class="text">Отправка кодов подтверждения</text>
+
+  <!-- Yandex.Maps API -->
+  <rect x="650" y="220" width="200" height="80" class="box" />
+  <text x="750" y="255" text-anchor="middle" class="text title">API Яндекс.Карт</text>
+  <text x="750" y="275" text-anchor="middle" class="text">Геокодинг и обратное геокодирование</text>
+
+  <!-- Payment Gateway -->
+  <rect x="650" y="340" width="200" height="80" class="box" />
+  <text x="750" y="375" text-anchor="middle" class="text title">Платёжный шлюз</text>
+  <text x="750" y="395" text-anchor="middle" class="text">Обработка платежей (этап 2)</text>
+
+  <!-- Cloud Storage -->
+  <rect x="650" y="460" width="200" height="80" class="box" />
+  <text x="750" y="495" text-anchor="middle" class="text title">Облачное хранилище (S3)</text>
+  <text x="750" y="515" text-anchor="middle" class="text">Хранение медиа объявлений</text>
+
+  <!-- Connections -->
+  <!-- User to ZooLink -->
+  <line x1="250" y1="200" x2="300" y2="250" class="arrow" />
+  <line x1="250" y1="200" x2="300" y2="150" class="arrow" />
+  <text x="270" y="180" class="label">Использует</text>
+
+  <!-- ZooLink to SMS Provider -->
+  <line x1="600" y1="200" x2="650" y2="140" class="arrow" />
+  <text x="620" y="170" class="label">SMS уведомления</text>
+
+  <!-- ZooLink to Yandex.Maps API -->
+  <line x1="600" y1="250" x2="650" y2="260" class="arrow" />
+  <text x="620" y="230" class="label">Гео-поиск</text>
+
+  <!-- ZooLink to Payment Gateway -->
+  <line x1="600" y1="300" x2="650" y2="380" class="arrow" />
+  <text x="620" y="340" class="label">Оплата услуг (этап 2)</text>
+
+  <!-- ZooLink to Cloud Storage -->
+  <line x1="600" y1="350" x2="650" y2="500" class="arrow" />
+  <text x="620" y="420" class="label">Загрузка/извлечение медиа</text>
+</svg>
