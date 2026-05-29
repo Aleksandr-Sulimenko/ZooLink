@@ -2,52 +2,52 @@
 
 **Derived from initiation brief answers (10 questions). This document serves as the anchor context for all SDD artifacts.**
 
-## 1. Целевая платформа для MVP
-Web-only с адаптивом под мобильные устройства; отдельные нативные приложения планируются на этапе 2.
+## 1. Target Platform for MVP
+Web-only with mobile responsiveness; separate native applications are planned for phase 2.
 
-## 2. Список поддоменов (Domain breakdown)
-- Identity Domain (аутентификация, профили пользователей)
-- Animal Domain (сущность животного как отдельная aggregate root)
-- Pet Marketplace Domain (объявления для домашних животных)
-- Livestock Marketplace Domain (объявления для сельскохозяйственных животных)
-- Matching Domain (специфичная логика подбора пар для вязки)
-- Admin Domain (премодерация, управление справочниками, бан users)
-*(Social/Community, Чат, Форум, Календари, Статьи отложены на будущие этапы)*
+## 2. Domain Breakdown
+- Identity Domain (authentication, user profiles)
+- Animal Domain (animal entity as a separate aggregate root)
+- Pet Marketplace Domain (listings for pets)
+- Livestock Marketplace Domain (listings for livestock)
+- Matching Domain (specific logic for matching pairs for breeding)
+- Admin Domain (pre-moderation, directory management, user blocking)
+*(Social/Community, Chat, Forum, Calendars, Articles deferred to future phases)*
 
-## 3. Животное как сущность
-Да, животное — отдельная сущность (aggregate root). Одно животное может иметь несколько объявлений (продажа, вязка, выставка, участие в выставках и т.д.).
+## 3. Animal as Entity
+Yes, the animal is a separate entity (aggregate root). One animal can have multiple listings (for sale, breeding, exhibition, participation in exhibitions, etc.).
 
-## 4. Чат для MVP
-Нет. Чат перенесен на этап 2. На MVP взаимодействие происходит через показ контактов после модерации объявления (номер телефона, ссылки на TG/VK).
+## 4. Chat for MVP
+No. Chat is moved to phase 2. In MVP, interaction occurs through displaying contacts after moderation of the listing (phone number, TG/VK links).
 
-## 5. Гео-поиск
-Обязателен. Требуется поиск в радиусе (1–100 км от пользователя), а не только по городам/регионам.
+## 5. Geo-search
+Mandatory. Requires search within a radius (1–100 km from the user), not only by cities/regions.
 
-## 6. Модерация
-Предмодерация (объявление появляется только после проверки модератором). Требует административную панель для очереди и принятия решений.
+## 6. Moderation
+Pre-moderation (listing appears only after moderator review). Requires an admin panel for queue and decision-making.
 
-## 7. Делим домашних и сельхоз животных
-Да, жесткое разделение витрин: разные наборы атрибутов, разные правила валидации, отдельные UI-потоки (разные разделы сайта).
+## 7. Separating Pets and Livestock
+Yes, strict separation of storefronts: different attribute sets, different validation rules, separate UI flows (different sections of the site).
 
-## 8. Авторизация
-Телефон (SMS-код) + OAuth через Google, Apple, Telegram, VK. Email-верификация опциональна (не блокирует регистрацию).
+## 8. Authorization
+Phone (SMS code) + OAuth via Google, Apple, Telegram, VK. Email verification is optional (does not block registration).
 
-## 9. Стек (предварительно)
-- Бэкенд: Node.js (NestJS) – выбран за модульность, DI и поддержку DDD-модулей.
-- База данных: PostgreSQL – реляционная модель подходит для сложных связей и транзакций.
-- Внешнее хранилище файлов: S3-совместимое (MinIO в dev).
-- Кеширование: Redis (сессии, справочники).
-- Интеграции: SMS-шлюз, OAuth провайдеры, геокодер (Яндекс.Карты на бесплатном tier).
+## 9. Stack (Preliminary)
+- Backend: Node.js (NestJS) – chosen for modularity, DI, and DDD module support.
+- Database: PostgreSQL – relational model suits complex relationships and transactions.
+- External file storage: S3-compatible (MinIO in dev).
+- Caching: Redis (sessions, directories).
+- Integrations: SMS gateway, OAuth providers, geocoder (Yandex.Maps on free tier).
 
-## 10. Самое сложное/рискованное место в MVP
-- **Безопасность**: защита данных о животных (особенно сельхоз), предотвращение мошенничества, соответствие ФЗ-152.
-- **Производительность гео-поиска**: обеспечение отклика <1с при радиусных запросах требует правильной индексации и possibly PostGIS в будущем.
-- **Премодерация workflow**: необходимость ручной проверки при росте объема требует продуктово-операционного баланса (возможно позже ML-ассистент).
+## 10. Most Complex/Risky Aspect in MVP
+- **Security**: protection of animal data (especially livestock), fraud prevention, compliance with Federal Law 152-FZ.
+- **Geo-search performance**: ensuring response time <1s for radius queries requires proper indexing and possibly PostGIS in the future.
+- **Pre-moderation workflow**: the need for manual review as volume grows requires a product-operational balance (possibly later ML assistant).
 
-## Дополнительные примечания из обсуждения
-- Архитектура должна позволять добавлять будущие фичи (чат, видео, форумы, календарь вязок, интеграцию с Меркурием, биллинг) без масштабного переписывания. Это достигается через:
-  - Strict bounded contexts (DDD-модули) с четким API-контрактом.
-  - Event-driven коммуникация между доменами (NestJS события или вынесенныйessage broker позже).
-  - Расширяемая схема БД (использование JSONB для экспериментальных атрибутов, миграции только для core-изменений).
-  - Feature toggles для рискованных boundary (чат, монетация).
-  - Хранение файлов по папкам, допускающее добавление новых типов контента (видео, документы, альбомы).
+## Additional Notes from Discussion
+- Architecture should allow adding future features (chat, video, forums, breeding calendars, integration with Mercury, billing) without major rewriting. This is achieved through:
+  - Strict bounded contexts (DDD modules) with clear API contracts.
+  - Event-driven communication between domains (NestJS events or a decoupled message broker later).
+  - Extensible database schema (using JSONB for experimental attributes, migrations only for core changes).
+  - Feature toggles for risky boundaries (chat, monetization).
+  - Storing files in folders, allowing addition of new content types (videos, documents, albums).

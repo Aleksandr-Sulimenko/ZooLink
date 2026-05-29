@@ -27,25 +27,25 @@ Define a comprehensive testing strategy for ZooLink that ensures high code quali
 - Usability testing - deferred to product team
 - Visual regression testing - deferred to phase 2
 
-## План нагрузочного и стресс‑тестирования (k6/Locust)
+## Load and Stress Testing Plan (k6/Locust)
 
-Для оценки производительности системы под нагрузкой в фазе 2 и выше рекомендуется использовать k6 или Locust для имитации реалистичных сценариев использования.
+To evaluate system performance under load in phase 2 and above, it is recommended to use k6 or Locust to simulate realistic usage scenarios.
 
-### Рекомендуемые сценарии
-1. **Всплеск регистрации пользователей** – 1000 новых пользователей за 5 минут (Simulating peak load during marketing campaigns)
-2. **Конкурентное создание объявлений** – 500 активных пользователей одновременно создающих объявления
-3. **Гео‑поиск под нагрузкой** – 1000 запросов/сек с более чем 100k объявлений в базе
-4. **Смешанный рабочий нагруз** – Комбинация просмотра объявлений, поиска, создания объявлений и аутентификации
+### Recommended Scenarios
+1. **User Registration Spike** – 1000 new users within 5 minutes (Simulating peak load during marketing campaigns)
+2. **Concurrent Listing Creation** – 500 active users simultaneously creating listings
+3. **Geo‑search Under Load** – 1000 requests/sec with more than 100k listings in the database
+4. **Mixed Workload** – Combination of listing browsing, searching, creating listings, and authentication
 
-### Целевые показатели
-- 95-й перцентиль задержки < 2s для критических пользовательских потоков
-- Частота ошибок < 0.1%
-- Stability: система остается отзывчивой во время часового теста устойчивой нагрузки
-- Потребление ресурсов: CPU < 70%, RAM < 80% при пиковой нагрузке
+### Target Metrics
+- 95th percentile latency < 2s for critical user flows
+- Error rate < 0.1%
+- Stability: system remains responsive during a one‑hour sustained load test
+- Resource consumption: CPU < 70%, RAM < 80% under peak load
 
-### Инструменты
-- **k6** – предпочтителен для скриптового тестирования на JavaScript/TypeScript, хорошая интеграция с CI
-- **Locust** – удобен для сценарного тестирования на Python, распределенное тестирование
+### Tools
+- **k6** – preferred for scripted testing in JavaScript/TypeScript, good CI integration
+- **Locust** – convenient for scenario‑based testing in Python, distributed testing
 
 
 ## Constraints
