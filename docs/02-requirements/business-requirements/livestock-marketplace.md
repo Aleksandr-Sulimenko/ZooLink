@@ -41,6 +41,13 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
     - Male's proven fertility (number of offspring, conception rates)
     - Terms: natural service vs. AI, location, collection/shipping terms
     - Guarantees (pregnancy guarantee, live offspring guarantee)
+- **Organization/Branch Attribution**:
+  - When creating a listing, the user must specify either:
+    - Their personal account (via `creator_id`) **OR**
+    - An organization (via `organization_id`) and optionally a branch (via `branch_id`).
+  - The `creator_id` (the individual who submitted the listing) is always recorded for audit purposes.
+  - Listings linked to an organization show the organization’s name (and branch, if specified) in the public view.
+  - **Important**: When listing on behalf of an organization, the animal must be owned by that organization (i.e., the animal's `organization_id` must match the listing's `organization_id`).
 
 ### 2. Listing Validation & Moderation
 - All listings enter `PENDING_MODERATION` state upon submission.

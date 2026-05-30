@@ -29,12 +29,19 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - `location` (city + optional address precision; required for moderation and geo-search)
   - `photos` (1-5 images; minimum 1 clear photo of the animal)
   - `contact_method_visibility` (boolean: whether to show phone/socials after moderation)
+- **Organization/Branch Attribution**:
+  - When creating a listing, the user must specify either:
+    - Their personal account (via `creator_id`) **OR**
+    - An organization (via `organization_id`) and optionally a branch (via `branch_id`).
+  - The `creator_id` (the individual who submitted the listing) is always recorded for audit purposes.
+  - Listings linked to an organization show the organization’s name (and branch, if specified) in the public view.
+  - **Important**: When listing on behalf of an organization, the animal must be owned by that organization (i.e., the animal's `organization_id` must match the listing's `organization_id`).
 - Optional but recommended fields:
   - Vaccination status (dropdown: up to date, partial, none + dates if known)
   - Temperament descriptors (checklist: friendly with kids, friendly with dogs, friendly with cats, energetic, calm, anxious, protective)
   - Health notes (free text: spayed/neutered, known allergies, chronic conditions)
   - Pedigree info (text: registered with club? registration number if available)
-  - For MATING/STUD_SERVICE: 
+  - For MATING/STUD_SERVICE:
     - Female's heat cycle dates (if applicable)
     - Male's proven stud status (number of litters, health certifications)
     - Terms: natural mating vs. AI, location of mating, stud fee terms
@@ -44,7 +51,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 - Moderator checks:
   - **Authenticity**: Photos match declared animal (species/breed/sex); no stock images.
   - **Completeness**: All mandatory fields filled; description not spammy.
-  - **Policy Compliance**: 
+  - **Policy Compliance**:
     - No promotion of illegal activities (e.g., dog fighting breeds in contexts suggesting violence).
     - No misleading claims (e.g., "purebred" without papers when claiming championship lines).
     - Vaccination claims moderate trust but not verified on MVP (user honesty).
@@ -73,6 +80,8 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - `age_range` (derived from animal's date of birth)
   - `price_range` (min/max in RUB; "free" treated as 0)
   - `location_radius` (from user's city; 1-100 km)
+  - `organization_name` (filter by organization name)
+  - `branch_city` (filter by branch city)
   - `temperament_tags` (multiple select: kid-friendly, dog-cat-friendly, etc.)
   - `health_flags` (vaccinated, spayed/neutered, dewormed)
   - `has_pedigree_papers` (boolean)
@@ -86,6 +95,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - Title, species/breed, sex, age indicator
   - Price/terms
   - Distance from user
+  - Organization/Branch badge (if listing is organization-linked)
   - Badge for verified stud (if applicable) or vaccination status
 - Clicking listing shows:
   - Full description
@@ -99,10 +109,11 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 - When a user clicks "Show Contacts" on a PUBLISHED listing:
   - System logs the event (listing_id, viewer_user_id, timestamp).
   - Reveals:
-    - Phone number (if owner provided during registration and opted to share)
+    - Phone number (if owner/organization provided during registration and opted to share)
     - Links to connected social profiles (Telegram, VK) if available and consented.
   - Does NOT reveal exact address; users arrange meetup via revealed contacts.
-  - Owner can see in analytics: "Your listing was viewed X times, contacts shown Y times."
+  - Owner/representative can see in analytics: "Your listing was viewed X times, contacts shown Y times."
+  - **Note**: For organization-linked listings, the contacts shown may belong to an organization representative rather than the individual creator.
 
 ### 6. Special Rules by Listing Type
 - **SALE**:
@@ -122,11 +133,11 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - Owner responsible for verifying female's health before accepting.
 
 ## Non-Functional Requirements (Specific to Pet Marketplace)
-- **Performance**: 
+- **Performance**:
   - Listing creation: <2s (includes photo upload to storage).
   - Search results: <1.5s for 95% of queries (<100km radius, moderate filters).
   - Photo loading: Optimized thumbnails; lazy loading in UI.
-- **Scalability**: 
+- **Scalability**:
   - Support 10k active pet listings without degradation.
   - Handle 500 new listing submissions per day during peak.
 - **Data Consistency**:
@@ -139,7 +150,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - Exact location never shown; only distance/search radius.
   - Contact info revealed only on user action (not hover/preview).
   - Rate limiting on "Show Contacts": max 10 reveals per hour per user to deter scraping.
-- **Moderator Load**: 
+- **Moderator Load**:
   - Designed for <50 listings/day moderate rate on MVP.
   - Future: ML-assisted pre-screening for obvious spam/irrelevant content.
 
@@ -148,7 +159,9 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
 | `animal_id` | UUID (FK to Animals.id) | Yes | The pet being listed |
-| `creator_id` | UUID (FK to Users.id) | Yes | User who posted |
+| `creator_id` | UUID (FK to Users.id) | Yes | User who posted (always present for audit) |
+| `organization_id` | UUID (FK to Organizations.id) | No | Organization posting the listing (nullable if personal listing) |
+| `branch_id` | UUID (FK to Branches.id) | No | Specific branch posting the listing (nullable) |
 | `listing_type` | ENUM('SALE', 'MATING', 'ADOPTION', 'STUD_SERVICE') | Yes |  |
 | `title` | VARCHAR(100) | Yes | Short headline |
 | `description` | TEXT | Yes | Max 2000 chars |
@@ -165,7 +178,9 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 | `metadata` | JSONB | No | For future extensibility (e.g., video_url, social_links) |
 
 ## Validation Rules
-- `animal_id` must reference an active animal owned by `creator_id`.
+- `animal_id` must reference an active animal owned by the creator (either via `creator_id` -> `owner_id` or via `organization_id`).
+- For organization-linked listings: the `creator_id` must have an active affiliation with the specified `organization_id` (via organization_users table).
+- If `organization_id` is specified, `branch_id` (if provided) must belong to that organization.
 - `photos` array must have 1-5 items; each item is a URL to storage.
 - `price_or_terms`:
   - If numeric string, must be parseable as positive integer.
@@ -173,12 +188,14 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 - `location_city_id` must exist in reference directory.
 - `description` cannot be empty or solely whitespace.
 - For MATING/STUD_SERVICE: if `price_or_terms` suggests fee, it should be numeric or "negotiable".
+- **Ownership Rule**: Exactly one of the following must be true:
+  - Listing is personal: `organization_id` IS NULL and `creator_id` references the animal's `owner_id`
+  - Listing is organizational: `organization_id` IS NOT NULL and `creator_id` is affiliated with that organization
 
 ## User Journey: Creating and Receiving Interest in a Pet Listing
 ```mermaid
 sequenceDiagram
-    participant User as Owner
-    participant User as Seeker
+    participant User as Owner/Seeker
     participant Frontend
     participant Backend (NestJS Listing Module)
     participant Storage (S3)
@@ -186,15 +203,17 @@ sequenceDiagram
 
     %% Owner creates listing
     Owner->>Frontend: Navigates to "My Animals" -> selects pet -> "Create Listing"
-    Frontend->>Backend: GET /animals?owner_id=me (for animal selection)
-    Backend->>Database: Returns owner's active animals
+    Owner->>Frontend: Chooses to list as personal OR on behalf of organization (if affiliated)
+    Frontend->>Backend: GET /animals?[owner_id=me OR organization_id=my_org_id]&is_active=true (for animal selection)
+    Backend->>Database: Returns user's/organization's active animals
     Backend->>Frontend: Returns animal list
 
     Owner->>Frontend: Chooses animal, fills form (type=SALE, price=5000, description, photos)
+    Owner->>Frontend: If organizational listing, selects organization and optionally branch
     Frontend->>Storage: Uploads photos (pre-signed URLs)
     Storage-->>Frontend: Returns photo URLs
-    Frontend->>Backend: POST /listings {animal_id, title, description, price_or_terms, location_city_id, photos:[urls]}
-    Backend->>Database: Validates, creates listing record (status=DRAFT)
+    Frontend->>Backend: POST /listings {animal_id, title, description, price_or_terms, location_city_id, photos:[urls], organization_id: org_id (optional), branch_id: branch_id (optional)}
+    Backend->>Database: Validates (ownership/animal linkage, org affiliation if applicable), creates listing record (status=DRAFT)
     Backend->>Frontend: Returns listing ID
 
     Owner->>Frontend: Clicks "Submit for Moderation"
@@ -214,19 +233,19 @@ sequenceDiagram
     Backend->>Frontend: Returns success
 
     %% Seeker finds listing
-    Seeker->>Frontend: Searches: species=Dog, breed=Labrador, radius=20km, max_price=10000
-    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&location_radius=20&max_price=10000
-    Backend->>Database: Searches listings with geo-filter + price filter
+    Seeker->>Frontend: Searches: species=Dog, breed=Labrador, radius=20km, max_price=10000 [optional: organization=VetClinic]
+    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&location_radius=20&max_price=10000[&organization_id=org_id]
+    Backend->>Database: Searches listings with geo-filter + price filter + [organization filter]
     Backend->>Frontend: Returns listings with thumbnails
     Frontend->>Seeker: Shows results
 
     Seeker->>Frontend: Clicks on a listing -> "Show Contacts"
     Frontend->>Backend: POST /listings/{id}/show-contacts
     Backend->>Database: Increments contact_shown_count, logs event
-    Backend->>Frontend: Returns owner's phone (if shared) + TG/VK links
+    Backend->>Frontend: Returns contact info (owner's phone if personal listing, org representative's phone if organizational)
     Frontend->>Seeker: Displays contact info
 
-    %% Owner sees analytics
+    %% Owner/Rep sees analytics
     Owner->>Frontend: Views "My Listings" -> selects listing -> "Stats"
     Frontend->>Backend: GET /listings/{id}/analytics
     Backend->>Database: Returns view_count, contact_shown_count, etc.
@@ -240,21 +259,23 @@ sequenceDiagram
 - **Open Question**: Should we restrict listing puppies/kittens under 8 weeks? (Decided: rely on user ethics + moderator intervention for obvious welfare violations on MVP; may add rule in Фаза 2.)
 - **Assumption**: "Free" listings are common; system does not differentiate between true free and symbolic fees (e.g., 1 RUB).
 - **Assumption**: Users understand that meeting pets in person carries risk; platform facilitates introduction only.
+- **Assumption**: Organization listings show organizational branding rather than individual identity in public view.
 
 ## Related Domains
 - **Animal Domain**: Provides the core pet profile; listing links to it.
 - **Identity Domain**: `creator_id` links to user; authentication required.
+- **Organization Domain**: `organization_id` and `branch_id` link to organizations and their physical locations.
 - **Admin Domain**: Manages reference data (breeds, cities), moderation queue, rejection reasons.
 - **Matching Domain**: Uses pet listing data to suggest compatible mates (filters by heat cycle, temperament, pedigree).
 - **Future Domains**: Health Passport (extends animal data), Reproductive Calendar (uses mating listings).
 
 ## API Contract References (see 03-architecture/api-contracts/listings-api.yaml)
-- `GET /listings/new` (get creation form data: species, breeds, cities)
-- `POST /listings` (create listing)
+- `GET /listings/new` (get creation form data: species, breeds, cities, organizations [if user affiliated])
+- `POST /listings` (create listing with optional organization_id/branch_id)
 - `GET /listings/{id}` (get listing by ID – public if PUBLISHED, owner otherwise)
 - `PATCH /listings/{id}` (update listing; only in DRAFT/PENDING_MODERATION)
 - `POST /listings/{id}/submit-moderation` (change to PENDING_MODERATION)
-- `GET /listings` (search listings with filters: type, species, breed, price, location_radius, etc.)
+- `GET /listings` (search listings with filters: type, species, breed, price, location_radius, organization_id, branch_id, etc.)
 - `POST /listings/{id}/show-contacts` (log and reveal contacts)
 - `PATCH /listings/{id}/complete` (mark as COMPLETED)
 - `PATCH /listings/{id}/archive` (hide listing)

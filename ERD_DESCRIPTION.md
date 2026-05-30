@@ -4,16 +4,19 @@ This document describes the Entity-Relationship Diagram for the ZooLink database
 
 ## Overview
 
-The database consists of 12 core tables organized into functional domains:
+The database consists of 15 core tables organized into functional domains:
 - **Reference Data**: species, breeds, cities
 - **Identity Domain**: users
 - **Animal Domain**: animals, animal_ownership_history
+- **Organization Domain**: organizations, branches, organization_users
 - **Marketplace/Listings Domain**: listings, listing_photos, conversations, messages
 - **Extensibility/System**: feature_toggles, outbox_events
 
 ## Tables and Relationships
 
 ### 1. Reference Data Tables
+
+### 2. Organization Domain
 
 #### species
 - **Primary Key**: `id` (UUID)

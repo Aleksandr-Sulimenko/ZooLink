@@ -1,95 +1,108 @@
 # Animal Domain: ZooLink
 
 ## Purpose
-Manages the core entity "Animal" as an aggregate root. An animal can have multiple listings (for sale, mating, events) and is owned by a user. This domain ensures data integrity for animal profiles, supports search by characteristics, and provides foundation for future features like pedigree, health records, and reproductive calendars.
+Manages the core entity "Animal" as an aggregate root. An animal can have multiple listings (for sale, mating, events) and is owned by either a user or an organization. This domain ensures data integrity for animal profiles, supports search by characteristics, and provides foundation for future features like pedigree, health records, and reproductive calendars.
 
 ## Core Concepts
 - **Animal**: A living being (pet or livestock) registered in the system. Has intrinsic attributes (species, breed, sex, age) and optional attributes (health tests, vaccinations, microchip).
-- **Owner**: The user who registered the animal in the system (may differ from legal owner; system tracks custodianship for listing purposes).
+- **Owner**: The user who registered the animal in the system (may differ from legal owner; system tracks custodianship for listing purposes). An animal may also be owned by an organization (see Organization Domain).
 - **Breed/Species Directory**: Reference data managed by Admin Domain (see admin-domain.md).
 - **Health Status**: Structured data about vaccinations, tests, treatments (extensible for future).
 - **Reproductive Data**: For mating-related use cases (heat cycles, last mating, due dates) – only relevant for certain species.
 
 ## Business Rules
-1. **Animal Creation**
-   - Only authenticated users can create an animal profile.
-   - Required fields at creation:
-     - Species (from directory, e.g., cat, dog, cattle, horse, sheep, goat, pig, chicken, rabbit, etc.)
-     - Breed (from directory for the selected species; allows "Mixed/Unknown" or custom text if breed not listed)
-     - Sex (Male/Female)
-     - Date of birth or approximate age (user can enter years/months; system stores as date or ISO week)
-     - Nickname (display name, optional but recommended)
-   - Optional fields at creation:
-     - Color/coat pattern (free text)
-     - Microchip ID (if provided, must be unique per species? Not enforced globally but warned if duplicate)
-     - Tattoo/Brand ID (for livestock)
-     - Initial health records (vaccinations, deworming) – can be added later
-   - Upon creation, the animal is linked to the creating user via `owner_id`.
-   - A user can create multiple animal profiles (no limit on MVP).
-   - Same animal cannot be registered by two different users (to prevent disputes). If duplicate suspected (same microchip + similar attributes), moderator must investigate.
+### 1. Animal Creation
+- Only authenticated users can create an animal profile.
+- Required fields at creation:
+  - Species (from directory, e.g., cat, dog, cattle, horse, sheep, goat, pig, chicken, rabbit, etc.)
+  - Breed (from directory for the selected species; allows "Mixed/Unknown" or custom text if breed not listed)
+  - Sex (Male/Female)
+  - Date of birth or approximate age (user can enter years/months; system stores as date or ISO week)
+  - Nickname (display name, optional but recommended)
+  - Either a personal owner (`owner_id`) **or** an owning organization (`organization_id`) must be specified.
+- Optional fields at creation:
+  - Color/coat pattern (free text)
+  - Microchip ID (if provided, must be unique per species? Not enforced globally but warned if duplicate)
+  - Tattoo/Brand ID (for livestock)
+  - Initial health records (vaccinations, deworming) – can be added later
+- Upon creation, the animal is linked to the creating user via `owner_id` **or** to an organization via `organization_id`.
+- A user can create multiple animal profiles (no limit on MVP).
+- Same animal cannot be registered by two different users (to prevent disputes). If duplicate suspected (same microchip + similar attributes), moderator must investigate.
+- An animal cannot be owned by both a user and an organization simultaneously (application-level validation ensures exactly one of `owner_id` or `organization_id` is set.)
 
-2. **Animal Updates**
-   - Owner can update most fields at any time:
-     - Nickname
-     - Color/coat
-     - Microchip/tattoo (if adding or correcting)
-     - Health records (add new)
-     - Reproductive data (update heat dates, mating dates)
-   - Fields that cannot be changed after creation (to preserve integrity):
-     - Species
-     - Breed (if selected from directory; custom text can be edited)
-     - Sex
-     - Date of birth (can be refined but not changed arbitrarily; e.g., updating from "approx 2 years" to "2023-05-12" is allowed if consistent)
-   - Changing ownership is not allowed on MVP (to avoid misuse). If needed, the current owner must deactivate the animal and the new owner creates a new profile (data not transferred automatically). This limitation will be revisited in Фаза 2+ with formal transfer workflow.
+### 1.5 Organization Ownership
+- An animal can be owned either by an individual user or by an organization, but not both simultaneously.
+- The `organization_id` field is optional and nullable; when set, it indicates the animal is owned by an organization rather than a personal user.
+- When `organization_id` is set, the `owner_id` field must be null, and vice versa.
+- Validation rule: Exactly one of `owner_id` or `organization_id` must be NOT NULL for a valid animal record.
+- Organization ownership enables:
+  - Multiple users within the organization to manage the animal's listings (through organization-user links)
+  - Centralized ownership of animals for breeding farms, shelters, or businesses
+  - Clear attribution of animals to organizational entities rather than individuals
+- An organization user acting on behalf of their organization can create listings for animals owned by that organization.
 
-3. **Animal Deactivation/Archival**
-   - Owner can deactivate an animal (soft delete):
-     - Animal disappears from search and owner's list.
-     - All existing listings referencing this animal remain visible but are marked as referencing a deactivated animal (UI shows warning).
-     - Cannot create new listings for a deactivated animal.
-   - Deactivation does not delete data; retained for historical and legal reasons.
-   - Reactivation restores animal to active state and re-enables creation of new listings.
-   - Hard delete is not permitted on MVP (to preserve audit trail). May be added later via GDPR request workflow.
+### 2. Animal Updates
+- Owner (user or organization representative) can update most fields at any time:
+  - Nickname
+  - Color/coat
+  - Microchip/tattoo (if adding or correcting)
+  - Health records (add new)
+  - Reproductive data (update heat dates, mating dates)
+- Fields that cannot be changed after creation (to preserve integrity):
+  - Species
+  - Breed (if selected from directory; custom text can be edited)
+  - Sex
+  - Date of birth (can be refined but not changed arbitrarily; e.g., updating from "approx 2 years" to "2023-05-12" is allowed if consistent)
+- Changing ownership is not allowed on MVP (to avoid misuse). If needed, the current owner must deactivate the animal and the new owner creates a new profile (data not transferred automatically). This limitation will be revisited in Фаза 2+ with formal transfer workflow.
 
-4. **Listing Association**
-   - An animal can be linked to zero, one, or many listings.
-   - When creating a listing, the user must select an existing animal from their owned animals.
-   - A listing cannot be created without specifying an animal (animal is mandatory).
-   - If an animal is deactivated, its existing listings stay active (to not disrupt ongoing deals) but owner cannot edit them (except to close/complete).
-   - If a listing is deleted/completed, the animal remains unaffected.
+### 3. Animal Deactivation/Archival
+- Owner can deactivate an animal (soft delete):
+  - Animal disappears from search and owner's list.
+  - All existing listings referencing this animal remain visible but are marked as referencing a deactivated animal (UI shows warning).
+  - Cannot create new listings for a deactivated animal.
+- Deactivation does not delete data; retained for historical and legal reasons.
+- Reactivation restores animal to active state and re-enables creation of new listings.
+- Hard delete is not permitted on MVP (to preserve audit trail). May be added later via GDPR request workflow.
 
-5. **Health and Reproductive Data (Extensible)**
-   - Health records are stored as a list of events with date, type, and details (e.g., vaccination: rabies, date: 2024-03-01, vet clinic: "Zoovet").
-   - Relevant for mating: female animals can have heat cycle dates recorded.
-   - This domain does not enforce validity of health data (e.g., vaccination dates) – relies on user honesty and moderator spot-checks.
-   - Future extensions: integration with vet clinics, digital health passports.
+### 4. Listing Association
+- An animal can be linked to zero, one, or many listings.
+- When creating a listing, the user must select an existing animal from their owned animals (for personal owners) or from animals owned by their organization (if acting on behalf of an organization).
+- A listing cannot be created without specifying an animal (animal is mandatory).
+- If an animal is deactivated, its existing listings stay active (to not disrupt ongoing deals) but owner cannot edit them (except to close/complete).
+- If a listing is deleted/completed, the animal remains unaffected.
 
-6. **Search and Discovery**
-   - Animals are searchable via their attributes when linked to a public listing.
-   - Search fields (via Listing Domain):
-     - Species
-     - Breed
-     - Sex
-     - Age range (derived from date of birth)
-     - Color/coat (free text search)
-     - Has microchip? (boolean)
-     - Health/test flags (e.g., "vaccinated", "DNA tested")
-   - The Animal Domain itself does not expose a public search API on MVP (to reduce surface area). Animal data is only exposed through listings.
-   - In Фаза 2+, a separate "Animal Directory" or "Pet Profiles" search may be added (e.g., for browsing animals not currently for sale).
+### 5. Health and Reproductive Data (Extensible)
+- Health records are stored as a list of events with date, type, and details (e.g., vaccination: rabies, date: 2024-03-01, vet clinic: "Zoovet").
+- Relevant for mating: female animals can have heat cycle dates recorded.
+- This domain does not enforce validity of health data (e.g., vaccination dates) – relies on user honesty and moderator spot-checks.
+- Future extensions: integration with vet clinics, digital health passports.
 
-7. **Data Integrity and Validation**
-   - Species and breed must exist in the reference directory (managed by Admin) OR user can select "Other" and enter custom text (flagged for moderator review).
-   - Date of birth must be in the past and not more than 30 years ago (configurable per species).
-   - Microchip/tattoo fields, if filled, must follow format hints (length, characters) but no global uniqueness check.
-   - All text fields have reasonable limits (nickname: 50 chars, color: 100 chars, health note: 500 chars per entry).
+### 6. Search and Discovery
+- Animals are searchable via their attributes when linked to a public listing.
+- Search fields (via Listing Domain):
+  - Species
+  - Breed
+  - Sex
+  - Age range (derived from date of birth)
+  - Color/coat (free text search)
+  - Has microchip? (boolean)
+  - Health/test flags (e.g., "vaccinated", "DNA tested")
+- The Animal Domain itself does not expose a public search API on MVP (to reduce surface area). Animal data is only exposed through listings.
+- In Фаза 2+, a separate "Animal Directory" or "Pet Profiles" search may be added (e.g., for browsing animals not currently for sale).
+
+### 7. Data Integrity and Validation
+- Species and breed must exist in the reference directory (managed by Admin) OR user can select "Other" and enter custom text (flagged for moderator review).
+- Date of birth must be in the past and not more than 30 years ago (configurable per species).
+- Microchip/tattoo fields, if filled, must follow format hints (length, characters) but no global uniqueness check.
+- All text fields have reasonable limits (nickname: 50 chars, color: 100 chars, health note: 500 chars per entry).
 
 ## Non-Functional Requirements (Specific to Animal)
 - **Performance**: Retrieving an animal by ID (with basic info) must be <100ms.
 - **Scalability**: Must support up to 100k animal profiles without degradation in create/update/search.
 - **Consistency**: Strong consistency within a transaction (e.g., creating an animal and linking it to a user happens in one DB transaction).
 - **Extensibility**: Use of JSONB columns for health/reproductive data to allow adding new fields without schema changes.
-- **Privacy**: 
-  - Animal data (except what is shown in public listings) is considered personal data linked to the owner (under ФЗ-152). 
+- **Privacy**:
+  - Animal data (except what is shown in public listings) is considered personal data linked to the owner (under ФЗ-152).
   - Only minimum needed for listings is exposed publicly (species, breed, sex, age, color, photos, basic health flags).
   - Owner contact info is not exposed via animal profile; only through listing contact reveal.
 - **Backup/Recovery**: Animal data is part of regular DB backups; point-in-time recovery supported.
@@ -98,7 +111,8 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
-| `owner_id` | UUID (FK to Users.id) | Yes | User who created the profile |
+| `owner_id` | UUID (FK to Users.id) | No | User who created the profile (nullable if `organization_id` set) |
+| `organization_id` | UUID (FK to Organizations.id) | No | Organization that owns the animal (nullable if `owner_id` set) |
 | `species_id` | INT (FK to species directory) | Yes | From reference data |
 | `breed_id` | INT (FK to breed directory) | No (nullable if "Other/custom") | From reference data; can be null if breed_text provided |
 | `breed_text` | VARCHAR(100) | No | Custom breed text if breed_id is null (for moderator review) |
@@ -121,6 +135,7 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 - Nickname, if provided, cannot be empty string.
 - Microchip ID, if provided, must be at least 8 characters.
 - Health records JSONB must conform to schema (validated at application level).
+- Exactly one of `owner_id` or `organization_id` must be NOT NULL (application-level validation).
 
 ## User Journey: Managing an Animal
 ```mermaid
@@ -181,6 +196,7 @@ sequenceDiagram
 - **Admin Domain**: Provides species and breed directories; manages moderation of custom breed entries.
 - **Listing Domain**: Links to animals via `animal_id`; displays animal summary in listings.
 - **Identity Domain**: `owner_id` links to user; authentication required to create/modify animal.
+- **Organization Domain**: `organization_id` links to organizations; an animal can belong to an organization instead of a personal user.
 - **Matching Domain**: May use animal attributes (species, breed, sex, age, health flags) to suggest mating partners.
 - **Future Domains**: Health Passport, Reproductive Calendar, Pedigree Builder will extend this domain.
 

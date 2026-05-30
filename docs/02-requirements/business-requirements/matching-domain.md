@@ -17,9 +17,10 @@ Handles specialized logic for finding compatible mates for breeding purposes. Th
 - Both animals must be:
   - Active (not deactivated/archived)
   - Of mating age (species-specific minimums apply)
-  - Owned by different users (self-matching not allowed)
+  - Owned by different owners (where an owner is either a user or an organization; self-matching not allowed)
   - Have listings of type MATING or STUD_SERVICE (or user has indicated breeding interest)
 - Animals must be of the same species and breed (cross-breed matching reserved for Фаза 2+ with explicit user consent).
+- Two animals can be matched if they belong to different owners (i.e., different users and/or different organizations). Matching logic may be configured to allow or disallow matches between animals owned by the same organization (via a feature flag or organization setting).
 
 ### 2. Matching Factors & Weighting
 The matching algorithm considers these factors with configurable weights (weights may vary by species/breed):
