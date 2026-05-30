@@ -281,6 +281,46 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 ('regulatory_integration', 'Интеграция с Меркурий/ВетИС для отслеживания перемещения скота', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
+-- ========== Application-level validations ==========
+-- 1. breed_id / breed_text dependency
+ALTER TABLE animals
+ADD CONSTRAINT chk_animals_breed
+    CHECK ( breed_id IS NOT NULL OR breed_text IS NOT NULL );
+
+-- 2. Immutable fields after creation & MVP ownership lock
+CREATE OR REPLACE FUNCTION trg_animals_immutable_and_owner()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        -- Immutable fields
+        IF OLD.species_id IS DISTINCT FROM NEW.species_id THEN
+            RAISE EXCEPTION 'species_id cannot be changed after creation.';
+        END IF;
+        IF OLD.sex IS DISTINCT FROM NEW.sex THEN
+            RAISE EXCEPTION 'sex cannot be changed after creation.';
+        END IF;
+        IF OLD.date_of_birth IS DISTINCT FROM NEW.date_of_birth THEN
+            RAISE EXCEPTION 'date_of_birth cannot be changed after creation.';
+        END IF;
+        IF OLD.breed_id IS DISTINCT FROM NEW.breed_id THEN
+            RAISE EXCEPTION 'breed_id cannot be changed after creation.';
+        END IF;
+
+        -- MVP ownership lock
+        IF OLD.owner_id IS DISTINCT FROM NEW.owner_id THEN
+            RAISE EXCEPTION 'Changing ownership is not allowed during MVP phase.';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_animals_immutable_and_owner ON animals;
+CREATE TRIGGER trg_animals_immutable_and_owner
+BEFORE UPDATE ON animals
+FOR EACH ROW
+EXECUTE FUNCTION trg_animals_immutable_and_owner();
+
 COMMENT ON TABLE species IS 'Справочник видов животных.';
 COMMENT ON TABLE breeds IS 'Справочник пород, связанный со species.';
 COMMENT ON TABLE cities IS 'Справочник городов для геопоиска.';
