@@ -16,8 +16,6 @@ The database consists of 15 core tables organized into functional domains:
 
 ### 1. Reference Data Tables
 
-### 2. Organization Domain
-
 #### species
 - **Primary Key**: `id` (UUID)
 - **Attributes**:
@@ -50,6 +48,56 @@ The database consists of 15 core tables organized into functional domains:
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE
 - **Relationships**:
   - Referenced by `users.city_id` (one-to-many, optional)
+
+### 2. Organization Domain
+
+#### organizations
+- **Primary Key**: `id` (UUID)
+- **Attributes**:
+  - `name_ru` VARCHAR(200) NOT NULL
+  - `name_en` VARCHAR(200) NOT NULL
+  - `inn` VARCHAR(20) (Tax ID)
+  - `kpp` VARCHAR(20) (Tax registration reason code)
+  - `address` TEXT
+  - `phone` VARCHAR(30)
+  - `email` VARCHAR(255)
+  - `logo_url` TEXT
+  - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
+  - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+- **Relationships**:
+  - References by `organization_users.organization_id` (one-to-many)
+  - References by `branches.organization_id` (one-to-many)
+  - References by `listings.organization_id` (one-to-many, optional)
+  - References by `animals.organization_id` (one-to-many, optional)
+
+#### branches
+- **Primary Key**: `id` (UUID)
+- **Attributes**:
+  - `organization_id` UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT
+  - `city_id` UUID NOT NULL REFERENCES cities(id) ON DELETE RESTRICT
+  - `address` TEXT
+  - `phone` VARCHAR(30)
+  - `email` VARCHAR(255)
+  - `is_headquarters` BOOLEAN NOT NULL DEFAULT FALSE
+  - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
+  - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+- **Relationships**:
+  - References `organizations` (many-to-one)
+  - References `cities` (many-to-one)
+  - References by `listings.branch_id` (one-to-many, optional)
+
+#### organization_users
+- **Primary Key**: `id` (UUID)
+- **Attributes**:
+  - `organization_id` UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT
+  - `user_id` UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+  - `role_in_org` VARCHAR(20) NOT NULL CHECK (role_in_org IN ('OWNER', 'ADMIN', 'STAFF', 'VET', 'MODERATOR'))
+  - `is_primary` BOOLEAN NOT NULL DEFAULT FALSE
+  - `joined_at` DATE
+  - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+- **Relationships**:
+  - References `organizations` (many-to-one)
+  - References `users` (many-to-one)
 
 ### 2. Identity Domain
 

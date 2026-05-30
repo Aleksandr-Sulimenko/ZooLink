@@ -81,6 +81,44 @@ erDiagram
         TIMESTAMPTZ created_at
     }
 
+    %% Organization Domain
+    organizations {
+        UUID id PK
+        VARCHAR_200 name_ru
+        VARCHAR_200 name_en
+        VARCHAR_20 inn
+        VARCHAR_20 kpp
+        TEXT address
+        VARCHAR_30 phone
+        VARCHAR_255 email
+        TEXT logo_url
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+    branches {
+        UUID id PK
+        UUID organization_id FK
+        UUID city_id FK
+        TEXT address
+        VARCHAR_30 phone
+        VARCHAR_255 email
+        BOOLEAN is_headquarters
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+    organization_users {
+        UUID id PK
+        UUID organization_id FK
+        UUID user_id FK
+        VARCHAR_20 role_in_org
+        BOOLEAN is_primary
+        DATE joined_at
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
     %% Marketplace/Listings Domain
     listings {
         UUID id PK
@@ -163,3 +201,12 @@ erDiagram
     listings ||..o{ listing_photos : "has photos"
     listings ||..o{ conversations : "has conversation"
     conversations ||..o{ messages : "contains"
+
+    %% Organization Domain Relationships
+    organizations }o..o{ organization_users : "contains"
+    users }o..o{ organization_users : "belongs to"
+    organizations }o..o{ branches : "has"
+    branches }o..|| cities : "located in"
+    listings }o..|| organizations : "linked to (optional)"
+    listings }o..|| branches : "linked to (optional)"
+    animals }o..|| organizations : "owned by (optional)"

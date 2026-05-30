@@ -33,7 +33,7 @@
   - Add new sections for Organization and Branch tables (attributes, relationships).
   - Update Relationships Summary to include new M2M links.
   - Ensure all tables/attributes reflect latest schema.
-- [ ] ZooLink_ERD.mmd
+- [x] ZooLink_ERD.mmd
   - Add `organizations`, `branches`, `organization_users` (and optional `branch_staff`) entities with appropriate fields.
   - Draw relationships:
     - `organizations }o..o{ organization_users : "contains"`

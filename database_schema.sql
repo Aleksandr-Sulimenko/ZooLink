@@ -36,6 +36,54 @@ CREATE TABLE cities (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- ========== Organization Domain ==========
+CREATE TABLE organizations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name_ru VARCHAR(200) NOT NULL,
+    name_en VARCHAR(200) NOT NULL,
+    inn VARCHAR(20), -- Tax ID
+    kpp VARCHAR(20), -- Tax registration reason code
+    address TEXT,
+    phone VARCHAR(30),
+    email VARCHAR(255),
+    logo_url TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE branches (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+    city_id UUID NOT NULL REFERENCES cities(id) ON DELETE RESTRICT,
+    address TEXT,
+    phone VARCHAR(30),
+    email VARCHAR(255),
+    is_headquarters BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE organization_users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    role_in_org VARCHAR(20) NOT NULL CHECK (role_in_org IN ('OWNER', 'ADMIN', 'STAFF', 'VET', 'MODERATOR')),
+    is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+    joined_at DATE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- Indexes for organization domain
+CREATE INDEX idx_organizations_inn ON organizations(inn) WHERE inn IS NOT NULL;
+CREATE INDEX idx_branches_organization ON branches(organization_id);
+CREATE INDEX idx_branches_city ON branches(city_id);
+CREATE INDEX idx_organization_users_org ON organization_users(organization_id);
+CREATE INDEX idx_organization_users_user ON organization_users(user_id);
+CREATE INDEX idx_organization_users_role ON organization_users(role_in_org);
+
 -- ========== Identity Domain ==========
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -71,7 +119,8 @@ CREATE INDEX idx_users_city ON users(city_id);
 -- ========== Animal Domain ==========
 CREATE TABLE animals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    owner_id UUID REFERENCES users(id) ON DELETE RESTRICT, -- nullable if organization_id set
+    organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT, -- nullable if owner_id set
     species_id UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
     breed_id UUID REFERENCES breeds(id) ON DELETE SET NULL, -- nullable if custom/other
     breed_text VARCHAR(100), -- custom breed text if breed_id is null (for moderator review)
@@ -89,7 +138,12 @@ CREATE TABLE animals (
     father_id UUID REFERENCES animals(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    deactivated_at TIMESTAMP WITH TIME ZONE -- when deactivated (soft delete)
+    deactivated_at TIMESTAMP WITH TIME ZONE -- when deactivated (soft delete),
+    -- Ensure exactly one of owner_id or organization_id is set (not both null, not both set)
+    CONSTRAINT chk_animal_ownership CHECK (
+        (owner_id IS NOT NULL AND organization_id IS NULL) OR
+        (owner_id IS NULL AND organization_id IS NOT NULL)
+    )
 );
 
 -- Indexes for animal search and integrity
@@ -127,6 +181,8 @@ CREATE TABLE listings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     animal_id UUID NOT NULL REFERENCES animals(id) ON DELETE CASCADE,
     seller_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL, -- nullable for personal listings
+    branch_id UUID REFERENCES branches(id) ON DELETE SET NULL, -- nullable for personal listings or when branch not specified
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption')),
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -138,7 +194,13 @@ CREATE TABLE listings (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- For organizational listings: either organization_id or branch_id must be set (or both)
+    -- For personal listings: both organization_id and branch_id must be NULL
+    CONSTRAINT chk_listing_ownership CHECK (
+        (organization_id IS NULL AND branch_id IS NULL) OR  -- Personal listing
+        (organization_id IS NOT NULL)  -- Organizational listing (branch_id optional)
+    )
 );
 
 CREATE TABLE listing_photos (
@@ -231,8 +293,8 @@ BEGIN
     FOR tbl IN
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public'
-          AND tablename IN ('users', 'species', 'breeds', 'cities', 'animals',
-                            'animal_ownership_history', 'listings', 'conversations',
+          AND tablename IN ('users', 'species', 'breeds', 'cities', 'organizations', 'branches', 'organization_users',
+                            'animals', 'animal_ownership_history', 'listings', 'conversations',
                             'messages', 'feature_toggles', 'outbox_events')
     LOOP
         EXECUTE format('
@@ -336,5 +398,7 @@ COMMENT ON TABLE outbox_events IS 'Таблица исходящих событ�
 
 -- Note: Application-level validations required per documentation:
 -- 1. Validate breed_id/breed_text: if breed_id IS NULL THEN breed_text IS NOT NULL
--- 2. Prevent changes to immutable fields after creation: species_id, breed_id (if from directory), sex, date_of_birth
--- 3. Block ownership changes during MVP phase (documented: "Changing ownership is not allowed on MVP")
+-- 2. Validate animal ownership: Exactly one of owner_id or organization_id must be set (not both null, not both set)
+-- 3. Validate listing ownership: For organizational listings, either organization_id or branch_id must be set (or both); for personal listings, both are null
+-- 4. Prevent changes to immutable fields after creation: species_id, breed_id (if from directory), sex, date_of_birth
+-- 5. Block ownership changes during MVP phase (documented: "Changing ownership is not allowed on MVP")
