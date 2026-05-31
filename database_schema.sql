@@ -147,6 +147,10 @@ CREATE TABLE animals (
         (owner_id IS NULL AND organization_id IS NOT NULL)
     )
 );
+COMMENT ON COLUMN animals.owned_since IS 'Дата, когда текущий владелец приобрел животное';
+COMMENT ON COLUMN animals.mother_id IS 'Ссылка на мать для отслеживания pedigree';
+COMMENT ON COLUMN animals.father_id IS 'Ссылка на отца для отслеживания pedigree';
+COMMENT ON COLUMN animals.deactivated_at IS 'Отметка времени, когда животное было деактивировано (мягкое удаление)';
 
 -- Indexes for animal search and integrity
 CREATE INDEX idx_animals_owner ON animals(owner_id);
@@ -398,6 +402,44 @@ COMMENT ON TABLE conversations IS 'Диалог между двумя польз
 COMMENT ON TABLE messages IS 'Сообщения внутри диалога.';
 COMMENT ON TABLE feature_toggles IS 'Переключатели функций для поэтапного включения платных/экспериментальных возможностей.';
 COMMENT ON TABLE outbox_events IS 'Таблица исходящих событий для надежной интеграции с внешними системами (pattern Outbox).';
+
+-- Column comments for organizations
+COMMENT ON COLUMN organizations.id IS 'Первичный ключ';
+COMMENT ON COLUMN organizations.name_ru IS 'Русское название организации';
+COMMENT ON COLUMN organizations.name_en IS 'Английское название организации';
+COMMENT ON COLUMN organizations.inn IS 'ИНН (Идентификатор налогоплательщика)';
+COMMENT ON COLUMN organizations.kpp IS 'КПП (Код причины постановки на учет)';
+COMMENT ON COLUMN organizations.address IS 'Адрес головного офиса';
+COMMENT ON COLUMN organizations.phone IS 'Контактный телефон';
+COMMENT ON COLUMN organizations.email IS 'Контактный email';
+COMMENT ON COLUMN organizations.logo_url IS 'URL логотипа организации';
+COMMENT ON COLUMN organizations.metadata IS 'JSONB поле для расширяемых атрибутов (уровень подписки, предпочтения брендинга и т.д.)';
+COMMENT ON COLUMN organizations.is_active IS 'Флаг активности организации';
+COMMENT ON COLUMN organizations.created_at IS 'Время создания записи';
+COMMENT ON COLUMN organizations.updated_at IS 'Время последнего обновления';
+
+-- Column comments for branches
+COMMENT ON COLUMN branches.id IS 'Первичный ключ';
+COMMENT ON COLUMN branches.organization_id IS 'Внешний ключ к организации';
+COMMENT ON COLUMN branches.city_id IS 'Внешний ключ к городу для гео-поиска';
+COMMENT ON COLUMN branches.address IS 'Подробный адрес филиала';
+COMMENT ON COLUMN branches.phone IS 'Телефон филиала';
+COMMENT ON COLUMN branches.email IS 'Email филиала';
+COMMENT ON COLUMN branches.metadata IS 'JSONB поле для расширяемых атрибутов филиала';
+COMMENT ON COLUMN branches.is_headquarters IS 'Флаг, указывающий головной офис организации';
+COMMENT ON COLUMN branches.is_active IS 'Флаг активности филиала';
+COMMENT ON COLUMN branches.created_at IS 'Время создания записи';
+COMMENT ON COLUMN branches.updated_at IS 'Время последнего обновления';
+
+-- Column comments for organization_users
+COMMENT ON COLUMN organization_users.id IS 'Первичный ключ';
+COMMENT ON COLUMN organization_users.organization_id IS 'Внешний ключ к организации';
+COMMENT ON COLUMN organization_users.user_id IS 'Внешний ключ к пользователю';
+COMMENT ON COLUMN organization_users.role_in_org IS 'Роль пользователя в организации: OWNER, ADMIN, STAFF, VET, MODERATOR';
+COMMENT ON COLUMN organization_users.is_primary IS 'Флаг основной организации для уведомлений';
+COMMENT ON COLUMN organization_users.joined_at IS 'Дата присоединения пользователя к организации';
+COMMENT ON COLUMN organization_users.created_at IS 'Время создания записи';
+COMMENT ON COLUMN organization_users.updated_at IS 'Время последнего обновления';
 
 -- Note: Application-level validations required per documentation:
 -- 1. Validate breed_id/breed_text: if breed_id IS NULL THEN breed_text IS NOT NULL
