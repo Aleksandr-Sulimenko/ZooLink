@@ -1,0 +1,643 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Animals API
+  version: 1.0.0
+  description: API for managing animal profiles in ZooLink.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /animals:
+    get:
+      summary: List animals with filtering
+      operationId: listAnimals
+      parameters:
+        - in: query
+          name: owner_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by owner ID (personal listings)
+        - in: query
+          name: organization_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by organization ID (organizational listings)
+        - in: query
+          name: species_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by species ID
+        - in: query
+          name: breed_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by breed ID
+        - in: query
+          name: sex
+          schema:
+            type: string
+            enum: [Male, Female]
+          description: Filter by sex
+        - in: query
+          name: nickname
+          schema:
+            type: string
+          description: Filter by nickname (partial match, case-insensitive)
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+          description: Filter by active status
+        - in: query
+          name: date_of_birth_min
+          schema:
+            type: string
+            format: date
+          description: Minimum date of birth
+        - in: query
+          name: date_of_birth_max
+          schema:
+            type: string
+            format: date
+          description: Maximum date of birth
+        - in: query
+          name: owned_since_min
+          schema:
+            type: string
+            format: date
+          description: Minimum ownership date
+        - in: query
+          name: owned_since_max
+          schema:
+            type: string
+            format: date
+          description: Maximum ownership date
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of items per page
+      responses:
+        '200':
+          description: Paginated list of animals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Animal'
+                  total:
+                    type: integer
+                    description: Total number of animals
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    post:
+      summary: Create a new animal profile
+      operationId: createAnimal
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnimalCreate'
+      responses:
+        '201':
+          description: Animal created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /animals/{id}:
+    get:
+      summary: Get animal by ID
+      operationId: getAnimalById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Animal details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '404':
+          description: Animal not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    patch:
+      summary: Update animal
+      operationId: updateAnimal
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnimalUpdate'
+      responses:
+        '200':
+          description: Animal updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '400':
+          description: Bad request (validation error)
+        '404':
+          description: Animal not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+    delete:
+      summary: Delete animal (soft delete via is_active=false or actual delete?)
+      operationId: deleteAnimal
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Animal deleted successfully
+        '404':
+          description: Animal not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /animals/{id}/ownership-history:
+    get:
+      summary: Get ownership history for an animal
+      operationId: getAnimalOwnershipHistory
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Animal ID
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of items per page
+      responses:
+        '200':
+          description: Paginated list of ownership history records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnimalOwnershipHistory'
+                  total:
+                    type: integer
+                    description: Total number of ownership history records
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '404':
+          description: Animal not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Animal:
+      type: object
+      required:
+        - id
+        - species_id
+        - sex
+        - date_of_birth
+        - is_active
+        - created_at
+        - updated_at
+        - health_records
+        - reproductive_data
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        owner_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to user (nullable if organization_id set)
+        organization_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to organization (nullable if owner_id set)
+        species_id:
+          type: string
+          format: uuid
+          description: Foreign key to species
+        breed_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to breed (nullable if custom/other)
+        breed_text:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Custom breed text if breed_id is null (for moderator review)
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Display name
+        sex:
+          type: string
+          enum: [Male, Female]
+          description: Sex of the animal
+        date_of_birth:
+          type: string
+          format: date
+          description: Date of birth
+        color_coat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Color/coat pattern
+        microchip_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Microchip ID
+        tattoo_brand_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Tattoo/brand ID (for livestock)
+        is_active:
+          type: boolean
+          description: Active status (visible for new listings when true)
+        owned_since:
+          type: string
+          format: date
+          nullable: true
+          description: Date when current owner acquired the animal
+        mother_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to mother for pedigree tracking
+        father_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to father for pedigree tracking
+        health_records:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of health record (e.g., vaccination, deworming)
+              detail:
+                type: string
+                description: Detail of the health record (e.g., Rabies, Panacur)
+              date:
+                type: string
+                format: date
+                description: Date of the health event
+              provider:
+                type: string
+                description: Provider/veterinary clinic
+          description: Array of health record objects
+          default: []
+        reproductive_data:
+          type: array
+          items:
+            type: object
+            properties:
+              event:
+                type: string
+                description: Event type (e.g., heat_start, mating)
+              date:
+                type: string
+                format: date
+                description: Date of the event
+              partner_id:
+                type: string
+                format: uuid
+                nullable: true
+                description: Foreign key to partner animal (if applicable)
+          description: Array of reproductive data objects (for females)
+          default: []
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp
+        deactivated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when animal was deactivated (soft delete)
+    AnimalCreate:
+      type: object
+      required:
+        - species_id
+        - sex
+        - date_of_birth
+      properties:
+        owner_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to user (set if personal ownership, null if organization ownership)
+        organization_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to organization (set if organizational ownership, null if personal ownership)
+        species_id:
+          type: string
+          format: uuid
+          description: Foreign key to species
+        breed_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to breed (nullable if custom/other)
+        breed_text:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Custom breed text if breed_id is null (for moderator review)
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Display name
+        sex:
+          type: string
+          enum: [Male, Female]
+          description: Sex of the animal
+        date_of_birth:
+          type: string
+          format: date
+          description: Date of birth
+        color_coat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Color/coat pattern
+        microchip_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Microchip ID
+        tattoo_brand_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Tattoo/brand ID (for livestock)
+        owned_since:
+          type: string
+          format: date
+          nullable: true
+          description: Date when current owner acquired the animal
+        mother_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to mother for pedigree tracking
+        father_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to father for pedigree tracking
+        health_records:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of health record (e.g., vaccination, deworming)
+              detail:
+                type: string
+                description: Detail of the health record (e.g., Rabies, Panacur)
+              date:
+                type: string
+                format: date
+                description: Date of the health event
+              provider:
+                type: string
+                description: Provider/veterinary clinic
+          description: Array of health record objects
+          default: []
+        reproductive_data:
+          type: array
+          items:
+            type: object
+            properties:
+              event:
+                type: string
+                description: Event type (e.g., heat_start, mating)
+              date:
+                type: string
+                format: date
+                description: Date of the event
+              partner_id:
+                type: string
+                format: uuid
+                nullable: true
+                description: Foreign key to partner animal (if applicable)
+          description: Array of reproductive data objects (for females)
+          default: []
+        is_active:
+          type: boolean
+          description: Active status
+          default: true
+    AnimalUpdate:
+      type: object
+      properties:
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Display name
+        color_coat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Color/coat pattern
+        microchip_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Microchip ID
+        tattoo_brand_id:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Tattoo/brand ID (for livestock)
+        health_records:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of health record (e.g., vaccination, deworming)
+              detail:
+                type: string
+                description: Detail of the health record (e.g., Rabies, Panacur)
+              date:
+                type: string
+                format: date
+                description: Date of the health event
+              provider:
+                type: string
+                description: Provider/veterinary clinic
+          description: Array of health record objects
+        reproductive_data:
+          type: array
+          items:
+            type: object
+            properties:
+              event:
+                type: string
+                description: Event type (e.g., heat_start, mating)
+              date:
+                type: string
+                format: date
+                description: Date of the event
+              partner_id:
+                type: string
+                format: uuid
+                nullable: true
+                description: Foreign key to partner animal (if applicable)
+          description: Array of reproductive data objects (for females)
+        owned_since:
+          type: string
+          format: date
+          nullable: true
+          description: Date when current owner acquired the animal
+        is_active:
+          type: boolean
+          description: Active status
+    AnimalOwnershipHistory:
+      type: object
+      required:
+        - id
+        - animal_id
+        - owner_id
+        - start_date
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        animal_id:
+            type: string
+            format: uuid
+            description: Foreign key to animal
+        owner_id:
+          type: string
+          format: uuid
+          description: Foreign key to user
+        start_date:
+          type: string
+          format: date
+          description: Start date of ownership
+        end_date:
+          type: string
+          format: date
+          nullable: true
+          description: End date of ownership (nullable if current)
+        transfer_reason:
+          type: string
+          nullable: true
+          description: Reason for ownership transfer
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp

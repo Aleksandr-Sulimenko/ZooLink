@@ -1,31 +1,33 @@
 # Further Implementation Checklist for ZooLink Organization/Branch Modeling
 
 ## 📋 API Contracts to Document
-- [ ] **03-architecture/api-contracts/organization-api.yaml** (new)
+- [x] **03-architecture/api-contracts/organization-api.yaml** (new)
   - Create OpenAPI 3.0 specification for organization API
   - Include CRUD operations for organizations
   - Include endpoints for managing organization users
-- [ ] **03-architecture/api-contracts/branch-api.yaml** (new)
+- [x] **03-architecture/api-contracts/branch-api.yaml** (new)
   - Create OpenAPI 3.0 specification for branch API
   - Include CRUD operations for branches
-- [ ] **Update existing listings-api.yaml**
+- [x] **Update existing listings-api.yaml**
   - Add optional organization_id/branch_id in request/response schemas
   - Update Listing object schema to include these fields
-- [ ] **Update existing animals-api.yaml**
+- [x] **Update existing animals-api.yaml**
   - Add optional organization_id in request/response schemas
   - Update Animal object schema to include this field
 
 ## ⚙️ Tech Stack Decisions
-- [ ] **docs/04-decisions/0001-tech-stack.md**
+- [x] **docs/04-decisions/0001-tech-stack.md**
   - Add note about using role‑based access control library (e.g., CASL) for organization/user permissions
   - Specify where this will be integrated (NestJS Guards, React hooks/HOCs)
 
 ## 🔍 Verification Steps for New Items
-- [ ] Ensure all new API contract files compile without syntax errors (YAML/OpenAPI lint)
-- [ ] Verify that API contracts accurately reflect the implemented database schema
-- [ ] Check that terminology is consistent across API contracts and documentation
-- [ ] Confirm that added tech stack decisions align with actual implementation plans
+- [x] Ensure all new API contract files compile without syntax errors (YAML/OpenAPI lint)
+- [x] Verify that API contracts accurately reflect the implemented database schema
+- [x] Check that terminology is consistent across API contracts and documentation
+- [x] Confirm that added tech stack decisions align with actual implementation plans
 
 ## 📝 Final Sign‑off
-- [ ] Document owner signs off the checklist – add a completed‑date line at the bottom.
-- [ ] Commit the checklist and all related files with a clear commit message.
+- [x] Document owner signs off the checklist – add a completed‑date line at the bottom.
+- [x] Commit the checklist and all related files with a clear commit message.
+
+Completed: 2026-05-31

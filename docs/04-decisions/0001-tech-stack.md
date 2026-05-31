@@ -20,6 +20,7 @@ We will use the following technology stack for the MVP:
 - **ORM/ODM**: Prisma ORM
 - **API Style**: RESTful with OpenAPI 3.0 specification
 - **Authentication**: JWT (JSON Web Tokens) with refresh tokens
+- **Authorization**: Role-Based Access Control (RBAC) using CASL library for organization/user permissions, implemented via NestJS Guards
 - **Real-time capabilities**: Prepared for future WebSocket integration (not used in MVP)
 
 ### Frontend
