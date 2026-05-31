@@ -123,6 +123,10 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 | `microchip_id` | VARCHAR(50) | No | If provided |
 | `tattoo_brand_id` | VARCHAR(50) | No | For livestock |
 | `is_active` | BOOLEAN | Yes | True = visible for new listings; False = deactivated |
+| `owned_since` | DATE | No | Date when current owner acquired the animal |
+| `mother_id` | UUID (FK to Animals.id) | No | Reference to mother for pedigree tracking |
+| `father_id` | UUID (FK to Animals.id) | No | Reference to father for pedigree tracking |
+| `deactivated_at` | TIMESTAMP | No | Timestamp when animal was deactivated (soft delete) |
 | `created_at` | TIMESTAMP | Yes |  |
 | `updated_at` | TIMESTAMP | Yes |  |
 | `health_records` | JSONB | No | Array of objects: [{type: 'vaccination', detail: 'Rabies', date: '2024-03-01', provider: 'VetClinic'}] |

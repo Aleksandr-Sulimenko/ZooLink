@@ -47,6 +47,7 @@ CREATE TABLE organizations (
     phone VARCHAR(30),
     email VARCHAR(255),
     logo_url TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb, -- For extensibility (subscription tier, branding preferences, etc.)
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -59,6 +60,7 @@ CREATE TABLE branches (
     address TEXT,
     phone VARCHAR(30),
     email VARCHAR(255),
+    metadata JSONB DEFAULT '{}'::jsonb, -- For extensibility (Center-specific attributes, etc.)
     is_headquarters BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -183,6 +185,7 @@ CREATE TABLE listings (
     seller_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL, -- nullable for personal listings
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL, -- nullable for personal listings or when branch not specified
+    metadata JSONB DEFAULT '{}'::jsonb, -- For experimental attributes (social media links, video URL placeholder, etc.)
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption')),
     title VARCHAR(255) NOT NULL,
     description TEXT,

@@ -124,6 +124,10 @@
 | `microchip_id` | VARCHAR(50) | Нет | Если предоставлен    |
 | `tattoo_brand_id` | VARCHAR(50) | Нет | Для скота    |
 | `is_active` | BOOLEAN | Да | True = виден для новых объявлений; False = деактивировано |
+| `owned_since` | DATE | Нет | Дата, когда текущий владелец приобрел животное |
+| `mother_id` | UUID (FK к Animals.id) | Нет | Ссылка на мать для отслеживания pedigree |
+| `father_id` | UUID (FK к Animals.id) | Нет | Ссылка на отца для отслеживания pedigree |
+| `deactivated_at` | TIMESTAMP | Нет | Отметка времени, когда животное было деактивировано (мягкое удаление) |
 | `created_at` | TIMESTAMP | Да |     |
 | `updated_at` | TIMESTAMP | Да |     |
 | `health_records` | JSONB | Нет | Массив объектов: [{type: 'прививка', detail: 'Бешенство', date: '2024-03-01', provider: 'ВетКлиника'}] |
