@@ -41,7 +41,7 @@ Provide secure authentication and authorization for users of ZooLink, including 
 - Authentication method: Phone (SMS) + OAuth providers; email optional.
 - No username/password authentication.
 - JWTs stored in frontend (httpOnly cookies or local storage with safeguards).
-- Role-based access control (RBAC) with roles: user, breeder, farmer, moderator, admin.
+- Role-based access control (RBAC) with roles: USER, BREEDER, FARMER, MODERATOR, ADMIN.
 - User entity includes: id, phoneNumber (verified), firstName, lastName, role, createdAt, updatedAt, isActive.
 
 ## Task Breakdown

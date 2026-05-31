@@ -392,7 +392,7 @@ components:
           description: Quantity (number of items/animals)
         location_point:
           type: object
-          description: GeoPoint for location-based search (requires PostGIS). Structure: { type: "Point", coordinates: [longitude, latitude] }
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
         search_radius_m:
           type: integer
@@ -470,7 +470,7 @@ components:
           description: Quantity (number of items/animals)
         location_point:
           type: object
-          description: GeoPoint for location-based search (requires PostGIS). Structure: { type: "Point", coordinates: [longitude, latitude] }
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
         search_radius_m:
           type: integer
@@ -508,7 +508,7 @@ components:
           description: Quantity (number of items/animals)
         location_point:
           type: object
-          description: GeoPoint for location-based search (requires PostGIS). Structure: { type: "Point", coordinates: [longitude, latitude] }
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
         search_radius_m:
           type: integer

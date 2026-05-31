@@ -13,12 +13,12 @@ Manage the core animal entity as an aggregate root, representing pets and livest
 ## Scope & Boundaries
 **In Scope:**
 - Animal as aggregate root with global unique identifier (UUID)
-- Attributes: species (dog, cat, cattle, etc.), breed, name, date of birth, sex, color, markings, health status (vaccinations, microchip ID, sterilization), ownership history
-- Lifecycle: creation (by owner/breeder), update, archival (not deletion for compliance)
+- Attributes: species (dog, cat, cattle, etc.), breed, nickname, date of birth, sex, color/coat, markings, health records (JSONB: vaccinations, treatments), reproductive data (JSONB: heat cycles, mating), ownership history
+- Lifecycle: creation (by owner/breeder), update, deactivation (not deletion for compliance)
 - Relationships: one animal can have multiple listings (sale, breeding, show)
 - Integration with Identity Domain (owner reference)
 - Validation rules per species/breed (e.g., cattle require ear tag)
-- Compliance with Russian animal identification (microchip, ear tag, passport) and 152-ФЗ for personal data of owners
+- Compliance with Russian animal identification (microchip ID for pets, tattoo/brand ID for livestock) and 152-ФЗ for personal data of owners
 
 **Out of Scope:**
 - Genetic lineage tracking (pedigree) - deferred to phase 2
@@ -46,7 +46,7 @@ Manage the core animal entity as an aggregate root, representing pets and livest
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `animal` module
-   - [ ] Define Animal entity with fields: id (UUID), speciesId, breedId, name, dateOfBirth, sex, color, markings, microchipId, earTagId, passportNumber, healthStatus (JSONB), currentOwnerId (FK to User), createdAt, updatedAt, archivedAt
+   - [ ] Define Animal entity with fields: id (UUID), speciesId, breedId, nickname, dateOfBirth, sex, colorCoat, markings, microchipId, tattooBrandId, healthRecords (JSONB), reproductiveData (JSONB), ownerId (FK to User), organizationId (FK to Organization, nullable), createdAt, updatedAt, deactivatedAt
    - [ ] Create reference tables for Species and Breed (managed via Admin Domain)
    - [ ] Implement validation rules per species (e.g., if species=cattle, earTagId required)
    - [ ] Create AnimalController (CRUD operations, search by microchip/ear tag)
@@ -73,7 +73,7 @@ Manage the core animal entity as an aggregate root, representing pets and livest
 
 ## Verification Criteria
 - [ ] Unit tests >90% coverage for animal module (backend)
-- [ ] Integration tests cover: animal creation (valid/invalid per species), update, ownership transfer, search by microchip/ear tag, archival
+- [ ] Integration tests cover: animal creation (valid/invalid per species), update, ownership transfer, search by microchip/ear tag, deactivation
 - [ ] E2E tests cover: user adds animal with species-specific fields, views animal, edits animal
 - [ ] Manual testing: verify microchip uniqueness constraint, species-dependent validation
 - [ ] Performance: animal search by microchip returns in <500ms with 100k records

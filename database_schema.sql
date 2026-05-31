@@ -100,7 +100,7 @@ CREATE TABLE users (
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60), -- bcrypt hash if using phone auth (nullable if OAuth-only)
-    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER',
+    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
