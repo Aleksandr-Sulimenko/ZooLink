@@ -67,10 +67,9 @@ ZooLink — это платформа для связи зоопарков, пр
 │       ├── 08-frontend-architecture.md
 │       ├── 09-testing-strategy.md
 │       ├── 10-implementation-roadmap.md
-        ├── glossary.md
-        ├── README.md
-        ├── traceability Matrix.md
-        └── security/
+│       ├── glossary.md
+│       ├── README.md
+│       └── security/
 │           └── threat-model.md
 ├── docsRU/
 │   ├── 00-project-brief.md
@@ -110,11 +109,11 @@ ZooLink — это платформа для связи зоопарков, пр
 │       ├── 07-geo-search-service.md
 │       ├── 08-frontend-architecture.md
 │       ├── 09-testing-strategy.md
-        ├── glossary.md
-        ├── README.md
-        ├── traceability Matrix.md
-        └── security/
-            └── threat-model.md
+│       ├── 10-implementation-roadmap.md
+│       ├── glossary.md
+│       ├── README.md
+│       └── security/
+│           └── threat-model.md
 ├── documentation/
 │   └── checklists/
 │       # (папка перемещена в корневой checklists, оставлена пустой или удалена)
