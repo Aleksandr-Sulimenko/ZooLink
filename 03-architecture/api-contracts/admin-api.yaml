@@ -254,7 +254,7 @@ paths:
           name: listingType
           schema:
             type: string
-            enum: [sale, breeding, show, adoption]
+            enum: [sale, breeding, show, adoption, stud_service]
           description: Filter by listing type
         - in: query
           name: species

@@ -205,7 +205,7 @@ The database consists of 15 core tables organized into functional domains:
 - **Attributes**:
   - `animal_id` UUID NOT NULL REFERENCES animals(id) ON DELETE CASCADE
   - `seller_id` UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
-  - `listing_type` VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption'))
+  - `listing_type` VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service'))
   - `title` VARCHAR(255) NOT NULL
   - `description` TEXT
   - `price_cents` INTEGER (nullable for non-price listings)
