@@ -867,7 +867,7 @@ components:
           description: User ID of listing creator
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption]
+          enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
         title:
           type: string
@@ -996,7 +996,7 @@ components:
           $ref: '#/components/schemas/UserSummary'
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption]
+          enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
         title:
           type: string
