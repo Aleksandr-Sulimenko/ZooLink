@@ -1,0 +1,1530 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Admin API
+  version: 1.0.0
+  description: API for managing reference data, moderation workflows, and system settings in ZooLink.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /reference-data/{dataset}:
+    get:
+      summary: Get all active entries in a reference dataset
+      operationId: getReferenceData
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+        - in: query
+          name: includeInactive
+          schema:
+            type: boolean
+            default: false
+          description: Include inactive/deactivated entries
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page
+        - in: query
+          name: search
+          schema:
+            type: string
+            maxLength: 100
+          description: Search term for filtering (name or code)
+      responses:
+        '200':
+          description: Paginated list of reference data entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReferenceDataEntry'
+                  total:
+                    type: integer
+                    description: Total number of entries
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '400':
+          description: Bad request (invalid dataset)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+    post:
+      summary: Create new reference data entry
+      operationId: createReferenceData
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferenceDataCreateRequest'
+      responses:
+        '201':
+          description: Reference data entry created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDataEntry'
+        '400':
+          description: Bad request (validation error or duplicate)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /reference-data/{dataset}/new:
+    get:
+      summary: Get form/template for creating new reference data entry
+      operationId: getReferenceDataForm
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Form template for creating reference data entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDataForm'
+        '400':
+          description: Bad request (invalid dataset)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /reference-data/{dataset}/{id}:
+    get:
+      summary: Get specific reference data entry by ID
+      operationId: getReferenceDataById
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Reference data entry ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Reference data entry details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDataEntry'
+        '404':
+          description: Reference data entry not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+    patch:
+      summary: Update reference data entry
+      operationId: updateReferenceData
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Reference data entry ID
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferenceDataUpdateRequest'
+      responses:
+        '200':
+          description: Reference data entry updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDataEntry'
+        '400':
+          description: Bad request (validation error)
+        '404':
+          description: Reference data entry not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /reference-data/{dataset}/{id}/toggle-active:
+    patch:
+      summary: Activate or deactivate reference data entry
+      operationId: toggleReferenceDataActive
+      parameters:
+        - in: path
+          name: dataset
+          required: true
+          schema:
+            type: string
+            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          description: Reference dataset name
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Reference data entry ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Reference data entry activation status toggled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceDataEntry'
+        '400':
+          description: Bad request (invalid operation)
+        '404':
+          description: Reference data entry not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /moderation/queue:
+    get:
+      summary: Get pending listings for moderation
+      operationId: getModerationQueue
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: listingType
+          schema:
+            type: string
+            enum: [sale, breeding, show, adoption]
+          description: Filter by listing type
+        - in: query
+          name: species
+          schema:
+            type: string
+            format: uuid
+          description: Filter by species
+        - in: query
+          name: breed
+          schema:
+            type: string
+            format: uuid
+          description: Filter by breed
+        - in: query
+          name: minPrice
+          schema:
+            type: integer
+          description: Minimum price in cents
+        - in: query
+          name: maxPrice
+          schema:
+            type: integer
+          description: Maximum price in cents
+        - in: query
+          name: location
+          schema:
+            type: string
+            format: uuid
+          description: Filter by city/region
+        - in: query
+          name: radiusKm
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          description: Search radius in kilometers from location
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum: [createdAt, price, location]
+            default: createdAt
+          description: Sort field
+        - in: query
+          name: sortOrder
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+          description: Sort order
+      responses:
+        '200':
+          description: Paginated list of pending listings for moderation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModerationQueueItem'
+                  total:
+                    type: integer
+                    description: Total number of pending listings
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - moderator/admin required)
+  /moderation/listing/{id}:
+    get:
+      summary: Get listing details for moderation review
+      operationId: getListingForModeration
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Listing ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Listing details for moderation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationListingDetails'
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - moderator/admin required)
+  /moderation/action:
+    post:
+      summary: Perform moderation action on listing (approve/reject/flag)
+      operationId: performModerationAction
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModerationActionRequest'
+      responses:
+        '200':
+          description: Moderation action performed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationActionResponse'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - moderator/admin required)
+  /moderation/log/{listing_id}:
+    get:
+      summary: Get moderation history for a listing
+      operationId: getModerationLog
+      parameters:
+        - in: path
+          name: listing_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Listing ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Moderation history for listing
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModerationLogEntry'
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - moderator/admin required)
+  /moderation/ban-user:
+    post:
+      summary: Ban user with reason and duration
+      operationId: banUser
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BanUserRequest'
+      responses:
+        '200':
+          description: User banned successfully
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+  /system/settings:
+    get:
+      summary: Get current system settings
+      operationId: getSystemSettings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: System settings retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/SystemSetting'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+    patch:
+      summary: Update system setting
+      operationId: updateSystemSetting
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema:
+            type: string
+            description: Setting key to update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemSettingUpdateRequest'
+      responses:
+        '200':
+          description: System setting updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemSetting'
+        '400':
+          description: Bad request (validation error or invalid key)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+  /audit/log:
+    get:
+      summary: Get audit trail entries
+      operationId: getAuditLog
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: entityType
+          schema:
+            type: string
+            enum: [listing, user, organization, reference-data, moderation-action]
+          description: Filter by entity type
+        - in: query
+          name: entityId
+          schema:
+            type: string
+            format: uuid
+          description: Filter by entity ID
+        - in: query
+          name: actionType
+          schema:
+            type: string
+            enum: [created, updated, deleted, approved, rejected, banned, role-changed]
+          description: Filter by action type
+        - in: query
+          name: performedBy
+          schema:
+            type: string
+            format: uuid
+          description: Filter by user who performed the action
+        - in: query
+          name: startDate
+          schema:
+            type: string
+            format: date
+          description: Start date for filtering (inclusive)
+        - in: query
+          name: endDate
+          schema:
+            type: string
+            format: date
+          description: End date for filtering (inclusive)
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Items per page
+        - in: query
+          name: sortBy
+          schema:
+            type: string
+            enum: [createdAt, entityType, actionType]
+            default: createdAt
+          description: Sort field
+        - in: query
+          name: sortOrder
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+          description: Sort order
+      responses:
+        '200':
+          description: Paginated audit trail entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLogEntry'
+                  total:
+                    type: integer
+                    description: Total number of audit log entries
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+  /users/roles:
+    get:
+      summary: Get users with their roles
+      operationId: getUsersWithRoles
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: role
+          schema:
+            type: string
+            enum: [USER, MODERATOR, ADMIN]
+          description: Filter by role
+        - in: query
+          name: isActive
+          schema:
+            type: boolean
+          description: Filter by active status
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page
+        - in: query
+          name: search
+          schema:
+            type: string
+            maxLength: 100
+          description: Search term for filtering (full name or email)
+      responses:
+        '200':
+          description: Paginated list of users with roles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserRoleInfo'
+                  total:
+                    type: integer
+                    description: Total number of users matching filters
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+  /users/{id}/role:
+    patch:
+      summary: Change user role
+      operationId: changeUserRole
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User ID
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeUserRoleRequest'
+      responses:
+        '200':
+          description: User role changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoleInfo'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions - admin only)
+        '404':
+          description: User not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ReferenceDataEntry:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - isActive
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        code:
+          type: string
+          maxLength: 50
+          description: Unique code within dataset (e.g., 'dog', 'labrador')
+        name:
+          type: string
+          maxLength: 100
+          description: Display name (localized for MVP: Russian)
+        name_en:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: English name (for future phases)
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Detailed description (optional)
+        isActive:
+          type: boolean
+          description: Whether entry is active (can be deactivated without deletion)
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When entry was deactivated (null if active)
+        version:
+          type: integer
+          default: 1
+          description: Version number for optimistic locking
+    ReferenceDataCreateRequest:
+      type: object
+      required:
+        - code
+        - name
+      properties:
+        code:
+          type: string
+          maxLength: 50
+          description: Unique code within dataset
+        name:
+          type: string
+          maxLength: 100
+          description: Display name (Russian)
+        name_en:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: English name (optional)
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Detailed description (optional)
+        isActive:
+          type: boolean
+          default: true
+          description: Whether entry is active upon creation
+    ReferenceDataUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          description: Display name (Russian)
+        name_en:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: English name (optional)
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Detailed description (optional)
+        isActive:
+          type: boolean
+          description: Whether entry is active
+    ReferenceDataForm:
+      type: object
+      properties:
+        fields:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [text, textarea, number, boolean, select, date, datetime]
+              label:
+                type: string
+                description: Field label
+              required:
+                type: boolean
+                default: false
+              maxLength:
+                type: integer
+                nullable: true
+              minLength:
+                type: integer
+                nullable: true
+              pattern:
+                type: string
+                nullable: true
+              options:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    label:
+                      type: string
+                    value:
+                      type: string
+                nullable: true
+    ModerationQueueItem:
+      type: object
+      required:
+        - id
+        - listingId
+        - animalId
+        - sellerId
+        - listingType
+        - title
+        - createdAt
+        - speciesId
+        - breedId
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for queue entry
+        listingId:
+          type: string
+          format: uuid
+          description: Listing ID
+        animalId:
+          type: string
+          format: uuid
+          description: Animal ID associated with listing
+        sellerId:
+          type: string
+          format: uuid
+          description: User ID of listing creator
+        listingType:
+          type: string
+          enum: [sale, breeding, show, adoption]
+          description: Type of listing
+        title:
+          type: string
+          maxLength: 255
+          description: Listing title
+        description:
+          type: string
+          description: Listing description
+        priceCents:
+          type: integer
+          nullable: true
+          description: Price in cents (null for non-price listings)
+        currency:
+          type: string
+          maxLength: 3
+          default: RUB
+          description: Currency code
+        quantity:
+          type: integer
+          default: 1
+          description: Quantity
+        locationPoint:
+          type: object
+          description: GeoPoint for location-based search
+          nullable: true
+        searchRadiusM:
+          type: integer
+          nullable: true
+          description: Search radius in meters
+        speciesId:
+          type: string
+          format: uuid
+          description: Animal species reference
+        breedId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Animal breed reference (null if custom/other)
+        breedText:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Custom breed text if breedId is null
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal nickname/display name
+        sex:
+          type: string
+          enum: [Male, Female]
+          description: Animal sex
+        dateOfBirth:
+          type: string
+          format: date
+          description: Animal date of birth
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Animal color/coat pattern
+        microchipId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal microchip ID
+        tattooBrandId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal tattoo/brand ID (for livestock)
+        isActive:
+          type: boolean
+          description: Listing active status
+        createdAt:
+          type: string
+          format: date-time
+          description: Listing creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Listing last update timestamp
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Listing expiration timestamp
+        photos:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Listing photo URLs
+          default: []
+        moderationNotes:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Notes from previous moderation attempts
+        moderationCount:
+          type: integer
+          default: 0
+          description: Number of times this listing has been moderated
+    ModerationListingDetails:
+      type: object
+      required:
+        - id
+        - listingId
+        - animal
+        - seller
+        - listingType
+        - title
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Moderation queue entry ID
+        listingId:
+          type: string
+          format: uuid
+          description: Listing ID
+        animal:
+          $ref: '#/components/schemas/AnimalSummary'
+        seller:
+          $ref: '#/components/schemas/UserSummary'
+        listingType:
+          type: string
+          enum: [sale, breeding, show, adoption]
+          description: Type of listing
+        title:
+          type: string
+          maxLength: 255
+          description: Listing title
+        description:
+          type: string
+          description: Listing description
+        priceCents:
+          type: integer
+          nullable: true
+          description: Price in cents
+        currency:
+          type: string
+          maxLength: 3
+          default: RUB
+          description: Currency code
+        quantity:
+          type: integer
+          default: 1
+          description: Quantity
+        locationPoint:
+          type: object
+          description: GeoPoint for location-based search
+          nullable: true
+        searchRadiusM:
+          type: integer
+          nullable: true
+          description: Search radius in meters
+        isActive:
+          type: boolean
+          description: Listing active status
+        createdAt:
+          type: string
+          format: date-time
+          description: Listing creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Listing last update timestamp
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Listing expiration timestamp
+        photos:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Listing photo URLs
+          default: []
+        moderationHistory:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModerationLogEntry'
+          description: Previous moderation actions on this listing
+          default: []
+    AnimalSummary:
+      type: object
+      required:
+        - id
+        - speciesId
+        - sex
+        - dateOfBirth
+        - isActive
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Animal ID
+        speciesId:
+          type: string
+          format: uuid
+          description: Species reference
+        breedId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Breed reference (null if custom/other)
+        breedText:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Custom breed text if breedId is null
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal nickname/display name
+        sex:
+          type: string
+          enum: [Male, Female]
+          description: Animal sex
+        dateOfBirth:
+          type: string
+          format: date
+          description: Animal date of birth
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Animal color/coat pattern
+        microchipId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal microchip ID
+        tattooBrandId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal tattoo/brand ID (for livestock)
+        isActive:
+          type: boolean
+          description: Animal active status
+        ownedSince:
+          type: string
+          format: date
+          nullable: true
+          description: Date when current owner acquired the animal
+        motherId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to mother for pedigree
+        fatherId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to father for pedigree
+        healthRecords:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of health record
+              detail:
+                type: string
+                description: Detail of health record
+              date:
+                type: string
+                format: date
+                description: Date of health event
+              provider:
+                type: string
+                description: Provider/veterinary clinic
+          description: Animal health records
+          default: []
+        reproductiveData:
+          type: array
+          items:
+            type: object
+            properties:
+              event:
+                type: string
+                description: Event type (heat_start, mating, etc.)
+              date:
+                type: string
+                format: date
+                description: Date of event
+              partnerId:
+                type: string
+                format: uuid
+                nullable: true
+                description: Partner animal ID (if applicable)
+          description: Animal reproductive data (for females)
+          default: []
+    UserSummary:
+      type: object
+      required:
+        - id
+        - fullName
+        - role
+        - isActive
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: User ID
+        fullName:
+          type: string
+          maxLength: 100
+          description: User's full name
+        cityId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to city for geo-search
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 500
+          description: URL to avatar in object storage
+        email:
+          type: string
+          format: email
+          nullable: true
+          maxLength: 255
+          description: Email address for notifications
+        emailVerified:
+          type: boolean
+          default: false
+          description: True if email confirmed via link
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN]
+          description: User role
+        isActive:
+          type: boolean
+          description: True = can login; False = deactivated
+        createdAt:
+          type: string
+          format: date-time
+          description: Registration timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last profile update
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last login timestamp
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When user chose to deactivate (null if active)
+    ModerationLogEntry:
+      type: object
+      required:
+        - id
+        - listingId
+        - moderatorId
+        - action
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        listingId:
+          type: string
+          format: uuid
+          description: Listing ID
+        moderatorId:
+          type: string
+          format: uuid
+          description: Moderator user ID
+        action:
+          type: string
+          enum: [approved, rejected, flagged]
+          description: Moderation action taken
+        reason:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Reason for rejection (required for rejected action)
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp of moderation action
+    ModerationActionRequest:
+      type: object
+      required:
+        - listingId
+        - action
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Listing ID to moderate
+        action:
+          type: string
+          enum: [approve, reject, flag]
+          description: Moderation action to perform
+        reason:
+          type: string
+          maxLength: 500
+          description: Reason for rejection (required when action is 'reject')
+    ModerationActionResponse:
+      type: object
+      required:
+        - listingId
+        - action
+        - moderatorId
+        - processedAt
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Listing ID that was moderated
+        action:
+          type: string
+          enum: [approved, rejected, flagged]
+          description: Moderation action that was performed
+        reason:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Reason for rejection (if applicable)
+        moderatorId:
+          type: string
+          format: uuid
+          description: Moderator user ID who performed the action
+        processedAt:
+          type: string
+          format: date-time
+          description: Timestamp when action was processed
+        listingStatus:
+          type: string
+          enum: [draft, pending, published, rejected]
+          description: Resulting listing status after moderation
+    BanUserRequest:
+      type: object
+      required:
+        - userId
+        - reason
+        - durationDays
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: User ID to ban
+        reason:
+          type: string
+          maxLength: 500
+          description: Reason for banning
+        durationDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: Ban duration in days (null for permanent ban)
+        isPermanent:
+          type: boolean
+          default: false
+          description: Whether ban is permanent (overrides durationDays if true)
+    BanUserResponse:
+      type: object
+      required:
+        - userId
+        - bannedAt
+        - expiresAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: User ID that was banned
+        reason:
+          type: string
+          maxLength: 500
+          description: Reason for banning
+        bannedAt:
+          type: string
+          format: date-time
+          description: Timestamp when ban was applied
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When ban expires (null for permanent ban)
+        isPermanent:
+          type: boolean
+          description: Whether ban is permanent
+    SystemSetting:
+      type: object
+      required:
+        - key
+        - value
+        - updatedAt
+      properties:
+        key:
+          type: string
+          description: Setting key
+        value:
+          type: string
+          description: Setting value (JSON string for complex values)
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Setting description
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+        updatedBy:
+          type: string
+          format: uuid
+          nullable: true
+          description: User ID who last updated the setting
+    SystemSettingUpdateRequest:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+          description: New setting value
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Updated setting description
+    AuditLogEntry:
+      type: object
+      required:
+        - id
+        - entityType
+        - entityId
+        - actionType
+        - performedBy
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        entityType:
+          type: string
+          enum: [listing, user, organization, reference-data, moderation-action]
+          description: Type of entity that was acted upon
+        entityId:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of entity that was acted upon (null for system-wide actions)
+        actionType:
+          type: string
+          enum: [created, updated, deleted, approved, rejected, banned, role-changed, login, logout]
+          description: Type of action performed
+        performedBy:
+          type: string
+          format: uuid
+          description: User ID who performed the action
+        performedByName:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Name of user who performed the action (for display)
+        details:
+          type: string
+          maxLength: 1000
+          nullable: true
+          description: Additional details about the action (JSON string)
+        ipAddress:
+          type: string
+          pattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
+          nullable: true
+          description: IP address where action originated
+        userAgent:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: User agent string of client
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when action was logged
+    UserRoleInfo:
+      type: object
+      required:
+        - id
+        - fullName
+        - role
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: User ID
+        fullName:
+          type: string
+          maxLength: 100
+          description: User's full name
+        email:
+          type: string
+          format: email
+          nullable: true
+          maxLength: 255
+          description: Email address for notifications
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN]
+          description: User role
+        isActive:
+          type: boolean
+          description: True = can login; False = deactivated
+        createdAt:
+          type: string
+          format: date-time
+          description: Registration timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last profile update
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last login timestamp
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When user chose to deactivate (null if active)
+        cityId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to city for geo-search
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 500
+          description: URL to avatar in object storage
+    ChangeUserRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN]
+          description: New role for user
