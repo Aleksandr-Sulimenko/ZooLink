@@ -1,8 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add *)",
-      "Bash([ -f \"/home/asulimenko/Project/ZooLink/03-architecture/api-contracts/$contract\" ])"
+      "Bash([ -f \"/home/asulimenko/Project/ZooLink/03-architecture/api-contracts/$contract\" ])",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('/home/asulimenko/Project/ZooLink/03-architecture/api-contracts/admin-api.yaml'\\)\\)\")",
+      "Bash(python3 *)"
     ]
   }
 }

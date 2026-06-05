@@ -721,7 +721,7 @@ components:
         name:
           type: string
           maxLength: 100
-          description: Display name (localized for MVP: Russian)
+          description: 'Display name (localized for MVP: Russian)'
         name_en:
           type: string
           maxLength: 100
