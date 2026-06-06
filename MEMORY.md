@@ -1,0 +1,1 @@
+- [Added Russian translations of BUSINESS_ANALYSIS_CHECKLIST.md and PENDING_DOCUMENTATION_CHECKLIST.md to checklistsRU/ directory.](./memory/added-russian-checklists.md)
