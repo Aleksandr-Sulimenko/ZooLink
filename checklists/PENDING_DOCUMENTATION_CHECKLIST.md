@@ -16,12 +16,12 @@ The following items have been marked as completed in the source checklists and a
 ## 📋 Pending Documentation‑Only Tasks
 
 ### 1. Animal Domain – Health Records Note
-- [ ] **Spec clarification**: In `docs/02-requirements/business-requirements/animal-domain.md` (and Russian version), consider whether to keep a single logical `healthStatus` field as a view, noting that the implementation splits into `health_records` and `reproductive_data` JSONB columns for indexing. Add a short note if this approach is chosen.
+- [x] **Spec clarification**: In `docs/02-requirements/business-requirements/animal-domain.md` (and Russian version), consider whether to keep a single logical `healthStatus` field as a view, noting that the implementation splits into `health_records` and `reproductive_data` JSONB columns for indexing. Add a short note if this approach is chosen.
 
 ### 2. API Contracts Documentation (OpenAPI 3.0)
 *(Treat these as documentation – write/update the YAML files even if implementation is pending.)*
 
-- [ ] **Organization API** – create `03-architecture/api-contracts/organization-api.yaml`  
+- [x] **Organization API** – create `03-architecture/api-contracts/organization-api.yaml`  
     - Define CRUD endpoints for organizations  
     - Define endpoints for managing organization users  
     - Include request/response schemas with proper validation  
@@ -29,24 +29,24 @@ The following items have been marked as completed in the source checklists and a
     - Document error responses and standard HTTP status codes  
     - Add examples for common operations  
 
-- [ ] **Branch API** – create `03-architecture/api-contracts/branch-api.yaml`  
+- [x] **Branch API** – create `03-architecture/api-contracts/branch-api.yaml`  
     - Define Branch‑specific CRUD endpoints  
     - Include branch‑animal relationships if applicable  
     - Document branch‑level permissions and access controls  
 
-- [ ] **Update Listings API** (`03-architecture/api-contracts/listings-api.yaml`)  
+- [x] **Update Listings API** (`03-architecture/api-contracts/listings-api.yaml`)  
     - Add optional `organization_id` and `branch_id` fields to the Listing schema  
     - Update create/listing endpoints to accept organization/branch context  
     - Add query parameters for filtering by organization/branch  
     - Document access control rules for organization‑owned listings  
 
-- [ ] **Update Animals API** (`03-architecture/api-contracts/animals-api.yaml`)  
+- [x] **Update Animals API** (`03-architecture/api-contracts/animals-api.yaml`)  
     - Add optional `organization_id` field to the Animal schema  
     - Update create/animal endpoints to accept organization context  
     - Add query parameters for filtering by organization  
     - Document inheritance of organization permissions to animal records  
 
-- [ ] **Update Matching API** (`03-architecture/api-contracts/matching-api.yaml` – if exists)  
+- [x] **Update Matching API** (`03-architecture/api-contracts/matching-api.yaml` – if exists)  
     - Document organization‑aware matching rules  
     - Specify how organization ownership affects matching eligibility  
     - Add intra‑organization matching flag handling  
@@ -73,6 +73,13 @@ The following items have been marked as completed in the source checklists and a
         - URI versioning (`/api/v1/`) vs header vs query parameter  
         - Deprecation policy  
         - Backward compatibility guarantees  
+    - **Localization/Internationalization (i18n) approach**  
+        - Strategy for UI/UX localization (libraries like react-i18next, format.js)  
+        - Database design for multilingual content (separate translation tables, JSONB fields with language keys, or localized columns)  
+        - API localization considerations (Accept-Language headers, localized error messages, localized enum values)  
+        - Content management strategy for documentation and dynamic content  
+        - Fallback language handling and language detection  
+        - Example implementation patterns for organizations, branches, and listing content
 
 ### 4. Verification Steps for Documentation
 - [ ] **API Contract Validation**  

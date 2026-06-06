@@ -8,8 +8,8 @@
 
 - [ ] **Feature Idea Document** – e.g., `docs/02-requirements/business-requirements/<new-feature>-domain.md` or under `docs/02-requirements/` with appropriate name.
 - [ ] **Russian translation** – mirror the above in `docsRU/02-requirements/business-requirements/`.
-- [ ] **Glossary entries** – add definitions for any new terms/concepts in `docs/specs/glossary.md` and `docsRU/specs/glossary.md`.
-- [ ] **Traceability Matrix updates** – add new rows linking Business Requirement ID → Specification → Verification Criteria → ADR → DB schema → API contracts (both language versions).
+- [x] **Glossary entries** – add definitions for any new terms/concepts in `docs/specs/glossary.md` and `docsRU/specs/glossary.md`.
+- [x] **Traceability Matrix updates** – add new rows linking Business Requirement ID → Specification → Verification Criteria → ADR → DB schema → API contracts (both language versions).
 - [ ] **Domain Model updates** – if new entities/attributes are suggested, update relevant conceptual model tables in the domain specification files (both EN and RU).
 - [ ] **ERD description updates** – describe new tables/relationships in `ERD_DESCRIPTION.md` (shared for both locales).
 - [ ] **Mermaid ERD sketch** – optionally update `ZooLink_ERD.mmd` to visualize new entities (still documentation‑only).
@@ -31,6 +31,7 @@
 - [ ] **Geo‑search** – new search facets (e.g., by services offered, by facility type).
 - [ ] **Frontend** – new UI concepts/pages (e.g., organization profile, analytics dashboard) – capture as wireframe sketches or description in `docs/specs/08-frontend-architecture.md`.
 - [ ] **Non‑Functional Requirements** – if the idea impacts performance, scalability, security, extensibility, update the relevant NFR files under `docs/02-requirements/nfr/` and `docsRU/02-requirements/nfr/`.
+- [ ] **Localization/Internationalization (i18n)** – consider how to support multiple languages in UI, database schema, API responses, and documentation. This includes language selection mechanisms, translation storage, localized content management, and fallback strategies.
 
 ### API Contracts (documentation‑only)
 - [ ] If the idea introduces a new endpoint or modifies an existing one, update the corresponding OpenAPI YAML in `03-architecture/api-contracts/` **as documentation** (even if not yet implemented). Keep the file in the repo so the contract is visible.
