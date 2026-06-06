@@ -218,6 +218,7 @@ Each feature should meet the following before considered complete:
 - [ ] Integration tests written and passing (where applicable)
 - [ ] Manual testing completed (exploratory testing of happy path and edge cases)
 - [ ] Documentation updated (API docs, user guides if needed)
+- [ ] Documentation updated in both English and Russian (if applicable)
 - [ ] Code reviewed by at least one other developer
 - [ ] No critical or high severity security vulnerabilities in new code
 - [ ] Performance benchmarks met (if applicable)
