@@ -49,6 +49,7 @@ We will use the following technology stack for the MVP:
 - **Geocoding & Maps**: Yandex Maps (free tier) with abstraction layer for easy replacement
 - **Email**: SendGrid (or similar) for transactional emails only
 - **File Upload**: Pre-signed URLs to S3-compatible storage
+- **Localization/i18n**: Format.js for client-side, i18next for React integration, LinguiJS considered for future
 
 ## Consequences
 
@@ -132,6 +133,60 @@ We will use the following technology stack for the MVP:
 - `03-architecture/containers.md` - technical decomposition
 - `03-architecture/domains-and-bc.md` - mapping of bounded contexts to technical modules
 - `04-decisions/0002-hard-split-markets.md` - rationale for pet/livestock separation
+
+## Localization/Internationalization (i18n) Approach
+To support multiple languages (starting with English and Russian, with framework for additional languages):
+
+### UI/UX Localization
+- **Library**: Format.js for core internationalization, react-intl for React integration
+- **Message Format**: ICU MessageFormat for plurals, gender, and complex formatting
+- **Storage**: JSON files per language in `src/locales/` (e.g., `en.json`, `ru.json`)
+- **Implementation**: Higher-order component or hook (`useTranslation`) for easy access in components
+- **Fallback**: English as default fallback language
+
+### Database Design for Multilingual Content
+- **Organizations/Branches**: JSONB `name_localized` and `description_localized` fields with language keys
+  ```json
+  {
+    "name_localized": {"en": "Zoo Name", "ru": "Название Зоопарка"},
+    "description_localized": {"en": "A wonderful zoo", "ru": "Прекрасный зоопарк"}
+  }
+  ```
+- **Listings**: JSONB `title_localized` and `description_localized` fields following same pattern
+- **Static Content**: Separate `translations` table for UI labels, help text, and validation messages
+- **Reference Data**: Species/breed names stored with language keys in JSONB fields
+
+### API Localization Considerations
+- **Headers**: Support `Accept-Language` header for language preference
+- **Error Messages**: Localized validation and business rule messages
+- **Enum Values**: Localized display values for listing types, animal sexes, etc.
+- **Response Language**: Either include all translations in response or use `Content-Language` header
+- **Consistency**: Ensure API returns localized fields when available, falls back to default language
+
+### Content Management Strategy
+- **Documentation**: Maintain parallel `docs/` and `docsRU/` folders with mirrored structure
+- **Dynamic Content**: Admin interface for managing translations of user-generated content
+- **Translation Workflow**: 
+  1. Extract strings during build process
+  2. Send to translation team 
+  3. Import translated JSON files
+  4. Validate completeness and format
+- **Versioning**: Track translation completeness per language
+
+### Language Detection & Fallback
+- **Priority**: 
+  1. User profile language preference
+  2. `Accept-Language` header
+  3. GeoIP-based detection (with user override)
+  4. Default to English
+- **Storage**: Save preference in user profile and/or cookie/localStorage
+- **Switching**: Language selector in UI persistently saves preference
+
+### Implementation Examples
+- **Organization Name**: `<FormattedMessage id="organization.name" defaultMessage={org.name_localized[userLang] || org.name_localized['en']} />`
+- **Listing Title**: Access `listing.title_localized[userLang]` or fallback
+- **Validation Messages**: Import from locale-specific JSON based on user language
+- **API Endpoint**: `GET /api/v1/organizations?lang=ru` or header-based localization
 
 ## Notes
 This decision will be revisited if:

@@ -20,10 +20,11 @@ paths:
             format: uuid
           description: ID of the animal for which to find matches
         - in: query
-          includeSuggestions:
+          name: includeSuggestions
+          schema:
             type: boolean
             default: false
-            description: Whether to include initial match suggestions
+          description: Whether to include initial match suggestions
       security:
         - bearerAuth: []
       responses:
