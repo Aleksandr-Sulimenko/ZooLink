@@ -73,7 +73,7 @@ The following items have been marked as completed in the source checklists and a
         - URI versioning (`/api/v1/`) vs header vs query parameter  
         - Deprecation policy  
         - Backward compatibility guarantees  
-    - **Localization/Internationalization (i18n) approach**  
+    - [x] **Localization/Internationalization (i18n) approach**  
         - Strategy for UI/UX localization (libraries like react-i18next, format.js)  
         - Database design for multilingual content (separate translation tables, JSONB fields with language keys, or localized columns)  
         - API localization considerations (Accept-Language headers, localized error messages, localized enum values)  

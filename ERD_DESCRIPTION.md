@@ -54,8 +54,6 @@ The database consists of 15 core tables organized into functional domains:
 #### organizations
 - **Primary Key**: `id` (UUID)
 - **Attributes**:
-  - `name_ru` VARCHAR(200) NOT NULL
-  - `name_en` VARCHAR(200) NOT NULL
   - `inn` VARCHAR(20) (Tax ID)
   - `kpp` VARCHAR(20) (Tax registration reason code)
   - `address` TEXT
@@ -69,6 +67,8 @@ The database consists of 15 core tables organized into functional domains:
   - References by `branches.organization_id` (one-to-many)
   - References by `listings.organization_id` (one-to-many, optional)
   - References by `animals.organization_id` (one-to-many, optional)
+  - References by `organization_translations.organization_id` (one-to-many)
+  - References by `organization_translations.organization_id` (one-to-many)
 
 #### branches
 - **Primary Key**: `id` (UUID)
@@ -335,7 +335,9 @@ The schema includes initial data for:
 
 6. **Roles**: Simple role-based access control with USER, MODERATOR, ADMIN roles.
 
-7. **MVP Constraints**: Comments indicate application-level validations needed for:
+7. **Internationalization**: The schema uses separate translation tables (`organization_translations`, `branch_translations`, `listing_translations`) for storing multilingual content. This approach supports efficient indexing, avoids JSONB limitations, and scales well for multiple languages. Each translation table links to its parent entity via foreign key and includes language_code, name, and description fields with a unique constraint on (parent_id, language_code).
+
+8. **MVP Constraints**: Comments indicate application-level validations needed for:
    - Breed validation: if breed_id IS NULL THEN breed_text IS NOT NULL
    - Immutable fields: species_id, breed_id (if from directory), sex, date_of_birth cannot be changed after creation
    - Ownership changes blocked during MVP phase
