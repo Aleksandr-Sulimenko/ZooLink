@@ -1,7 +1,7 @@
 # Project Structure Map (SDD)
 
-ё**Последнее обновление:** 2026-05-31 17:10
-**Версия документа:** 1.0
+**Последнее обновление:** 2026-06-06
+**Версия документа:** 1.1
 **Статус:** Living Document
 
 ## 1. Общая архитектура проекта
@@ -12,11 +12,17 @@ ZooLink — это платформа для связи зоопарков, пр
 
 ```bash
 /home/asulimenko/Project/ZooLink
+├── .github/
+│   └── workflows/
+│       └── performance-tests.yml
 ├── 03-architecture/
 │   └── api-contracts/
+│       ├── admin-api.yaml
 │       ├── animals-api.yaml
+│       ├── auth-api.yaml
 │       ├── branch-api.yaml
 │       ├── listings-api.yaml
+│       ├── matching-api.yaml
 │       └── organization-api.yaml
 ├── ANALYSIS_PROFESSIONAL_USERS.md
 ├── ANALYSIS_PROFESSIONAL_USERS_RU.md
@@ -67,11 +73,11 @@ ZooLink — это платформа для связи зоопарков, пр
 │       ├── 08-frontend-architecture.md
 │       ├── 09-testing-strategy.md
 │       ├── 10-implementation-roadmap.md
-        ├── glossary.md
-        ├── README.md
-        ├── traceability Matrix.md
-        └── security/
-│           └── threat-model.md
+│       ├── glossary.md
+│       ├── README.md
+│       ├── security/
+│       │   └── threat-model.md
+│       └── traceability Matrix.md
 ├── docsRU/
 │   ├── 00-project-brief.md
 │   ├── 01-discovery/
@@ -110,14 +116,12 @@ ZooLink — это платформа для связи зоопарков, пр
 │       ├── 07-geo-search-service.md
 │       ├── 08-frontend-architecture.md
 │       ├── 09-testing-strategy.md
-        ├── glossary.md
-        ├── README.md
-        ├── traceability Matrix.md
-        └── security/
-            └── threat-model.md
-├── documentation/
-│   └── checklists/
-│       # (папка перемещена в корневой checklists, оставлена пустой или удалена)
+│       ├── 10-implementation-roadmap.md
+│       ├── glossary.md
+│       ├── README.md
+│       ├── security/
+│       │   └── threat-model.md
+│       └── traceability Matrix.md
 ├── ERD_DESCRIPTION.md
 ├── .idea/
 │   ├── .gitignore
@@ -125,6 +129,9 @@ ZooLink — это платформа для связи зоопарков, пр
 │   ├── vcs.xml
 │   ├── workspace.xml
 │   └── ZooLink.iml
+├── tests/
+│   └── performance/
+│       # ( директория для скриптов нагрузочного тестирования; в зависимости от потребностей можно добавить файлы )
 ├── top28.md
 ├── top_part.md
 └── ZooLink_ERD.mmd
@@ -191,6 +198,18 @@ ZooLink — это платформа для связи зоопарков, пр
 | 2026-05-30 | Обновлен `database_schema.sql` (добавлены комментарии и ограничения) | Улучшение документирования схемы БД |
 | 2026-05-30 | Создан/обновлен `ZooLink_ERD.mmd` и `ERD_DESCRIPTION.md` | Визуализация и описание структуры базы данных |
 | 2026-05-29 | Добавлена документация по доменам в `docs/specs/` и `docs/02-requirements/` | Уточнение требований и спецификаций по доменам |
-| 2026-05-28 |_INITIAL commit с базовой структурой и папкой `03-architecture/` для API-контрактов | Инициализация репозитория проекта |
+| 2026-05-28 | INITIAL commit с базовой структурой и папкой `03-architecture/` для API-контрактов | Инициализация репозитория проекта |
+| 2026-06-06 | Обновлено дерево структуры проекта, добавлены новые файлы и каталоги (.github/workflows/performance-tests.yml, tests/performance/, обновлённые yaml‑контракты и glossary) | Соответствие актуальному состоянию репозитория после выполнения рекомендаций senior‑business‑analyst |
 
 > `project-structure-map.md` обновлён.
+
+## 8. Как поддерживать карту структуры в актуальном состоянии
+Чтобы гарантировать, что данная карта всегда отражает текущее состояние репозитория, предлагается следовать одному из следующих лёгких подходов:
+
+1. **Префукс коммита**: перед созданием нового файла или каталога, добавить в коммит сообщение `[STRUCTURE_UPDATE]` и после коммита запустить скрипт, который автоматически генерирует дерево и заменяет блок с \`\`\`bash ... \`\`\` в этом файле.
+2. **Пре-коммит хук**: установить простой pre‑commit hook (например, через `pre-commit` фреймворк), который при каждом коммите проверяет, изменились ли какие‑либо файлы в репозитории (исключая docs/ и временные файлы) и, если изменения обнаружены, обновляет проект‑структуру в `docs/project-structure-map.md`.
+3. **Напоминание в чек‑листе Definition of Done**: добавить пункт в `Definition of Done` (см. `docs/specs/10-implementation-roadmap.md`): «Обновить `docs/project-structure-map.md`, если были добавлены, удалены или переименованы файлы/каталоги, влияющие на структуру проекта».
+
+Выбранный механизм можно оформить как отдельный скрипт `scripts/update-structure-map.sh`, который использует команду `find . -type f -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./.*" | sort` и формирует вывод в стиле дерева, заменяя соответствующий раздел в файле.
+
+Эти шаги помогут поддерживать живую документацию в синхроне с кодовой базой без значительных нагрузок на разработчиков.
