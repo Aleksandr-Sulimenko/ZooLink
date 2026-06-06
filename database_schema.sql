@@ -190,7 +190,7 @@ CREATE TABLE listings (
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL, -- nullable for personal listings
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL, -- nullable for personal listings or when branch not specified
     metadata JSONB DEFAULT '{}'::jsonb, -- For experimental attributes (social media links, video URL placeholder, etc.)
-    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption')),
+    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
     title VARCHAR(255) NOT NULL,
     description TEXT,
     price_cents INTEGER, -- nullable for non-price listings (e.g., breeding)
@@ -207,6 +207,7 @@ CREATE TABLE listings (
     CONSTRAINT chk_listing_ownership CHECK (
         (organization_id IS NULL AND branch_id IS NULL) OR  -- Personal listing
         (organization_id IS NOT NULL)  -- Organizational listing (branch_id optional)
+        -- Additionally: branch_id IS NOT NULL => organization_id IS NOT NULL
     )
 );
 

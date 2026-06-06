@@ -272,6 +272,76 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
+  /animals/{id}/deactivate:
+    patch:
+      summary: Deactivate an animal (soft delete)
+      operationId: deactivateAnimal
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        '200':
+          description: Animal deactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+        '404':
+          description: Animal not found
+  /animals/{id}/reactivate:
+    patch:
+      summary: Reactivate an animal
+      operationId: reactivateAnimal
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        '200':
+          description: Animal reactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Animal'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+        '404':
+          description: Animal not found
 components:
   securitySchemes:
     bearerAuth:
