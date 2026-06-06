@@ -1,0 +1,111 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main, performance ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  performance-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zoolink_perf_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Setup Prisma
+      run: npx prisma generate
+
+    - name: Run database migrations
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/zoolink_perf_test?schema=public
+      run: npx prisma migrate deploy
+
+    - name: Run performance tests
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/zoolink_perf_test?schema=public
+        REDIS_URL: redis://localhost:6379
+      run: |
+        mkdir -p test-results
+        # Run LTE (Lightweight Test Environment) for key endpoints
+        echo "Running animal lookup performance test..."
+        node tests/performance/animal-lookup-test.js --output test-results/animal-lookup.xml --junit
+
+        echo "Running organization search performance test..."
+        node tests/performance/organization-search-test.js --output test-results/org-search.xml --junit
+
+        echo "Running listing creation performance test..."
+        node tests/performance/listing-create-test.js --output test-results/listing-create.xml --junit
+
+    - name: Publish JUnit test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-test-results
+        path: test-results/*.xml
+
+    - name: Check performance thresholds
+      run: |
+        # Define performance thresholds (in milliseconds)
+        ANIMAL_LOOKUP_THRESHOLD=100
+        ORG_SEARCH_THRESHOLD=300
+        LISTING_CREATE_THRESHOLD=500
+
+        # Extract average response times from JUnit XML files
+        ANIMAL_LOOKUP_AVG=$(grep -oP '(?<=time=")[0-9.]+(?=")' test-results/animal-lookup.xml | awk '{sum+=$1} END {if (NR>0) print sum/NR; else print 0}')
+        ORG_SEARCH_AVG=$(grep -oP '(?<=time=")[0-9.]+(?=")' test-results/org-search.xml | awk '{sum+=$1} END {if (NR>0) print sum/NR; else print 0}')
+        LISTING_CREATE_AVG=$(grep -oP '(?<=time=")[0-9.]+(?=")' test-results/listing-create.xml | awk '{sum+=$1} END {if (NR>0) print sum/NR; else print 0}')
+
+        echo "Animal lookup avg: ${ANIMAL_LOOKUP_AVG}ms (threshold: ${ANIMAL_LOOKUP_THRESHOLD}ms)"
+        echo "Organization search avg: ${ORG_SEARCH_AVG}ms (threshold: ${ORG_SEARCH_THRESHOLD}ms)"
+        echo "Listing creation avg: ${LISTING_CREATE_AVG}ms (threshold: ${LISTING_CREATE_THRESHOLD}ms)"
+
+        # Check if any test exceeds threshold
+        if (( $(echo "$ANIMAL_LOOKUP_AVG > $ANIMAL_LOOKUP_THRESHOLD" | bc -l) )); then
+          echo "❌ Animal lookup performance test FAILED: ${ANIMAL_LOOKUP_AVG}ms > ${ANIMAL_LOOKUP_THRESHOLD}ms"
+          exit 1
+        fi
+
+        if (( $(echo "$ORG_SEARCH_AVG > $ORG_SEARCH_THRESHOLD" | bc -l) )); then
+          echo "❌ Organization search performance test FAILED: ${ORG_SEARCH_AVG}ms > ${ORG_SEARCH_THRESHOLD}ms"
+          exit 1
+        fi
+
+        if (( $(echo "$LISTING_CREATE_AVG > $LISTING_CREATE_THRESHOLD" | bc -l) )); then
+          echo "❌ Listing creation performance test FAILED: ${LISTING_CREATE_AVG}ms > ${LISTING_CREATE_THRESHOLD}ms"
+          exit 1
+        fi
+
+        echo "✅ All performance tests passed within thresholds"
