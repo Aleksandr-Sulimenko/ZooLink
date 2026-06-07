@@ -450,7 +450,6 @@ components:
       type: object
       required:
         - id
-        - name_ru
         - address
         - is_active
         - created_at
@@ -460,14 +459,17 @@ components:
           type: string
           format: uuid
           description: Unique identifier
-        name_ru:
-          type: string
-          maxLength: 200
-          description: Russian name of the organization
-        name_en:
-          type: string
-          maxLength: 200
-          description: English name of the organization (optional)
+        name_localized:
+          type: object
+          description: Localized names (e.g., {"en": "Name", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 200
+        description_localized:
+          type: object
+          description: Localized description (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
         inn:
           type: string
           maxLength: 20
@@ -510,17 +512,19 @@ components:
     OrganizationCreate:
       type: object
       required:
-        - name_ru
         - address
       properties:
-        name_ru:
-          type: string
-          maxLength: 200
-          description: Russian name of the organization
-        name_en:
-          type: string
-          maxLength: 200
-          description: English name of the organization (optional)
+        name_localized:
+          type: object
+          description: Localized names (e.g., {"en": "Name", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 200
+        description_localized:
+          type: object
+          description: Localized description (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
         inn:
           type: string
           maxLength: 20
@@ -600,7 +604,6 @@ components:
         - id
         - organization_id
         - city_id
-        - address
         - is_active
         - created_at
         - updated_at
@@ -617,9 +620,11 @@ components:
           type: string
           format: uuid
           description: Foreign key to city for geo-search
-        address:
-          type: string
-          description: Detailed branch address
+        address_localized:
+          type: object
+          description: Localized address (e.g., {"en": "Address", "ru": "Адрес"})
+          additionalProperties:
+            type: string
         phone:
           type: string
           maxLength: 30
@@ -654,7 +659,6 @@ components:
       required:
         - organization_id
         - city_id
-        - address
       properties:
         organization_id:
           type: string
@@ -664,9 +668,11 @@ components:
           type: string
           format: uuid
           description: Foreign key to city for geo-search
-        address:
-          type: string
-          description: Detailed branch address
+        address_localized:
+          type: object
+          description: Localized address (e.g., {"en": "Address", "ru": "Адрес"})
+          additionalProperties:
+            type: string
         phone:
           type: string
           maxLength: 30

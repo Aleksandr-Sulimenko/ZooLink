@@ -60,6 +60,8 @@ The database consists of 15 core tables organized into functional domains:
   - `phone` VARCHAR(30)
   - `email` VARCHAR(255)
   - `logo_url` TEXT
+  - `name_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
   - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 - **Relationships**:
@@ -67,15 +69,13 @@ The database consists of 15 core tables organized into functional domains:
   - References by `branches.organization_id` (one-to-many)
   - References by `listings.organization_id` (one-to-many, optional)
   - References by `animals.organization_id` (one-to-many, optional)
-  - References by `organization_translations.organization_id` (one-to-many)
-  - References by `organization_translations.organization_id` (one-to-many)
 
 #### branches
 - **Primary Key**: `id` (UUID)
 - **Attributes**:
   - `organization_id` UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT
   - `city_id` UUID NOT NULL REFERENCES cities(id) ON DELETE RESTRICT
-  - `address` TEXT
+  - `address_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
   - `phone` VARCHAR(30)
   - `email` VARCHAR(255)
   - `is_headquarters` BOOLEAN NOT NULL DEFAULT FALSE
@@ -147,8 +147,9 @@ The database consists of 15 core tables organized into functional domains:
   - `owner_id` UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
   - `species_id` UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT
   - `breed_id` UUID REFERENCES breeds(id) ON DELETE SET NULL (nullable if custom/other)
-  - `breed_text` VARCHAR(100) (custom breed text if breed_id is null)
-  - `nickname` VARCHAR(50) (display name)
+  - `breed_text_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (custom breed text if breed_id is null)
+  - `nickname_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (display name)
+  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (free text description)
   - `sex` VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female'))
   - `date_of_birth` DATE NOT NULL
   - `color_coat` VARCHAR(100)
@@ -169,7 +170,6 @@ The database consists of 15 core tables organized into functional domains:
   - `idx_animals_tattoo` (partial: WHERE tattoo_brand_id IS NOT NULL)
   - `idx_animals_health_records` (GIN)
   - `idx_animals_reproductive_data` (GIN)
-  - `idx_animals_breed_text`
   - `idx_animals_active` (partial: WHERE is_active = true)
   - `idx_animals_owned_since`
 - **Relationships**:
@@ -335,7 +335,7 @@ The schema includes initial data for:
 
 6. **Roles**: Simple role-based access control with USER, MODERATOR, ADMIN roles.
 
-7. **Internationalization**: The schema uses separate translation tables (`organization_translations`, `branch_translations`, `listing_translations`) for storing multilingual content. This approach supports efficient indexing, avoids JSONB limitations, and scales well for multiple languages. Each translation table links to its parent entity via foreign key and includes language_code, name, and description fields with a unique constraint on (parent_id, language_code).
+7. **Internationalization**: The schema uses JSONB fields for storing multilingual content. This approach provides flexibility for adding new languages without schema changes and aligns with the API contract. Fields like `name_localized`, `description_localized`, `title_localized`, etc. store language key-value pairs (e.g., {"en": "English", "ru": "Русский"}).
 
 8. **MVP Constraints**: Comments indicate application-level validations needed for:
    - Breed validation: if breed_id IS NULL THEN breed_text IS NOT NULL

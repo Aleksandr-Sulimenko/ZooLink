@@ -385,16 +385,18 @@ components:
           format: uuid
           nullable: true
           description: Foreign key to breed (nullable if custom/other)
-        breed_text:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Custom breed text if breed_id is null (for moderator review)
-        nickname:
-          type: string
-          maxLength: 50
-          nullable: true
-          description: Display name
+        breed_text_localized:
+          type: object
+          description: Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})
+          additionalProperties:
+            type: string
+            maxLength: 100
+        nickname_localized:
+          type: object
+          description: Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})
+          additionalProperties:
+            type: string
+            maxLength: 50
         sex:
           type: string
           enum: [Male, Female]
@@ -403,11 +405,12 @@ components:
           type: string
           format: date
           description: Date of birth
-        color_coat:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Color/coat pattern
+        description_localized:
+          type: object
+          description: Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})
+          additionalProperties:
+            type: string
+            maxLength: 100
         microchip_id:
           type: string
           maxLength: 50
@@ -514,16 +517,18 @@ components:
           format: uuid
           nullable: true
           description: Foreign key to breed (nullable if custom/other)
-        breed_text:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Custom breed text if breed_id is null (for moderator review)
-        nickname:
-          type: string
-          maxLength: 50
-          nullable: true
-          description: Display name
+        breed_text_localized:
+          type: object
+          description: Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})
+          additionalProperties:
+            type: string
+            maxLength: 100
+        nickname_localized:
+          type: object
+          description: Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})
+          additionalProperties:
+            type: string
+            maxLength: 50
         sex:
           type: string
           enum: [Male, Female]
@@ -532,11 +537,12 @@ components:
           type: string
           format: date
           description: Date of birth
-        color_coat:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Color/coat pattern
+        description_localized:
+          type: object
+          description: Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})
+          additionalProperties:
+            type: string
+            maxLength: 100
         microchip_id:
           type: string
           maxLength: 50

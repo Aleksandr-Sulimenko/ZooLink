@@ -54,8 +54,8 @@ erDiagram
         UUID owner_id FK
         UUID species_id FK
         UUID breed_id FK
-        VARCHAR_100 breed_text
-        VARCHAR_50 nickname
+        JSONB breed_text_localized
+        JSONB nickname_localized
         VARCHAR_10 sex
         DATE date_of_birth
         VARCHAR_100 color_coat
@@ -67,6 +67,7 @@ erDiagram
         DATE owned_since
         UUID mother_id FK
         UUID father_id FK
+        JSONB description_localized
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
         TIMESTAMPTZ deactivated_at
@@ -90,17 +91,10 @@ erDiagram
         VARCHAR_30 phone
         VARCHAR_255 email
         TEXT logo_url
+        JSONB name_localized
+        JSONB description_localized
+        JSONB metadata
         BOOLEAN is_active
-        TIMESTAMPTZ created_at
-        TIMESTAMPTZ updated_at
-    }
-
-    organization_translations {
-        UUID id PK
-        UUID organization_id FK
-        VARCHAR_10 language_code
-        VARCHAR_200 name
-        TEXT description
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -111,18 +105,10 @@ erDiagram
         TEXT address
         VARCHAR_30 phone
         VARCHAR_255 email
+        JSONB name_localized
+        JSONB description_localized
         BOOLEAN is_headquarters
         BOOLEAN is_active
-        TIMESTAMPTZ created_at
-        TIMESTAMPTZ updated_at
-    }
-
-    branch_translations {
-        UUID id PK
-        UUID branch_id FK
-        VARCHAR_10 language_code
-        VARCHAR_200 name
-        TEXT description
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -145,6 +131,8 @@ erDiagram
         UUID organization_id FK
         UUID branch_id FK
         VARCHAR_20 listing_type
+        JSONB title_localized
+        JSONB description_localized
         INTEGER price_cents
         CHAR_3 currency
         INTEGER quantity
@@ -152,16 +140,6 @@ erDiagram
         INTEGER search_radius_m
         BOOLEAN is_active
         TIMESTAMPTZ expires_at
-        TIMESTAMPTZ created_at
-        TIMESTAMPTZ updated_at
-    }
-
-    listing_translations {
-        UUID id PK
-        UUID listing_id FK
-        VARCHAR_10 language_code
-        VARCHAR_255 title
-        TEXT description
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -237,4 +215,4 @@ erDiagram
     branches }o..|| cities : "located in"
     listings }o..|| organizations : "linked to (optional)"
     listings }o..|| branches : "linked to (optional)"
-    animals }o..|| organizations : "owned by (optional)"
+    animals }o..|| organizations : "owned by (optional)

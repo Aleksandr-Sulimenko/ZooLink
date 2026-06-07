@@ -370,13 +370,17 @@ components:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+        title_localized:
+          type: object
+          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 255
+        description_localized:
+          type: object
+          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
         price_cents:
           type: integer
           nullable: true
@@ -448,13 +452,17 @@ components:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+        title_localized:
+          type: object
+          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 255
+        description_localized:
+          type: object
+          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
         price_cents:
           type: integer
           nullable: true

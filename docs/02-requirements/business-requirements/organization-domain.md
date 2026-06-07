@@ -13,15 +13,16 @@ Handles the modeling of legal entities (organizations) and their physical locati
 ### 1. Organization Creation
 - Only authenticated users can create an organization (the creator becomes the initial OWNER).
 - Required fields at creation:
-  - `name_ru` (Russian name)
-  - `name_en` (English name, optional)
+  - `address` (headquarters address)
+- Optional fields:
+  - `name_localized` (localized names, e.g., {"en": "Name", "ru": "Название"})
+  - `description_localized` (localized description, e.g., {"en": "Description", "ru": "Описание"})
   - `inn` (Taxpayer Identification Number, optional but recommended for legal entities)
   - `kpp` (Tax Registration Reason Code, optional)
-  - `address` (headquarters address)
   - `phone` (contact phone)
   - `email` (contact email)
-- Optional fields:
   - `logo_url` (URL to organization logo)
+  - `metadata` (JSONB field for extensibility)
   - `is_active` (default true)
 
 ### 2. Branch Creation
@@ -92,14 +93,15 @@ Handles the modeling of legal entities (organizations) and their physical locati
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
-| `name_ru` | VARCHAR(200) | Yes | Russian name |
-| `name_en` | VARCHAR(200) | No | English name |
+| `name_localized` | JSONB | Yes | Localized names (e.g., {"en": "Name", "ru": "Название"}) |
+| `description_localized` | JSONB | No | Localized description (e.g., {"en": "Description", "ru": "Описание"}) |
 | `inn` | VARCHAR(20) | No | Taxpayer ID |
 | `kpp` | VARCHAR(20) | No | Tax registration reason |
 | `address` | TEXT | Yes | Headquarters address |
 | `phone` | VARCHAR(30) | No | Contact phone |
 | `email` | VARCHAR(255) | No | Contact email |
 | `logo_url` | TEXT | No | Logo image URL |
+| `metadata` | JSONB | No | JSONB field for extensibility (subscription tier, branding preferences, etc.) |
 | `is_active` | BOOLEAN | Yes | Active status |
 | `created_at` | TIMESTAMP | Yes | Record creation time |
 | `updated_at` | TIMESTAMP | Yes | Last update time |
@@ -159,8 +161,8 @@ sequenceDiagram
     Founder->>Frontend: Navigates to "Organizations" -> "Create Organization"
     Frontend->>Backend: GET /organizations/new (returns empty form)
     Backend->>Frontend: Returns form fields
-    Founder->>Frontend: Fills org name, INN, address, etc.
-    Frontend->>Backend: POST /organizations {name_ru, name_en, inn, address, phone, email}
+    Founder->>Frontend: Fills address, optional localized names, INN, etc.
+    Frontend->>Backend: POST /organizations {address, name_localized, description_localized, inn, kpp, phone, email, logo_url, metadata, is_active}
     Backend->>Database: Validates, inserts organization record
     Backend->>Frontend: Returns organization ID + confirmation
 

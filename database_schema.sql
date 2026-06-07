@@ -45,23 +45,14 @@ CREATE TABLE organizations (
     phone VARCHAR(30),
     email VARCHAR(255),
     logo_url TEXT,
+    name_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
+    description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     metadata JSONB DEFAULT '{}'::jsonb, -- For extensibility (subscription tier, branding preferences, etc.)
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
--- Translation tables for multilingual content
-CREATE TABLE organization_translations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    language_code VARCHAR(10) NOT NULL, -- e.g., 'en', 'ru', 'es'
-    name VARCHAR(200) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(organization_id, language_code)
-);
 
 CREATE TABLE branches (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -70,6 +61,8 @@ CREATE TABLE branches (
     address TEXT,
     phone VARCHAR(30),
     email VARCHAR(255),
+    name_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
+    description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     is_headquarters BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -134,13 +127,14 @@ CREATE TABLE animals (
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT, -- nullable if owner_id set
     species_id UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
     breed_id UUID REFERENCES breeds(id) ON DELETE SET NULL, -- nullable if custom/other
-    breed_text VARCHAR(100), -- custom breed text if breed_id is null (for moderator review)
-    nickname VARCHAR(50), -- display name (per animal-domain.md)
+    breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb, -- custom breed text if breed_id is null (for moderator review)
+    nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb, -- display name (per animal-domain.md)
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')), -- updated to match doc casing
     date_of_birth DATE NOT NULL,
     color_coat VARCHAR(100),
     microchip_id VARCHAR(50),
     tattoo_brand_id VARCHAR(50), -- for livestock
+    description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb, -- free text description
     is_active BOOLEAN NOT NULL DEFAULT TRUE, -- visible for new listings when true
     health_records JSONB NOT NULL DEFAULT '[]'::jsonb, -- array of {type, detail, date, provider}
     reproductive_data JSONB NOT NULL DEFAULT '[]'::jsonb, -- for females: heat, mating, etc.
@@ -200,8 +194,8 @@ CREATE TABLE listings (
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL, -- nullable for personal listings or when branch not specified
     metadata JSONB DEFAULT '{}'::jsonb, -- For experimental attributes (social media links, video URL placeholder, etc.)
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
-    title VARCHAR(255) NOT NULL,
-    description TEXT,
+    title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
+    description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     price_cents INTEGER, -- nullable for non-price listings (e.g., breeding)
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
@@ -220,44 +214,6 @@ CREATE TABLE listings (
     )
 );
 
--- Translation tables for multilingual content
-CREATE TABLE organization_translations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    language_code VARCHAR(10) NOT NULL, -- e.g., 'en', 'ru', 'es'
-    name VARCHAR(200) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(organization_id, language_code)
-);
-
-CREATE TABLE branch_translations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    branch_id UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
-    language_code VARCHAR(10) NOT NULL, -- e.g., 'en', 'ru', 'es'
-    name VARCHAR(200) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(branch_id, language_code)
-);
-
-CREATE TABLE listing_translations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
-    language_code VARCHAR(10) NOT NULL, -- e.g., 'en', 'ru', 'es'
-    title VARCHAR(255) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(listing_id, language_code)
-);
-
--- Indexes for translation tables
-CREATE INDEX idx_organization_translations_lang ON organization_translations(language_code);
-CREATE INDEX idx_branch_translations_lang ON branch_translations(language_code);
-CREATE INDEX idx_listing_translations_lang ON listing_translations(language_code);
 
 CREATE TABLE listing_photos (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
