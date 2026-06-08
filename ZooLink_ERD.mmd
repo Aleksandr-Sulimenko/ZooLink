@@ -25,6 +25,13 @@ erDiagram
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
+    supported_languages {
+        CHAR_2 code PK
+        JSONB name_localized
+        BOOLEAN is_active
+        INTEGER display_order
+        TIMESTAMPTZ created_at
+    }
 
     %% Identity Domain
     users {
@@ -52,6 +59,7 @@ erDiagram
     animals {
         UUID id PK
         UUID owner_id FK
+        UUID organization_id FK
         UUID species_id FK
         UUID breed_id FK
         JSONB breed_text_localized
@@ -215,4 +223,5 @@ erDiagram
     branches }o..|| cities : "located in"
     listings }o..|| organizations : "linked to (optional)"
     listings }o..|| branches : "linked to (optional)"
-    animals }o..|| organizations : "owned by (optional)
+    animals }o..|| organizations : "owned by (optional)"
+    animals }o..|| branches : "kept at (optional)"

@@ -4,8 +4,8 @@ This document describes the Entity-Relationship Diagram for the ZooLink database
 
 ## Overview
 
-The database consists of 15 core tables organized into functional domains:
-- **Reference Data**: species, breeds, cities
+The database consists of 16 core tables organized into functional domains:
+- **Reference Data**: species, breeds, cities, supported_languages
 - **Identity Domain**: users
 - **Animal Domain**: animals, animal_ownership_history
 - **Organization Domain**: organizations, branches, organization_users
@@ -48,6 +48,17 @@ The database consists of 15 core tables organized into functional domains:
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE
 - **Relationships**:
   - Referenced by `users.city_id` (one-to-many, optional)
+  - Referenced by `branches.city_id` (one-to-many)
+
+#### supported_languages
+- **Primary Key**: `code` CHAR(2) PRIMARY KEY (ISO 639-1 language code)
+- **Attributes**:
+  - `name_localized` JSONB NOT NULL (localized language name)
+  - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
+  - `display_order` INTEGER NOT NULL DEFAULT 0
+  - `created_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+- **Relationships**:
+  - Not directly referenced by other tables; used application-wide for localization
 
 ### 2. Organization Domain
 
@@ -62,6 +73,7 @@ The database consists of 15 core tables organized into functional domains:
   - `logo_url` TEXT
   - `name_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
   - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `metadata` JSONB DEFAULT '{}'::jsonb (For extensibility)
   - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 - **Relationships**:
@@ -75,9 +87,11 @@ The database consists of 15 core tables organized into functional domains:
 - **Attributes**:
   - `organization_id` UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT
   - `city_id` UUID NOT NULL REFERENCES cities(id) ON DELETE RESTRICT
-  - `address_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `address` TEXT
   - `phone` VARCHAR(30)
   - `email` VARCHAR(255)
+  - `name_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
   - `is_headquarters` BOOLEAN NOT NULL DEFAULT FALSE
   - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -115,7 +129,7 @@ The database consists of 15 core tables organized into functional domains:
   - `email` VARCHAR(255)
   - `email_verified` BOOLEAN DEFAULT FALSE
   - `password_hash` VARCHAR(60) (bcrypt hash if using phone auth)
-  - `role` VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER'
+  - `role` VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER'
   - `is_active` BOOLEAN NOT NULL DEFAULT TRUE
   - `last_login_at` TIMESTAMP WITH TIME ZONE
   - `deactivated_at` TIMESTAMP WITH TIME ZONE
@@ -144,17 +158,18 @@ The database consists of 15 core tables organized into functional domains:
 #### animals
 - **Primary Key**: `id` (UUID)
 - **Attributes**:
-  - `owner_id` UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+  - `owner_id` UUID REFERENCES users(id) ON DELETE RESTRICT (nullable if organization_id set)
+  - `organization_id` UUID REFERENCES organizations(id) ON DELETE RESTRICT (nullable if owner_id set)
   - `species_id` UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT
   - `breed_id` UUID REFERENCES breeds(id) ON DELETE SET NULL (nullable if custom/other)
   - `breed_text_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (custom breed text if breed_id is null)
   - `nickname_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (display name)
-  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (free text description)
   - `sex` VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female'))
   - `date_of_birth` DATE NOT NULL
   - `color_coat` VARCHAR(100)
   - `microchip_id` VARCHAR(50)
   - `tattoo_brand_id` VARCHAR(50) (for livestock)
+  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb (free text description)
   - `is_active` BOOLEAN NOT NULL DEFAULT TRUE (visible for new listings when true)
   - `health_records` JSONB NOT NULL DEFAULT '[]'::jsonb (array of {type, detail, date, provider})
   - `reproductive_data` JSONB NOT NULL DEFAULT '[]'::jsonb (for females: heat, mating, etc.)
@@ -163,6 +178,7 @@ The database consists of 15 core tables organized into functional domains:
   - `father_id` UUID REFERENCES animals(id) ON DELETE SET NULL
   - `created_at`, `updated_at` TIMESTAMP WITH TIME ZONE
   - `deactivated_at` TIMESTAMP WITH TIME ZONE (when deactivated - soft delete)
+  - **Constraint**: Exactly one of owner_id or organization_id must be set
 - **Indexes**:
   - `idx_animals_owner`
   - `idx_animals_species_breed`
@@ -170,10 +186,12 @@ The database consists of 15 core tables organized into functional domains:
   - `idx_animals_tattoo` (partial: WHERE tattoo_brand_id IS NOT NULL)
   - `idx_animals_health_records` (GIN)
   - `idx_animals_reproductive_data` (GIN)
+  - `idx_animals_breed_text` (for custom breed text search)
   - `idx_animals_active` (partial: WHERE is_active = true)
   - `idx_animals_owned_since`
 - **Relationships**:
   - References `users` (many-to-one, via owner_id)
+  - References `organizations` (many-to-one, via organization_id)
   - References `species` (many-to-one)
   - References `breeds` (optional, many-to-one)
   - Self-referential: `mother_id` (many-to-one, optional)
@@ -205,9 +223,12 @@ The database consists of 15 core tables organized into functional domains:
 - **Attributes**:
   - `animal_id` UUID NOT NULL REFERENCES animals(id) ON DELETE CASCADE
   - `seller_id` UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+  - `organization_id` UUID REFERENCES organizations(id) ON DELETE SET NULL (nullable for personal listings)
+  - `branch_id` UUID REFERENCES branches(id) ON DELETE SET NULL (nullable for personal listings or when branch not specified)
   - `listing_type` VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service'))
-  - `title` VARCHAR(255) NOT NULL
-  - `description` TEXT
+  - `title_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `description_localized` JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb
+  - `metadata` JSONB DEFAULT '{}'::jsonb (For experimental attributes)
   - `price_cents` INTEGER (nullable for non-price listings)
   - `currency` CHAR(3) DEFAULT 'RUB'
   - `quantity` INTEGER DEFAULT 1
@@ -223,9 +244,15 @@ The database consists of 15 core tables organized into functional domains:
   - `idx_listings_price` (partial: WHERE price_cents IS NOT NULL)
   - `idx_listings_location` (GIST, conditional on PostGIS availability)
   - `idx_listings_expires` (partial: WHERE expires_at > NOW())
+  - `idx_listings_title_localized_en` (GIN for English title search)
+  - `idx_listings_title_localized_ru` (GIN for Russian title search)
+  - `idx_listings_description_localized_en` (GIN for English description search)
+  - `idx_listings_description_localized_ru` (GIN for Russian description search)
 - **Relationships**:
   - References `animals` (many-to-one)
   - References `users` (many-to-one, via seller_id)
+  - References `organizations` (many-to-one, optional)
+  - References `branches` (many-to-one, optional)
   - References by `listing_photos.listing_id` (one-to-many)
   - References by `conversations.listing_id` (one-to-many)
 
@@ -305,6 +332,9 @@ Automatic `updated_at` maintenance via trigger function `update_updated_at_colum
 - species
 - breeds
 - cities
+- organizations
+- branches
+- organization_users
 - animals
 - animal_ownership_history
 - listings
@@ -312,6 +342,7 @@ Automatic `updated_at` maintenance via trigger function `update_updated_at_colum
 - messages
 - feature_toggles
 - outbox_events
+- supported_languages
 
 ## Initial Data
 
@@ -319,11 +350,12 @@ The schema includes initial data for:
 - Core species: dog, cat, cattle, sheep, horse
 - Sample breeds: Akita, German Shepherd, Persian, Holstein
 - Initial cities: Moscow, Saint Petersburg
+- Supported languages: Russian (ru), English (en), French (fr), Spanish (es), Chinese (zh)
 - Feature toggles (all disabled for MVP): premium_profiles, boosted_listings, vet_leadgen, service_marketplace, health_passport_api, genetics_portal, regulatory_integration
 
 ## Key Design Notes
 
-1. **Extensibility**: JSONB columns (`health_records`, `reproductive_data`, `payload`) allow flexible attribute storage without schema changes.
+1. **Extensibility**: JSONB columns (`health_records`, `reproductive_data`, `payload`, `metadata`, `name_localized`, `description_localized`, `title_localized`, etc.) allow flexible attribute storage without schema changes.
 
 2. **Soft Deletes**: `deactivated_at` columns in users and animals tables support soft deletion patterns.
 
@@ -333,12 +365,16 @@ The schema includes initial data for:
 
 5. **Breed Handling**: Supports both directory breeds (`breed_id`) and custom text (`breed_text`) with application-level validation required.
 
-6. **Roles**: Simple role-based access control with USER, MODERATOR, ADMIN roles.
+6. **Roles**: Simple role-based access control with USER, BREEDER, FARMER, MODERATOR, ADMIN roles.
 
-7. **Internationalization**: The schema uses JSONB fields for storing multilingual content. This approach provides flexibility for adding new languages without schema changes and aligns with the API contract. Fields like `name_localized`, `description_localized`, `title_localized`, etc. store language key-value pairs (e.g., {"en": "English", "ru": "Русский"}).
+7. **Internationalization**: The schema uses JSONB fields for storing multilingual content. This approach provides flexibility for adding new languages without schema changes and aligns with the API contract. Fields like `name_localized`, `description_localized`, `title_localized`, etc. store language key-value pairs (e.g., {"en": "English", "ru": "Русский"}). Additional localization support includes:
+   - `supported_languages` table for centralized language management
+   - Database functions `get_localized()`, `has_translation()`, and `set_app_language()` for simplified localization handling
+   - GIN indexes on JSONB fields for efficient language-specific searches
 
 8. **MVP Constraints**: Comments indicate application-level validations needed for:
    - Breed validation: if breed_id IS NULL THEN breed_text IS NOT NULL
+   - Ownership: exactly one of owner_id or organization_id must be set
    - Immutable fields: species_id, breed_id (if from directory), sex, date_of_birth cannot be changed after creation
    - Ownership changes blocked during MVP phase
 
@@ -353,6 +389,12 @@ The schema includes initial data for:
 - users → listings (as seller)
 - users → conversations (as participant_a or participant_b)
 - users → messages (as sender or recipient)
+- organizations → branches
+- organizations → organization_users
+- organizations → listings (organizational listings)
+- organizations → animals (organizational animals)
+- cities → branches
+- cities → users (for geo-search optional)
 - animals → animal_ownership_history
 - animals → listings
 - listings → listing_photos
@@ -363,26 +405,34 @@ The schema includes initial data for:
 - animals → species
 - animals → breeds
 - animals → users (owner)
+- animals → organizations (organization-owned animals)
 - animal_ownership_history → animals
 - animal_ownership_history → users (owner)
 - listings → animals
 - listings → users (seller)
+- listings → organizations (organizational listings)
+- listings → branches (branch-specific listings)
 - conversations → listings
 - conversations → users (participant_a)
 - conversations → users (participant_b)
 - messages → conversations
 - messages → users (sender)
 - messages → users (recipient)
+- branches → organizations
+- organization_users → organizations
+- organization_users → users
 
 **Self-Referencing**:
 - animals → animals (mother_id)
 - animals → animals (father_id)
 
 **Optional Relationships**:
-- users → cities (for geo-search)
+- users → cities (for geo-search, optional)
 - animals → breeds (nullable for custom breeds)
 - animals → mother_id/father_id (pedigree, nullable)
-- listings → location_point (geo-search, nullable without PostGIS)
+- listings → organization_id (organizational listings, optional)
+- listings → branch_id (branch-specific listings, optional)
 - messages → conversation_id (nullable, set on delete)
+- listings → location_point (geo-search, nullable without PostGIS)
 
-This ERD provides a solid foundation for ZooLink's MVP with clear extensibility paths for future professional user features, monetization, and regulatory integration as outlined in the project documentation.
+This ERD provides a solid foundation for ZooLink's MVP with clear extensibility paths for future professional user features, monetization, and regulatory integration as outlined in the project documentation. The localization enhancements ensure the system can easily scale to support additional languages without schema modifications.
