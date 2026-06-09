@@ -4,11 +4,11 @@
 Manages the core entity "Animal" as an aggregate root. An animal can have multiple listings (for sale, mating, events) and is owned by either a user or an organization. This domain ensures data integrity for animal profiles, supports search by characteristics, and provides foundation for future features like pedigree, health records, and reproductive calendars.
 
 ## Core Concepts
-- **Animal**: A living being (pet or livestock) registered in the system. Has intrinsic attributes (species, breed, sex, age) and optional attributes (health tests, vaccinations, microchip).
+- **Animal**: A living being (pet or livestock) registered in the system. Has intrinsic attributes (species, breed, sex, age) and optional attributes (health tests, vaccinations, microchip). Additional attributes include ownership timestamp, parent references for pedigree tracking, and deactivation timestamp.
 - **Owner**: The user who registered the animal in the system (may differ from legal owner; system tracks custodianship for listing purposes). An animal may also be owned by an organization (see Organization Domain).
 - **Breed/Species Directory**: Reference data managed by Admin Domain (see admin-domain.md).
 - **Health Status**: Structured data about vaccinations, tests, treatments (extensible for future).
-- **Reproductive Data**: For mating-related use cases (heat cycles, last mating, due dates) – only relevant for certain species.
+- **Reproductive Data**: For mating-related use cases (heat cycles, last mating, due dates) – only relevant for certain species. Includes references to mother and father for pedigree tracking.
 
 ## Business Rules
 ### 1. Animal Creation
