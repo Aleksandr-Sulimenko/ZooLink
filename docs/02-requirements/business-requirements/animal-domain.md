@@ -140,6 +140,9 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 - Microchip ID, if provided, must be at least 8 characters.
 - Health records JSONB must conform to schema (validated at application level).
 - Exactly one of `owner_id` or `organization_id` must be NOT NULL (application-level validation).
+- `owned_since`, if provided, must be a date in the past and not after `date_of_birth` + current age (basic sanity check).
+- `mother_id` and `father_id`, if provided, must reference existing animal records of appropriate sex (female for mother, male for father).
+- `deactivated_at`, if set, must be after `created_at` and `is_active` must be false.
 
 ## User Journey: Managing an Animal
 ```mermaid
