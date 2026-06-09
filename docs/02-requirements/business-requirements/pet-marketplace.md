@@ -19,7 +19,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 - Each listing must be linked to **one** animal from the user's owned animals (see Animal Domain).
 - Mandatory fields at creation:
   - `animal_id` (reference to Animal Domain)
-  - `listing_type` (ENUM: SALE, MATING, ADOPTION, STUD_SERVICE)
+  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service)
   - `title` (short headline, max 100 chars)
   - `description` (detailed text, max 2000 chars)
   - `price_or_terms`:
@@ -73,7 +73,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 
 ### 4. Search and Discovery
 - Search filters for Pet Marketplace:
-  - `listing_type` (SALE/MATING/ADOPTION/STUD_SERVICE)
+  - `listing_type` (sale/breeding/show/adoption/stud_service)
   - `species` (cat/dog/bird/rabbit/reptile/rodent/etc.)
   - `breed` (from directory; supports mixed/unknown)
   - `sex` (male/female)
@@ -162,7 +162,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 | `creator_id` | UUID (FK to Users.id) | Yes | User who posted (always present for audit) |
 | `organization_id` | UUID (FK to Organizations.id) | No | Organization posting the listing (nullable if personal listing) |
 | `branch_id` | UUID (FK to Branches.id) | No | Specific branch posting the listing (nullable) |
-| `listing_type` | ENUM('SALE', 'MATING', 'ADOPTION', 'STUD_SERVICE') | Yes |  |
+| `listing_type` | ENUM('sale', 'breeding', 'show', 'adoption', 'stud_service') | Yes |  |
 | `title` | VARCHAR(100) | Yes | Short headline |
 | `description` | TEXT | Yes | Max 2000 chars |
 | `price_or_terms` | VARCHAR(100) | Yes | E.g., "15000", "free", "negotiable", "pick of litter" |
@@ -195,16 +195,18 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 ## User Journey: Creating and Receiving Interest in a Pet Listing
 ```mermaid
 sequenceDiagram
-    participant User as Owner/Seeker
+    participant Owner
+    participant Seeker
     participant Frontend
-    participant Backend (NestJS Listing Module)
-    participant Storage (S3)
+    participant Backend as Backend (NestJS Listing Module)
+    participant Storage as Storage (S3)
     participant Database
+    participant Moderator
 
     %% Owner creates listing
     Owner->>Frontend: Navigates to "My Animals" -> selects pet -> "Create Listing"
     Owner->>Frontend: Chooses to list as personal OR on behalf of organization (if affiliated)
-    Frontend->>Backend: GET /animals?[owner_id=me OR organization_id=my_org_id]&is_active=true (for animal selection)
+    Frontend->>Backend: GET /animals?owner_id=me OR organization_id=my_org_id&is_active=true
     Backend->>Database: Returns user's/organization's active animals
     Backend->>Frontend: Returns animal list
 
@@ -212,8 +214,9 @@ sequenceDiagram
     Owner->>Frontend: If organizational listing, selects organization and optionally branch
     Frontend->>Storage: Uploads photos (pre-signed URLs)
     Storage-->>Frontend: Returns photo URLs
-    Frontend->>Backend: POST /listings {animal_id, title, description, price_or_terms, location_city_id, photos:[urls], organization_id: org_id (optional), branch_id: branch_id (optional)}
-    Backend->>Database: Validates (ownership/animal linkage, org affiliation if applicable), creates listing record (status=DRAFT)
+    Frontend->>Backend: POST /listings {animal_id, title, description, price_or_terms, location_city_id, photos, organization_id, branch_id}
+    Backend->>Database: Validates (ownership/animal linkage, org affiliation if applicable)
+    Backend->>Database: Creates listing record (status=DRAFT)
     Backend->>Frontend: Returns listing ID
 
     Owner->>Frontend: Clicks "Submit for Moderation"
@@ -221,7 +224,7 @@ sequenceDiagram
     Backend->>Database: Updates status
     Backend->>Frontend: Returns success
 
-    %% Moderation (simplified)
+    %% Moderation
     Moderator->>Frontend: Views moderation queue
     Frontend->>Backend: GET /moderation/queue?type=pet&limit=20
     Backend->>Database: Returns pending pet listings
@@ -233,16 +236,16 @@ sequenceDiagram
     Backend->>Frontend: Returns success
 
     %% Seeker finds listing
-    Seeker->>Frontend: Searches: species=Dog, breed=Labrador, radius=20km, max_price=10000 [optional: organization=VetClinic]
-    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&location_radius=20&max_price=10000[&organization_id=org_id]
-    Backend->>Database: Searches listings with geo-filter + price filter + [organization filter]
+    Seeker->>Frontend: Searches: species=Dog, breed=Labrador, radius=20km, max_price=10000, optionally filters by organization=VetClinic
+    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&location_radius=20&max_price=10000&organization_id=org_id
+    Backend->>Database: Searches listings with geo-filter + price filter + organization filter
     Backend->>Frontend: Returns listings with thumbnails
     Frontend->>Seeker: Shows results
 
-    Seeker->>Frontend: Clicks on a listing -> "Show Contacts"
+    Seeker->>Frontend: Clicks on listing -> "Show Contacts"
     Frontend->>Backend: POST /listings/{id}/show-contacts
     Backend->>Database: Increments contact_shown_count, logs event
-    Backend->>Frontend: Returns contact info (owner's phone if personal listing, org representative's phone if organizational)
+    Backend->>Frontend: Returns contact info (owner's phone if personal, org rep's phone if organizational)
     Frontend->>Seeker: Displays contact info
 
     %% Owner/Rep sees analytics
@@ -250,7 +253,7 @@ sequenceDiagram
     Frontend->>Backend: GET /listings/{id}/analytics
     Backend->>Database: Returns view_count, contact_shown_count, etc.
     Backend->>Frontend: Returns stats
-    Frontend->>Owner: Displays: "Views: 15, Contacts shown: 3"
+    Frontend->>Owner: Displays "Views: 15, Contacts shown: 3"
 ```
 
 ## Open Questions & Assumptions

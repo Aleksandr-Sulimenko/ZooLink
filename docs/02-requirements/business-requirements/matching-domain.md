@@ -18,7 +18,7 @@ Handles specialized logic for finding compatible mates for breeding purposes. Th
   - Active (not deactivated/archived)
   - Of mating age (species-specific minimums apply)
   - Owned by different owners (where an owner is either a user or an organization; self-matching not allowed)
-  - Have listings of type MATING or STUD_SERVICE (or user has indicated breeding interest)
+  - Have listings of type sale, breeding, show, adoption, or stud_service (or user has indicated breeding interest)
 - Animals must be of the same species and breed (cross-breed matching reserved for Фаза 2+ with explicit user consent).
 - Two animals can be matched if they belong to different owners (i.e., different users and/or different organizations). Matching logic may be configured to allow or disallow matches between animals owned by the same organization (via a feature flag or organization setting).
 
@@ -56,7 +56,7 @@ The matching algorithm considers these factors with configurable weights (weight
 
 ### 3. Matching Process
 - **Trigger**: Matching can be initiated by:
-  - User viewing a MATING/STUD_SERVICE listing and requesting "Find Similar" or "Find Matches"
+  - User viewing a breeding or stud_service listing and requesting "Find Similar" or "Find Matches"
   - System-generated suggestions shown in user dashboard (based on saved searches or followed animals)
   - Explicit search via matching interface (filters for breeding goals)
 - **Input**: 
@@ -149,7 +149,7 @@ The matching algorithm considers these factors with configurable weights (weight
 - Both animals must be active, of mating age, and opposite sex
 - `compatibility_score` must be between 0 and 100
 - Sub-scores (if present) must be between 0 and 100
-- At least one of target or candidate must have an active MATING/STUD_SERVICE listing or user breeding intent flag
+- At least one of target or candidate must have an active breeding or stud_service listing or user breeding intent flag
 - Match expires no earlier than 24 hours after creation (to prevent excessive computation)
 
 ## User Journey: Using Matching Features

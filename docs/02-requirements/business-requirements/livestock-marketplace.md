@@ -20,7 +20,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 - Each listing must be linked to **one** animal from the user's owned animals (see Animal Domain).
 - Mandatory fields at creation:
   - `animal_id` (reference to Animal Domain)
-  - `listing_type` (ENUM: SALE, MATING, LEASING) - AUCTION and EMBRYO_TRANSFER reserved for future
+  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service) - AUCTION and EMBRYO_TRANSFER reserved for future
   - `title` (short headline, max 100 chars)
   - `description` (detailed text, max 3000 chars - longer to accommodate production records)
   - `price_or_terms`:
@@ -78,7 +78,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 
 ### 4. Search and Discovery
 - Search filters for Livestock Marketplace:
-  - `listing_type` (SALE/MATING/LEASING)
+  - `listing_type` (sale/breeding/show/adoption/stud_service)
   - `species` (cattle/horse/sheep/goat/pig/poultry/alpaca/etc.)
   - `breed` (from directory; supports mixed/unknown/grade)
   - `sex` (male/female)
@@ -171,7 +171,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 | `id` | UUID | Yes | Primary key |
 | `animal_id` | UUID (FK to Animals.id) | Yes | The livestock being listed |
 | `creator_id` | UUID (FK to Users.id) | Yes | User who posted |
-| `listing_type` | ENUM('SALE', 'MATING', 'LEASING') | Yes | AUCTION/EMBRYO_TRANSFER reserved |
+| `listing_type` | ENUM('sale', 'breeding', 'show', 'adoption', 'stud_service') | Yes |  |
 | `title` | VARCHAR(100) | Yes | Short headline |
 | `description` | TEXT | Yes | Max 3000 chars |
 | `price_or_terms` | VARCHAR(150) | Yes | E.g., "250000", "negotiable", "8000 per straw" |

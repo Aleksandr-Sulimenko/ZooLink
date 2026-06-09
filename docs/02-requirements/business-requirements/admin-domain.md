@@ -20,7 +20,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
   - **Traits & Descriptors**: Standardized temperament, health, and production descriptors
   - **Health Certifications**: Recognized test/vaccination types (TB-free, Brucellosis-negative, etc.)
   - **Genetic Markers**: Known DNA test results (coat color, polled/horned, disease resistance)
-  - **Listing Types**: SALE, MATING, ADOPTION, STUD_SERVICE, LEASING (extensible)
+  - **Listing Types**: sale, breeding, show, adoption, stud_service (extensible)
   - **Animal Statuses**: ACTIVE, ARCHIVED, DECEASED (for future)
 - Reference data can be:
   - **Activated/Deactivated**: Without deletion (for historical data integrity)

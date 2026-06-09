@@ -14,7 +14,7 @@ Enable listing, searching, and managing advertisements for agricultural livestoc
 **In Scope:**
 - Livestock listings with species-specific attributes (ear tag, passport, birth certificate, health test results, productivity metrics)
 - Geo-search: radius-based search (1-100 km) from user location
-- Filtering: by species, breed, age, sex, price, location, listing type (sale, breeding, lease, show)
+- Filtering: by species, breed, age, sex, price, location, listing type (sale, breeding, show, adoption, stud_service)
 - Moderation workflow: pre-moderation (listing appears only after moderator approval)
 - User actions: create, edit, delete own listings, favorites, share
 - Integration with Animal Domain (link listing to animal entity)

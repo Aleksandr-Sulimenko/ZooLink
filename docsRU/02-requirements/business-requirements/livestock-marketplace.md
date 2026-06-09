@@ -20,7 +20,7 @@
 - Каждое объявление должно быть связано с **одним** животным из принадлежащих пользователю (см. Домен Животных).
 - Обязательные поля при создании:
  - `animal_id` (ссылка на Домен Животных)
- - `listing_type` (ПЕРЕЧИСЛЕНИЕ: SALE, MATING, LEASING) - AUCTION и EMBRYO_TRANSFER зарезервированы для будущего
+ - `listing_type` (ПЕРЕЧИСЛЕНИЕ: sale, breeding, show, adoption, stud_service) - AUCTION и EMBRYO_TRANSFER зарезервированы для будущего
  - `title` (краткий заголовок, максимум 100 символов)
  - `description` (подробный текст, максимум 3000 символов - дольше, чтобы вместить племенные записи)
  - `price_or_terms`:
@@ -78,7 +78,7 @@
 
 ### 4. Поиск и обнаружение
 - Фильтры поиска для Рынка Сельхоживотных:
- - `listing_type` (SALE/MATING/LEASING)
+ - `listing_type` (sale/breeding/show/adoption/stud_service)
  - `species` (cattle/horse/sheep/goat/pig/poultry/alpaca/etc.)
  - `breed` (из справочника; поддерживает смешанное/неизвестное/ grade)
  - `sex` (male/female)
@@ -171,7 +171,7 @@
 | `id` | UUID | Да | Первичный ключ |
 | `animal_id` | UUID (FK к Animals.id) | Да | Скот, который выставлен |
 | `creator_id` | UUID (FK к Users.id) | Да | Пользователь, который разместил |
-| `listing_type` | ПЕРЕЧИСЛЕНИЕ('SALE', 'MATING', 'LEASING') | Да | AUCTION/EMBRYO_TRANSFER зарезервированы |
+| `listing_type` | ПЕРЕЧИСЛЕНИЕ('sale', 'breeding', 'show', 'adoption', 'stud_service') | Да | AUCTION/EMBRYO_TRANSFER зарезервированы |
 | `title` | VARCHAR(100) | Да | Краткий заголовок |
 | `description` | ТЕКСТ | Да | Максимум 3000 символов |
 | `price_or_terms` | VARCHAR(150) | Да | Например, "250000", "negotiable", "8000 per straw" |

@@ -12,7 +12,7 @@ Enable listing, searching, and managing advertisements for companion animals (pe
 
 ## Scope & Boundaries
 **In Scope:**
-- Pet listings with attributes: title, description, price (or free), location (geo-coordinates), contact info (phone, social media links after moderation), media (photos/videos), listing type (sale, breeding, adoption, show), status (active, inactive, moderated, rejected, archived)
+- Pet listings with attributes: title, description, price (or free), location (geo-coordinates), contact info (phone, social media links after moderation), media (photos/videos), listing type (sale, breeding, adoption, show, stud_service), status (active, inactive, moderated, rejected, archived)
 - Geo-search: radius-based search (1-100 km) from user location
 - Filtering: by species, breed, age, sex, price, location, listing type
 - Moderation workflow: pre-moderation (listing appears only after moderator approval)
