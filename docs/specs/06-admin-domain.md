@@ -34,6 +34,12 @@ Provide administrative functions for platform management, including user moderat
 - **Technology:** Align with NestJS, TypeScript, PostgreSQL.
 - **Usability:** Interface must be clear for moderators (may not be technical experts).
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Moderation queue loads in <2s with 10k pending items (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Admin actions are fully auditable; personal data handling follows 152-ФЗ; content moderation follows 149-ФЗ (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Interface must be clear for moderators; follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Prior Decisions
 - Admin functionality will be accessed via a separate admin panel (initially same WebApp but with role-based access).
 - Moderators are a special role in Identity Domain with permissions to moderate listings and users.
@@ -81,3 +87,4 @@ Provide administrative functions for platform management, including user moderat
 - [ ] Performance: moderation queue loads in <2s with 10k pending items
 - [ ] Compliance: admin actions are fully auditable; personal data handling follows 152-ФЗ; content moderation follows 149-ФЗ
 - [ ] Documentation: OpenAPI spec generated and available
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
