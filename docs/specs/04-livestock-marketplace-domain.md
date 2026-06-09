@@ -46,6 +46,12 @@ Enable listing, searching, and managing advertisements for agricultural livestoc
 - We store minimal owner personal data in listings (just userId reference) to comply with 152-ФЗ; full owner details are in Identity Domain.
 - Listing entity structure is shared between Pet and Livestock Marketplaces but with different validation rules and attribute sets.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Livestock search by ear tag/passport < 500ms; geo-search < 2s (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian livestock trading laws and identification requirements (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Marketplace UI follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `livestock-marketplace` module
@@ -84,3 +90,4 @@ Enable listing, searching, and managing advertisements for agricultural livestoc
 - [ ] Performance: geo-search with 50k listings returns in <1s for 95% of requests
 - [ ] Compliance: listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian livestock trading laws and identification requirements
 - [ ] Documentation: OpenAPI spec generated and available
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

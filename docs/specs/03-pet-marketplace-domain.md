@@ -45,6 +45,12 @@ Enable listing, searching, and managing advertisements for companion animals (pe
 - Price can be null (free adoption) or numeric.
 - Contact info: after moderation, show phone number and social media links (Telegram, VK) provided by seller.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Geo-search with 100k listings returns in <1s for 95% of requests (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian advertising laws (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Marketplace UI follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `pet-marketplace` module

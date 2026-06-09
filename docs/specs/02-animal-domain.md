@@ -43,10 +43,16 @@ Manage the core animal entity as an aggregate root, representing pets and livest
 - Russian regulations require tracking of microchip ID (for pets) and ear tag/passport (for livestock).
 - We store minimal owner personal data in Animal (just userId reference) to comply with 152-ФЗ; full owner details are in Identity Domain.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Animal search by microchip returns in <500ms with 100k records (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Owner PII not duplicated in animal table to comply with 152-ФЗ (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Animal management UI follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `animal` module
-   - [ ] Define Animal entity with fields: id (UUID), speciesId, breedId, nickname, dateOfBirth, sex, colorCoat, markings, microchipId, tattooBrandId, healthRecords (JSONB), reproductiveData (JSONB), ownerId (FK to User), organizationId (FK to Organization, nullable), createdAt, updatedAt, deactivatedAt
+   - [ ] Define Animal entity with fields: id (UUID), speciesId, breedId, nickname, dateOfBirth, sex, colorCoat, markings, microchipId, tattooBrandId, healthRecords (JSONB), reproductiveData (JSONB), ownerId (FK to User), organizationId (FK to Organization, nullable), ownedSince, motherId, fatherId, deactivatedAt, createdAt, updatedAt
    - [ ] Create reference tables for Species and Breed (managed via Admin Domain)
    - [ ] Implement validation rules per species (e.g., if species=cattle, earTagId required)
    - [ ] Create AnimalController (CRUD operations, search by microchip/ear tag)
@@ -79,3 +85,4 @@ Manage the core animal entity as an aggregate root, representing pets and livest
 - [ ] Performance: animal search by microchip returns in <500ms with 100k records
 - [ ] Compliance: data model supports Russian animal identification requirements; owner PII not duplicated in animal table
 - [ ] Documentation: OpenAPI spec generated and available
+- [ ] Additional fields: Verify owned_since, mother_id, father_id, deactivated_at fields are properly implemented and tested

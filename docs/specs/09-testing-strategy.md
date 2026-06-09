@@ -57,6 +57,12 @@ To evaluate system performance under load in phase 2 and above, it is recommende
 - **Isolation:** Unit tests should isolate the unit under test using mocks/spies
 - **CI/CD:** Tests must run on every pull request and merge to main
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Unit tests should run fast (<5s for backend unit suite, <10s for frontend unit suite); full E2E suite <5m (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Follows security testing guidelines; test data handling complies with 152-ФЗ (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Accessibility testing (a11y) deferred but considered in component design (see docs/02-requirements/nfr/accessibility.md)
+
 ## Prior Decisions
 - **Backend Testing:** 
   - Framework: Jest with supertest for API testing
@@ -145,3 +151,4 @@ To evaluate system performance under load in phase 2 and above, it is recommende
 - [ ] CI/CD pipeline fails on test failures and blocks merges
 - [ ] Coverage reports show no significant drop over time
 - [ ] Documentation: testing guidelines are clear and followed by contributors
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

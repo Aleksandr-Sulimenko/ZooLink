@@ -36,6 +36,12 @@ Define the frontend architecture following the three-layer model (View → Domai
 - **Scalability:** Structure must support adding new features without major refactoring.
 - **Maintainability:** Code must be easy to understand and modify by developers familiar with the stack.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Initial load time < 3s on 3G, time to interactive < 5s (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Follows security best practices for frontend applications (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Interface must be accessible and usable by non-technical mass market users (pet owners); follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Prior Decisions
 - Technology Stack (ADR 0001): React with TypeScript, Vite, Tailwind CSS, Headless UI.
 - State management: React Context API for simplicity on MVP (may migrate to Zustand if needed).
@@ -122,3 +128,4 @@ Define the frontend architecture following the three-layer model (View → Domai
 - [ ] E2E tests cover critical user flows (login, create listing, search)
 - [ ] Performance: bundle size analyzed, lazy loading implemented for large features
 - [ ] Documentation: Storybook or similar for component library (deferred to phase 2)
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

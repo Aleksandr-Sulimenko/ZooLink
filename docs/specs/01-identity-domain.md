@@ -36,6 +36,12 @@ Provide secure authentication and authorization for users of ZooLink, including 
 - **Technology:** Must align with selected stack (NestJS, TypeScript, PostgreSQL, Redis).
 - **Data:** Personal data (phone number, name) must be stored securely and minimally.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Authentication latency < 1s under normal load; auth API latency < 800ms for 95% of requests under load test (100 RPS) (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Passwords not used; authentication via phone/OAuth only; protect against brute force, SIM swapping; data storage adheres to 152-ФЗ (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Registration flow must be simple for non-technical users (mass market pet owners); follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Prior Decisions
 - Technology Stack (ADR 0001): NestJS backend, React frontend, PostgreSQL, Redis.
 - Authentication method: Phone (SMS) + OAuth providers; email optional.
@@ -85,3 +91,4 @@ Provide secure authentication and authorization for users of ZooLink, including 
 - [ ] Performance: auth API latency < 800ms for 95% of requests under load test (100 RPS)
 - [ ] Compliance: data storage adheres to 152-ФЗ (minimal personal data, consent for processing)
 - [ ] Documentation: OpenAPI spec generated and available at /api/docs
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

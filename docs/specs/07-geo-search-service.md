@@ -46,6 +46,12 @@ Provide efficient geographic search capabilities for finding animals and listing
 - Minimum search radius of 1km to ensure meaningful results.
 - Location data is required for all listings; users must provide location via map interaction or address input.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Geo-search queries must complete in <1s for 95% of requests under expected load (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Uses Yandex.Maps API for geocoding as specified in tech stack (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Search radius adjustable via UI with clear distance units (km) (see docs/02-requirements/nfr/accessibility.md)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `geo-search` shared service (could be in `src/lib/` or as a utility)
@@ -89,3 +95,4 @@ Provide efficient geographic search capabilities for finding animals and listing
 - [ ] Performance: geo-search with 100k listings returns in <1s for 95% of requests at 50 RPS
 - [ ] Compliance: uses Yandex.Maps API for geocoding as specified in tech stack
 - [ ] Documentation: API specs show lat/long/radius parameters clearly
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

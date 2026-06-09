@@ -45,6 +45,12 @@ Enable specialized logic for matching animals for breeding (mating) based on var
 - Location-based matching uses same geo-search as marketplace domains.
 - We distinguish between "breeding" listings (animals for mating) and "sale" listings (offspring for sale).
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Breeding search with 50k animals returns in <1s for 95% of requests (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Adheres to Russian breeding regulations; owner PII protected until after moderation (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Matching interface follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Enhance Animal entity with breeding-specific fields: pedigreeId, healthTestResults (JSONB), showTitles, breedingRestrictions, etc.
@@ -79,3 +85,4 @@ Enable specialized logic for matching animals for breeding (mating) based on var
 - [ ] Performance: breeding search with 50k animals returns in <1s for 95% of requests
 - [ ] Compliance: adheres to Russian breeding regulations; owner PII protected until after moderation
 - [ ] Documentation: OpenAPI spec generated and available
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

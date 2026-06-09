@@ -33,6 +33,12 @@ Provide a phased implementation plan for ZooLink that delivers value early, mana
 - **Learning:** Each phase should validate key business hypotheses.
 - **Scalability:** Foundation must allow growth to 100k+ users.
 
+## NFR Traceability
+This specification addresses the following Non-Functional Requirements:
+- **Performance (NFR-PERF)**: Foundation must allow growth to 100k+ users; each phase validates performance hypotheses (see docs/02-requirements/nfr/performance.md)
+- **Security (NFR-SEC)**: Address highest risks early including security; Russian legal requirements (152-ФЗ) must be met in MVP (see docs/02-requirements/nfr/security.md)
+- **Accessibility (NFR-ACC)**: Each phase should validate key business hypotheses including accessibility (see docs/02-requirements/nfr/accessibility.md)
+
 ## Prior Decisions
 - From project brief: MVP is Web-only with mobile adaptivity; native apps deferred to phase 2.
 - From project brief: Chat deferred to phase 2.
@@ -223,3 +229,4 @@ Each feature should meet the following before considered complete:
 - [ ] No critical or high severity security vulnerabilities in new code
 - [ ] Performance benchmarks met (if applicable)
 - [ ] Compliance checks completed (for legal/security features)
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
