@@ -193,11 +193,13 @@ sequenceDiagram
     Backend->>Frontend: Returns listings with animal summary (species, breed, age, photo)
 ```
 
-## Open Questions & Assumptions
-- **Assumption**: Breed directory is comprehensive enough for MVP; custom text fallback handles edge cases.
-- **Assumption**: Health and reproductive data are entered manually by owners; no automated validation with vet records on MVP.
-- **Open Question**: Should we enforce uniqueness of microchip + species at DB level? (Could cause false positives if chip reused; decided to warn only on MVP.)
-- **Assumption**: Date of birth can be approximate; system stores as date (if user enters "approx 2 years", we convert to date assuming today minus 2 years). Owner can later correct to exact date.
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-001 | Should we enforce uniqueness of microchip + species at DB level to prevent duplicate registrations? | High | Data Team | Фаза 2 | Open | ADR-0003 (proposed) |
+| GAP-002 | Is the breed directory comprehensive enough for MVP, or will we see significant use of custom text entries requiring moderator review? | Medium | Product Owner | Фаза 1 (validation) | Open | Breed directory population effort |
+| GAP-003 | Will users reliably enter health and reproductive data manually, or do we need automated validation with vet records even for MVP? | Low | UX Researcher | Фаза 1 (feedback) | Open | Health data validation strategy |
+| GAP-004 | Is storing approximate dates of birth as converted dates acceptable, or should we store the original approximation for better data fidelity? | Low | Data Team | Фаза 1 (design) | Open | Date of birth handling approach |
 
 ## Related Domains
 - **Admin Domain**: Provides species and breed directories; manages moderation of custom breed entries.

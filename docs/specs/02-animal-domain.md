@@ -86,3 +86,4 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: data model supports Russian animal identification requirements; owner PII not duplicated in animal table
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] Additional fields: Verify owned_since, mother_id, father_id, deactivated_at fields are properly implemented and tested
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

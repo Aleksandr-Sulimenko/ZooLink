@@ -210,13 +210,15 @@ sequenceDiagram
     Backend->>Matching Service: May use this outcome to refine matching weights (Фаза 2+)
 ```
 
-## Open Questions & Assumptions
-- **Assumption**: Initial matching weights are based on expert knowledge and can be refined over time with user feedback.
-- **Assumption**: Most users will initiate matching from an animal they own (rather than anonymous search).
-- **Open Question**: Should we allow same-species cross-breed matching on MVP with explicit opt-in? (Decided: No, reserve for Фаза 2+ to avoid complexity and potential misuse.)
-- **Assumption**: Users understand that matching is a suggestion tool; final breeding decisions involve veterinary consultation and direct negotiation.
-- **Assumption**: System does not guarantee fertility or pregnancy; matching only assesses based on available data.
-- **Assumption**: Genetic data used is limited to what owners voluntarily provide (tests, pedigrees).
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-MT-001 | Initial matching weights based on expert knowledge; refinable over time with user feedback | Low | ML Team | Фаза 1 (feedback) | Open | Matching algorithm approach |
+| GAP-MT-002 | Most users initiate matching from owned animals vs. anonymous search | Low | Product Owner | Фаза 1 (validation) | Closed | User behavior assumption validated |
+| GAP-MT-003 | Same-species cross-breed matching on MVP with explicit opt-in | Medium | Backend Team | Фаза 2+ | Closed | Decision: Reserved for Фаза 2+ |
+| GAP-MT-004 | Users understand matching as suggestion tool; breeding decisions require vet consultation/negotiation | Low | UX Team | Фаза 1 (validation) | Open | Matching UI/UX design |
+| GAP-MT-005 | System does not guarantee fertility/pregnancy; assessment based only on available data | Low | Legal Team | Фаза 1 (documentation) | Open | Disclaimer and liability approach |
+| GAP-MT-006 | Genetic data limited to what owners voluntarily provide (tests, pedigrees) | Low | Data Team | Фаза 1 (validation) | Open | Genetic data collection approach |
 
 ## Related Domains
 - **Animal Domain**: Provides core animal data (genetic flags, health certifications, production records) used in matching calculations.

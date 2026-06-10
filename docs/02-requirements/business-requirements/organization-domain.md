@@ -197,12 +197,14 @@ sequenceDiagram
     Backend->>Frontend: Returns analytics dashboard
 ```
 
-## Open Questions & Assumptions
-- **Assumption**: Most organizations will have a single headquarters and possibly multiple branches; the model supports any number of branches.
-- **Assumption**: Role-based access control (RBAC) will be implemented at the application layer to enforce permissions on organization/branch management.
-- **Open Question**: Should we allow an organization to be marked as "verified" (e.g., with a badge) after manual confirmation? (Planned for Фаза 2+)
-- **Assumption**: The `inn` and `kpp` fields are specific to Russian legislation; for international expansion, these may become optional or replaced by a generic tax ID field.
-- **Open Question**: Should we store geographical coordinates (latitude/longitude) for branches to enable more precise geo-search? (Can be added later via a separate table or extending branches with PostGIS point).
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-ORG-001 | Most organizations will have a single headquarters and possibly multiple branches; the model supports any number of branches | Medium | Infrastructure Team | Фаза 1 (validation) | Open | Organization/branch modeling approach |
+| GAP-ORG-002 | Role-based access control (RBAC) will be implemented at the application layer to enforce permissions on organization/branch management | High | Security Team | Фаза 1 (implementation) | Open | RBAC implementation strategy |
+| GAP-ORG-003 | Organization verification badge after manual confirmation | Medium | Product Owner | Фаза 2+ | Open | Organization verification system |
+| GAP-ORG-004 | INN and KPP fields specificity to Russian legislation; for international expansion, these may become optional or replaced by a generic tax ID field | Low | Backend Team | Фаза 2 (internationalization) | Open | Internationalization approach for tax IDs |
+| GAP-ORG-005 | Storing geographical coordinates (latitude/longitude) for branches to enable more precise geo-search | Low | Geo Team | Фаза 2 (enhancement) | Open | Branch geo-search implementation |
 
 ## Related Domains
 - **Identity Domain**: `users` table provides the individual accounts that affiliate with organizations.

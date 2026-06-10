@@ -143,11 +143,13 @@ sequenceDiagram
   - Provides ability to export/delete personal data (GDPR/ФЗ-152) – to be implemented in Фаза 2+ via user request workflow.
 - **Logging**: Auth events (login success/failure, token refresh, deactivation) are logged for security audit but exclude sensitive data.
 
-## Open Questions & Assumptions
-- **Assumption**: SMS gateway provider offers free tier sufficient for MVP validation (<= 1000 SMS/month).
-- **Assumption**: OAuth providers do not change their API breakingly during MVP period.
-- **Open Question**: Should we allow username as alternative login method? (Postponed to Фаза 2 to simplify MVP.)
-- **Assumption**: City directory is static and managed via admin domain (see admin-domain.md).
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-ID-001 | SMS gateway provider free tier sufficiency for MVP validation (<= 1000 SMS/month) | Medium | Infrastructure Team | Фаза 1 (validation) | Open | SMS gateway selection |
+| GAP-ID-002 | OAuth providers API stability during MVP period | Low | Backend Team | Фаза 1 (monitoring) | Open | OAuth integration approach |
+| GAP-ID-003 | Username as alternative login method | Medium | Product Owner | Фаза 2 | Open | Authentication methods decision |
+| GAP-ID-004 | City directory static nature and admin domain management | Low | Admin Team | Фаза 1 (validation) | Open | City directory implementation |
 
 ## Related Domains
 - **Admin Domain**: Manages user roles, moderation privileges, and reference data (cities, breeds).

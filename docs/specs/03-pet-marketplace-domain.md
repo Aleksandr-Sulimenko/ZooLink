@@ -90,3 +90,4 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Performance: geo-search with 100k listings returns in <1s for 95% of requests
 - [ ] Compliance: listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian advertising laws
 - [ ] Documentation: OpenAPI spec generated and available
+- [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented

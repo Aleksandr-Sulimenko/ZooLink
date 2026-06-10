@@ -271,14 +271,16 @@ sequenceDiagram
     Backend->>Frontend: Returns success
 ```
 
-## Open Questions & Assumptions
-- **Assumption**: Initial reference data will be seeded from open sources (AKC, FCI, FAO breed lists) and refined over time.
-- **Assumption**: Moderator workload on MVP will be manageable by 1-2 part-time moderators (<50 listings/day total).
-- **Open Question**: Should we implement reputation/trust scoring for users to prioritize moderation queue? (Decided: No for MVP; rely on chronological queue + manual flagging.)
-- **Assumption**: Moderators will receive basic policy training but not formal certification on MVP.
-- **Assumption**: System will not use automated content filtering (AI/ML) for moderation on MVP to avoid false positives/negatives.
-- **Assumption**: Appeal process for rejected listings: user can resubmit after edits; formal appeal process reserved for Фаза 2+.
-- **Assumption**: Geographic reference data (cities) will be simplified hierarchy; detailed street-level addresses never stored/shown.
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-ADM-001 | Initial reference data seeded from open sources (AKC, FCI, FAO breed lists); refinement over time | Low | Data Team | Фаза 1 (validation) | Open | Reference data sourcing approach |
+| GAP-ADM-002 | Moderator workload manageable by 1-2 part-time moderators (<50 listings/day total) | Low | Ops Team | Фаза 1 (validation) | Open | Moderator capacity planning |
+| GAP-ADM-003 | Reputation/trust scoring for users to prioritize moderation queue | Medium | Product Owner | Фаза 2+ | Closed | Decision: No for MVP; rely on chronological queue + manual flagging |
+| GAP-ADM-004 | Moderators receive basic policy training but not formal certification on MVP | Low | HR Team | Фаза 1 (training) | Open | Moderator training approach |
+| GAP-ADM-005 | System will not use automated content filtering (AI/ML) for moderation on MVP to avoid false positives/negatives | Low | ML Team | Фаза 1 (decision) | Closed | Decision: Manual moderation on MVP |
+| GAP-ADM-006 | Appeal process for rejected listings: user can resubmit after edits; formal appeal process reserved for Фаза 2+ | Low | Support Team | Фаза 2+ | Open | Appeals process design |
+| GAP-ADM-007 | Geographic reference data (cities) simplified hierarchy; detailed street-level addresses never stored/shown | Low | Geo Team | Фаза 1 (validation) | Open | Geographic data approach |
 
 ## Related Domains
 - **Identity Domain**: Provides user base; roles extend user permissions; authentication required for admin access.

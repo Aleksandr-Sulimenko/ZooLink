@@ -257,13 +257,15 @@ sequenceDiagram
     Frontend->>Owner: Displays: "Views: 8, Contacts shown: 2"
 ```
 
-## Open Questions & Assumptions
-- **Assumption**: Production and health records rely on user honesty; moderator does random spot-checks for blatant misreports (e.g., claiming 10,000 kg lactation from a heifer).
-- **Assumption**: Photos are moderated for relevance (must show the animal from useful angles); no AI-based conformation scoring on MVP.
-- **Open Question**: Should we require minimum photo count (e.g., 3) for livestock listings? (Decided: strongly recommended in UI guidance but not enforced on MVP to avoid friction.)
-- **Assumption**: Users understand that livestock transactions often involve transport, quarantine, and regulatory documentation (handled off-platform on MVP).
-- **Assumption**: "Negotiable" price is common; system does not force numeric pricing.
-- **Assumption**: Users are aware of species-specific regulations (e.g., cattle movement permits) and handle them independently on MVP.
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-LS-001 | Production and health records rely on user honesty; moderator does random spot-checks for blatant misreports | Low | Moderation Team | Фаза 1 (validation) | Open | Data validation approach |
+| GAP-LS-002 | Photos moderated for relevance; no AI-based conformation scoring on MVP | Low | Moderation Team | Фаза 1 (validation) | Open | Photo validation approach |
+| GAP-LS-003 | Minimum photo count requirement for livestock listings | Low | UX Team | Фаза 1 (decision) | Closed | Decision: Strongly recommended in UI but not enforced |
+| GAP-LS-004 | Users understand livestock transactions involve transport/quarantine/regulatory docs handled off-platform | Low | Product Owner | Фаза 1 (validation) | Open | User education approach |
+| GAP-LS-005 | "Negotiable" price is common; system does not force numeric pricing | Low | Product Owner | Фаза 1 (validation) | Open | Pricing flexibility approach |
+| GAP-LS-006 | Users aware of species-specific regulations (e.g., cattle movement permits) and handle them independently on MVP | Low | Legal Team | Фаза 1 (validation) | Open | Regulatory compliance approach |
 
 ## Related Domains
 - **Animal Domain**: Provides the core livestock profile; listing links to it.
