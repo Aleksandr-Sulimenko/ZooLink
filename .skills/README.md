@@ -19,6 +19,11 @@ This directory contains standardized procedures (skills) for AI agents working w
 
 **Usage**: When defining clear completion criteria for artifacts to ensure they are ready to serve as foundations for subsequent work.
 
+### 4. ai-agent-interaction-protocol.md
+**Purpose**: Create a standardized procedure for AI agent interaction following Spec-Driven Documentation (SDD) principles to ensure predictable, verifiable, and human-in-the-loop assisted documentation work.
+
+**Usage**: When an AI agent is tasked with creating, updating, or reviewing documentation while following SDD principles for structured, stage-based work.
+
 ## How to Use These Skills
 
 AI agents should follow these procedures exactly as documented to ensure:
