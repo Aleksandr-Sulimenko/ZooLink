@@ -6,7 +6,10 @@
       "Bash(python3 *)",
       "Bash(npx swagger-cli *)",
       "Skill(deep-research)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git show *)",
+      "Read(//tmp/**)",
+      "Bash(git checkout *)"
     ]
   }
 }
