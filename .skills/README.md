@@ -24,6 +24,21 @@ This directory contains standardized procedures (skills) for AI agents working w
 
 **Usage**: When an AI agent is tasked with creating, updating, or reviewing documentation while following SDD principles for structured, stage-based work.
 
+### 5. validation-rules-generator.md
+**Purpose**: Create a standardized Validation Rules section for specification documents that defines clear, testable validation rules for data attributes.
+
+**Usage**: When creating or updating specification documents that define data models or attributes requiring validation.
+
+### 6. api-contract-reference-formatter.md
+**Purpose**: Create a standardized API Contract References section for specification documents that consistently references related API contracts.
+
+**Usage**: When creating or updating specification documents that need to reference API contracts.
+
+### 7. terminology-consistency-checker.md
+**Purpose**: Create a standardized Terminology Consistency check for specification documents that ensures consistent use of terms across the ZooLink project documentation.
+
+**Usage**: When creating or updating any specification document to ensure consistent terminology usage.
+
 ## How to Use These Skills
 
 AI agents should follow these procedures exactly as documented to ensure:

@@ -1,10 +1,10 @@
 # Procedure: Generate Definition of Done (DoD) Section
 
 ## Purpose
-Create a standardized Definition of Done section for specification documents that defines clear completion criteria aligned with SDD principles.
+Create a standardized Definition of Done section for specification documents that defines clear completion criteria aligned with Spec-Driven Documentation (SDD) principles.
 
 ## When to Use
-This procedure should be used when creating or updating any specification document in the ZooLink project to ensure each artifact has explicit completion criteria.
+This procedure should be used when creating or updating any specification document in the ZooLink project to ensure each artifact has explicit completion criteria, particularly suitable for artifacts completing their SDD lifecycle stage.
 
 ## Inputs
 - Specification document type (domain spec, business requirement, API contract, etc.)
@@ -18,7 +18,16 @@ This procedure should be used when creating or updating any specification docume
 
 ## Procedure Steps
 
-### Step 1: Determine Artifact Type and Purpose
+### Step 1: Confirm SDD Stage Completion
+Determine if the artifact has completed its appropriate SDD lifecycle stage:
+- Domain (D) artifacts: Complete when domain boundaries, glossary, and key concepts are fixed
+- Requirements (R) artifacts: Complete when requirements are testable, traceable, and unambiguous
+- Scenarios (S) artifacts: Complete when scenarios translate requirements to observable behavior
+- Models/Data (M) artifacts: Complete when data structures are fully defined and consistent
+- Architecture (A) artifacts: Complete when architectural decisions are recorded as ADRs
+- Verification (T) artifacts: Complete when verification procedures validate requirements
+
+### Step 2: Determine Artifact Type and Purpose
 Identify what type of artifact you are defining DoD for:
 - Domain Specification (e.g., animal-domain.md, pet-marketplace-domain.md)
 - Business Requirements (e.g., animal-domain.md in business-requirements/)
@@ -27,7 +36,7 @@ Identify what type of artifact you are defining DoD for:
 - Non-Functional Requirement document
 - Testing Strategy or other process document
 
-### Step 2: Identify Core Completion Requirements
+### Step 3: Identify Core Completion Requirements
 Based on the artifact type, determine what must be present for it to be considered complete:
 
 **For Domain Specifications:**
@@ -69,14 +78,14 @@ Based on the artifact type, determine what must be present for it to be consider
 - [ ] Proper formatting and structure
 - [ ] Reviewed for terminology consistency
 
-### Step 3: Add SDD-Specific Requirements
+### Step 4: Add SDD-Specific Requirements
 Include these SDD-mandatory elements in every DoD:
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 - [ ] GAP Registry: All significant uncertainties are documented as GAP entries with owners and resolution targets
 - [ ] Terminology Consistency: All terms used are consistent with project glossary and other specifications
 - [ ] Human-in-the-loop: Points requiring expert judgment are identified for developer/architect review
 
-### Step 4: Format the DoD Section
+### Step 5: Format the DoD Section
 Create the section using this format:
 
 ```
@@ -90,6 +99,13 @@ This [artifact type] is considered complete when:
 - [ ] GAP Registry: All significant uncertainties are documented as GAP entries with owners and resolution targets
 - [ ] Terminology Consistency: All terms used are consistent with project glossary and other specifications
 ```
+
+### Step 6: Add Human-in-the-Loop Checkpoint
+Before finalizing, trigger human review for:
+- **SDD Stage Completion Confirmation**: Expert verification that the artifact has completed its appropriate lifecycle stage
+- **Traceability Verification**: Confirm that traceability links to related artifacts are correct
+- **Consistency Check**: Expert review of terminology and conceptual consistency
+- **Readiness Assessment**: Judgment on whether the artifact can reliably serve as foundation for subsequent work
 
 ### Step 5: Add to Specification Document
 Place the DoD section appropriately in the document, typically:
