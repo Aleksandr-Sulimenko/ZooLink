@@ -264,6 +264,15 @@ sequenceDiagram
 - **Assumption**: Users understand that meeting pets in person carries risk; platform facilitates introduction only.
 - **Assumption**: Organization listings show organizational branding rather than individual identity in public view.
 
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-PET-001 | Temperament and health fields rely on user honesty; moderator performs random checks for blatant misreports (e.g., claiming vaccinated puppy is 2 weeks old). | Low | Product Owner | Phase 1 (feedback) | Open | Health and temperament validation strategy |
+| GAP-PET-002 | Photos are moderated for relevance (must show the animal); no AI-based breed verification on MVP. | Low | Product Owner | Phase 2+ | Open | Breed verification approach using AI |
+| GAP-PET-003 | Should we restrict listings for puppies/kittens under 8 weeks? (Decided: rely on user ethics + moderator intervention for obvious welfare violations on MVP; may add rule in Phase 2.) | High | Legal Team | Phase 2 | Open | Rule prohibiting listings for puppies/kittens under 8 weeks |
+| GAP-PET-004 | "Free" listings are common; system does not differentiate between true free and symbolic fees (e.g., 1 RUB). | Low | Data Team | Phase 1 (design) | Open | Approach to handling price/terms fields |
+| GAP-PET-005 | Users understand that meeting pets in person carries risk; platform only facilitates introductions. | Low | UX Team | Phase 1 (validation) | Open | UI/UX design for risk disclosure |
+
 ## Related Domains
 - **Animal Domain**: Provides the core pet profile; listing links to it.
 - **Identity Domain**: `creator_id` links to user; authentication required.
