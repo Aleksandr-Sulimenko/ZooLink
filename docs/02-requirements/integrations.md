@@ -236,10 +236,12 @@ Each integration should have:
 - **Testing Plan**: How to test the integration (mock service, sandbox)
 - **Deployment Considerations**: Environment variables, secrets required
 
-## Open Questions & Assumptions
-- **Assumption**: Third-party providers will maintain backward compatibility for their APIs during MVP period.
-- **Assumption**: Free tiers of SMS, mapping, and email services are sufficient for MVP validation.
-- **Open Question**: Should we abstract the geocoding service to allow switching between providers without code changes? (Decided: Yes, via adapter pattern.)
-- **Assumption**: Users consent to sharing necessary data for integrations (e.g., phone number for SMS, basic profile for OAuth).
-- **Assumption**: Payment gateway integration will be added in Facза 2 and will use a PCI-compliant provider to avoid handling card data directly.
-- **Assumption**: Regulatory integration (Меркурий) will require separate legal review and possibly a data sharing agreement.
+## GAP Registry
+| ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
+|----|-------------|----------------------------|-------|---------------------|--------|-------------------|
+| GAP-INT-001 | Third-party providers maintain backward compatibility for their APIs during MVP period | Low | Backend Team | Фаза 1 (validation) | Open | API versioning approach |
+| GAP-INT-002 | Free tiers of SMS, mapping, and email services sufficient for MVP validation | Low | Infrastructure Team | Фаза 1 (validation) | Open | Service tier selection |
+| GAP-INT-003 | Abstract geocoding service to allow switching between providers without code changes | Low | Backend Team | Фаза 1 (implementation) | Closed | Decision: Yes, via adapter pattern |
+| GAP-INT-004 | Users consent to sharing necessary data for integrations (e.g., phone number for SMS, basic profile for OAuth) | Low | Legal Team | Фаза 1 (validation) | Open | Data consent approach |
+| GAP-INT-005 | Payment gateway integration to be added in Фаза 2 using PCI-compliant provider | Medium | Payments Team | Фаза 2 | Open | Payment provider selection |
+| GAP-INT-006 | Regulatory integration (Меркурий) requires separate legal review and possibly data sharing agreement | High | Legal Team | Фаза 3 | Open | Legal compliance approach |
