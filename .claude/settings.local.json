@@ -9,7 +9,8 @@
       "WebSearch",
       "Bash(git show *)",
       "Read(//tmp/**)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(grep -E \"\\\\.\\(md\\)$\")"
     ]
   }
 }
