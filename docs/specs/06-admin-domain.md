@@ -40,6 +40,56 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Admin actions are fully auditable; personal data handling follows 152-ФЗ; content moderation follows 149-ФЗ (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Interface must be clear for moderators; follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Admin & Moderation Management
+**UC-AD-01:** As a moderator, I want to easily manage users so that I can maintain a safe and compliant platform.
+- Acceptance Criteria:
+  - User management loads in <2s
+  - Search and filter users by role, status, registration date
+  - One-click role changes (user to moderator, moderator to admin, etc.)
+  - Ban/unban users with optional reason and duration
+  - Verify identity with document upload (future enhancement)
+  - Notification system for users when actions are taken against them
+  - Audit trail of all moderation actions for accountability
+
+**UC-AD-02:** As a moderator, I want to efficiently moderate listings so that I can ensure quality, compliance, and safety in the marketplace.
+- Acceptance Criteria:
+  - Moderation queue loads in <2s with clear status indicators (pending, approved, rejected)
+  - Bulk moderation options for similar listings
+  - Clear compliance checklist for listing requirements (species-specific, livestock-specific, pet-specific)
+  - Ability to request additional information from seller before decision
+  - Template comments for common rejection reasons
+  - Escalation path for complex cases to admin review
+  - Statistics on moderation throughput and accuracy
+
+**UC-AD-03:** As an administrator, I want to manage reference data so that I can ensure accuracy and consistency across the platform.
+- Acceptance Criteria:
+  - Reference data management loads in <2s
+  - CRUD operations for species, breeds, cities, listing types, health statuses
+  - Validation rules for reference data (e.g., breed must belong to species)
+  - Bulk import/export of reference data (CSV/JSON)
+  - Versioning and change history for reference data
+  - Notification system for users when reference data changes affect their listings
+
+**UC-AD-04:** As an administrator, I want to monitor system activity and security so that I can detect and respond to potential issues.
+- Acceptance Criteria:
+  - Audit log viewer loads in <2s
+  - Filter and search audit logs by action type, user, date range
+  - Real-time alerts for suspicious activities (multiple failed logins, rapid listing creation)
+  - Export audit logs for external analysis (CSV/JSON)
+  - Dashboard view of key moderation and user metrics
+  - Ability to suspend specific API endpoints or features during maintenance
+
+**UC-AD-05:** As a user concerned about platform safety, I want to understand moderation policies and report issues so that I can contribute to a safe community.
+- Acceptance Criteria:
+  - Access to platform guidelines and community standards
+  - Clear process for reporting inappropriate content or users
+  - Status updates on reported items (under review, action taken, no action)
+  - Protection against retaliation for good-faith reports
+  - Educational resources on recognizing scams and fraudulent listings
+  - Feedback mechanism for users to suggest improvements to moderation
+
 ## Prior Decisions
 - Admin functionality will be accessed via a separate admin panel (initially same WebApp but with role-based access).
 - Moderators are a special role in Identity Domain with permissions to moderate listings and users.

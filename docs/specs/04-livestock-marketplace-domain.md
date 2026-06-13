@@ -52,6 +52,62 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian livestock trading laws and identification requirements (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Marketplace UI follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Livestock Marketplace Management
+**UC-LM-01:** As a farmer or livestock owner, I want to easily create and manage my livestock listings so that I can efficiently sell, breed, or showcase my animals.
+- Acceptance Criteria:
+  - Listing creation form loads in <2s
+  - Species and breed selection uses searchable dropdowns with livestock-specific options
+  - Dynamic form adjusts fields based on selected species (ear tags, passport info, health certificates, etc.)
+  - Clear visual feedback when form is valid/invalid
+  - Success confirmation with listing ID shown immediately
+  - Ability to skip optional fields and return to them later
+  - Map-based location selection with radius search
+  - Photo upload with preview and optimization
+
+**UC-LM-02:** As a livestock buyer or breeder, I want to easily discover livestock that match my criteria so that I can find suitable animals for purchase, breeding, or show efficiently.
+- Acceptance Criteria:
+  - Livestock attributes visible in listing cards (species, breed, age, sex, photos, price, location)
+  - Filtering options prominent and easy to apply (species, breed, age, sex, price, location, listing type)
+  - Map-based search with radius selector (1-100 km)
+  - Search results load quickly (<1s) with infinite scroll
+  - Clear indication of searchable attributes vs. private data
+  - Saved searches for frequently used criteria
+  - Sorting options (newest, price, distance)
+  - Direct contact reveal after moderation (phone, Telegram/VK links)
+
+### Moderation & Quality Assurance
+**UC-LM-03:** As a moderator, I want to efficiently review livestock listings so that I can ensure quality, compliance, and safety in the marketplace.
+- Acceptance Criteria:
+  - Moderation queue loads in <2s with clear status indicators
+  - Listing details show all required livestock attributes for review (ear tag, passport, health certificates)
+  - One-click approval/rejection with optional comments
+  - Bulk moderation options for similar listings
+  - Clear compliance checklist for Russian livestock trading regulations
+  - Notification system for users when listing status changes
+  - Audit trail of moderation actions for accountability
+  - Ability to request additional information from seller
+
+**UC-LM-04:** As a user concerned about privacy and control, I want to manage my livestock listings' visibility and ownership status so that I can protect my information and comply with personal preferences.
+- Acceptance Criteria:
+  - Clear toggle between active/inactive listing states
+  - Visual indication when listing is inactive (grayed out, label)
+  - Simple reactivation process with confirmation
+  - Clear explanation of what happens to listing data when deactivated
+  - Ability to add/remove livestock identification information easily
+  - Control over what personal information is visible post-moderation (phone, social media links)
+  - Easy deletion of completed/expired listings
+
+**UC-LM-05:** As a livestock trader or farmer, I want to track important health and productivity information so that I can make informed decisions about my livestock's care and trading potential.
+- Acceptance Criteria:
+  - Structured input for vaccinations, tests, treatments
+  - Productivity metrics tracking (milk yield, weight gain, offspring count)
+  - Health summary visible at a glance on listing
+  - Integration with animal health records from Animal Domain
+  - Export capability for health and productivity records (future enhancement)
+  - Reminders for upcoming health checks or treatments (future enhancement)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `livestock-marketplace` module

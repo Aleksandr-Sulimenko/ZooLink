@@ -63,6 +63,49 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Follows security testing guidelines; test data handling complies with 152-ФЗ (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Accessibility testing (a11y) deferred but considered in component design (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Testing & Quality Assurance
+**UC-TS-01:** As a developer, I want to write and run tests easily so that I can ensure code quality and catch bugs early.
+- Acceptance Criteria:
+  - Test setup and configuration is well-documented
+  - Test utilities and helpers are available for common tasks
+  - Test commands are simple and fast to run
+  - Test failures provide clear and actionable error messages
+  - Test coverage reports are easy to understand and access
+
+**UC-TS-02:** As a developer, I want to trust that my tests are reliable so that I can confidently refactor and modify code.
+- Acceptance Criteria:
+  - Tests are deterministic and not flaky
+  - Tests isolate the unit under test properly
+  - Test dependencies are well-managed and mocked appropriately
+  - Test data is realistic and covers edge cases
+  - Test cleanup strategies prevent test interference
+
+**UC-TS-03:** As a developer, I want to ensure critical user flows work correctly so that I can prevent regressions in key functionality.
+- Acceptance Criteria:
+  - End-to-end tests cover critical user journeys (registration, listing creation, search, moderation)
+  - E2E tests run reliably in CI/CD environment
+  - E2E tests provide clear screenshots and logs on failure
+  - E2E test data is properly seeded and cleaned up
+  - E2E test suite runs within acceptable time limits
+
+**UC-TS-04:** As a developer, I want to maintain high test coverage so that I can ensure most code paths are tested.
+- Acceptance Criteria:
+  - Backend unit tests achieve >90% coverage for all modules
+  - Frontend unit tests achieve >85% coverage for domain and system layers
+  - Integration tests cover all API endpoints with positive and negative cases
+  - Coverage thresholds are enforced in CI/CD pipeline
+  - Coverage reports show trends over time
+
+**UC-TS-05:** As an architect or tech lead, I want to ensure testing practices are followed so that I can maintain code quality standards.
+- Acceptance Criteria:
+  - Testing guidelines are documented and accessible
+  - Test reviews are part of the code review process
+  - Pre-commit hooks can be configured to run relevant tests
+  - Test documentation includes examples and best practices
+  - Testing contributes to overall maintainability and reliability
+
 ## Prior Decisions
 - **Backend Testing:** 
   - Framework: Jest with supertest for API testing

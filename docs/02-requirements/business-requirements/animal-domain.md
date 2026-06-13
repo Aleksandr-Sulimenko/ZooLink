@@ -193,6 +193,55 @@ sequenceDiagram
     Backend->>Frontend: Returns listings with animal summary (species, breed, age, photo)
 ```
 
+## User Stories
+
+### Animal Management
+**UC-AN-01:** As a pet owner, I want to easily create and manage my animal profiles so that I can showcase my pets for adoption, sale, or breeding purposes.
+- Acceptance Criteria:
+  - Animal creation form loads in <2s
+  - Species and breed selection uses searchable dropdowns
+  - Date of birth input accepts multiple formats (exact date, approximate age)
+  - Clear visual feedback when form is valid/invalid
+  - Success confirmation with animal ID shown immediately
+  - Ability to skip optional fields and return to them later
+
+**UC-AN-02:** As an animal owner, I want to update my animal's information effortlessly so that the profile stays current with life changes.
+- Acceptance Criteria:
+  - One-click editing for all editable fields
+  - Instant preview of changes (nickname, color, photos)
+  - Health records can be added with minimal input (type, date, optional details)
+  - Reproductive data entry guided by species-specific templates
+  - Changes saved automatically or with prominent save button
+  - Edit history visible for audit purposes (future enhancement)
+
+**UC-AN-03:** As a user concerned about privacy and control, I want to manage my animal's visibility and ownership status so that I can protect my pets and comply with personal preferences.
+- Acceptance Criteria:
+  - Clear toggle between active/deactivated states
+  - Visual indication when animal is deactivated (grayed out, label)
+  - Simple reactivation process with confirmation
+  - Ownership transfer workflow (planned for future phases)
+  - Clear explanation of what happens to listings when animal is deactivated
+  - Ability to add/remove microchip/tattoo information easily
+
+**UC-AN-04:** As a breeder or farmer, I want to track important health and reproductive information so that I can make informed decisions about my animals' care and breeding potential.
+- Acceptance Criteria:
+  - Structured input for vaccinations, tests, treatments
+  - Heat cycle tracking with calendar visualization (for applicable species)
+  - Mating records with partner information (when available)
+  - Vaccination expiration reminders (future enhancement)
+  - Health summary visible at a glance on animal profile
+  - Export capability for health records (future enhancement)
+
+### Search & Discovery
+**UC-AN-05:** As a potential buyer or mate seeker, I want to easily discover animals that match my criteria so that I can find suitable pets or breeding partners efficiently.
+- Acceptance Criteria:
+  - Animal attributes visible in listing cards (species, breed, age, sex, photos)
+  - Filtering options prominent and easy to apply
+  - Search results load quickly (<1s) with infinite scroll
+  - Clear indication of searchable attributes vs. private data
+  - Saved searches for frequently used criteria
+  - Sorting options (newest, distance, price relevance)
+
 ## GAP Registry
 | ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |
 |----|-------------|----------------------------|-------|---------------------|--------|-------------------|

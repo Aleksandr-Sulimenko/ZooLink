@@ -52,6 +52,36 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Uses Yandex.Maps API for geocoding as specified in tech stack (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Search radius adjustable via UI with clear distance units (km) (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Geo-Search Functionality
+**UC-GS-01:** As a user looking for animals or listings near me, I want to search within a specific radius so that I can find local opportunities efficiently.
+- Acceptance Criteria:
+  - Search radius adjustable from 1km to 100km via slider or input
+  - Current location detection with user permission
+  - Manual location entry via address or map interaction
+  - Search results show distance from user location
+  - Geo-search completes in <1s for 95% of requests
+  - Ability to combine geo-search with other filters (species, breed, price, etc.)
+  - Clear indication when no results found within radius
+
+**UC-GS-02:** As a user concerned about privacy, I want to control my location sharing so that I can use the platform comfortably while protecting my personal information.
+- Acceptance Criteria:
+  - Explicit permission request for location access
+  - Ability to disable location services and use manual entry only
+  - Location data stored minimally (only latitude/longitude needed for search)
+  - No sharing of exact address with other users
+  - Option to use approximate location (city/region level) for browsing
+  - Clear explanation of how location data is used and stored
+
+**UC-GS-03:** As a power user, I want to save and reuse my favorite locations and search settings so that I can quickly access frequently searched areas.
+- Acceptance Criteria:
+  - Save current location as a favorite with custom name
+  - Quick access to saved locations from search interface
+  - Save search filters combined with location for one-click search
+  - Synchronize saved locations across devices (future enhancement)
+  - Import/export saved locations (future enhancement)
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `geo-search` shared service (could be in `src/lib/` or as a utility)

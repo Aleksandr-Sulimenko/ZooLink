@@ -42,6 +42,54 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Follows security best practices for frontend applications (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Interface must be accessible and usable by non-technical mass market users (pet owners); follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Frontend User Experience
+**UC-FE-01:** As a user, I want the application to load quickly and feel responsive so that I can use the platform without frustration.
+- Acceptance Criteria:
+  - Initial load time < 3s on 3G
+  - Time to interactive < 5s
+  - Smooth transitions and animations
+  - Immediate feedback to user actions (button clicks, form submissions)
+  - Loading indicators for asynchronous operations
+  - Error boundaries to prevent crashes and show user-friendly messages
+
+**UC-FE-02:** As a user, I want the interface to be intuitive and easy to navigate so that I can find what I need without confusion.
+- Acceptance Criteria:
+  - Consistent navigation pattern across the application
+  - Clear visual hierarchy and grouping of related elements
+  - Descriptive labels and placeholders in forms
+  - Breadcrumbs for deep navigation
+  - Search functionality with auto-suggestions where appropriate
+  - Help tooltips for complex features
+
+**UC-FE-03:** As a user, I want the application to be accessible so that I can use it regardless of my abilities or device.
+- Acceptance Criteria:
+  - WCAG 2.1 AA compliance
+  - Keyboard navigable interface
+  - Screen reader friendly labels and landmarks
+  - Sufficient color contrast for text and icons
+  - Responsive design for mobile and tablet devices
+  - Adjustable text sizes and scalable UI
+
+**UC-FE-04:** As a user, I want to feel safe and in control of my personal information so that I can trust the platform with my data.
+- Acceptance Criteria:
+  - Clear privacy policy and terms of service
+  - Minimal data collection and transparent usage
+  - Easy-to-understand permission requests (location, notifications)
+  - Ability to review and delete personal data
+  - Secure handling of authentication tokens and passwords
+  - Visible security indicators (HTTPS, secure badges)
+
+**UC-FE-05:** As a user, I want the application to be pleasant and enjoyable to use so that I return to it regularly.
+- Acceptance Criteria:
+  - Thoughtful micro-interactions and delightful details
+  - Consistent and appealing visual design
+  - Engaging empty states and error messages
+  - Personalization where appropriate (saved searches, favorites)
+  - Offline capability for critical features (future enhancement)
+  - Regular updates and improvements based on user feedback
+
 ## Prior Decisions
 - Technology Stack (ADR 0001): React with TypeScript, Vite, Tailwind CSS, Headless UI.
 - State management: React Context API for simplicity on MVP (may migrate to Zustand if needed).

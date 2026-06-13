@@ -108,6 +108,52 @@ sequenceDiagram
     Backend->>Frontend: Returns new JWT + new refresh token
 ```
 
+## User Stories
+
+### Authentication & Registration
+**UC-ID-01:** As a new user, I want to register quickly using my phone number or social media account so that I can start using the platform immediately without friction.
+- Acceptance Criteria:
+  - Registration form loads in <1s
+  - Phone verification completes within 30 seconds
+  - Social login (Google/Apple/Telegram/VK) requires no more than 2 clicks
+  - Clear progress indicators during verification
+  - Error messages are specific and actionable
+  - Success confirmation shown immediately after verification
+
+**UC-ID-02:** As a returning user, I want to log in seamlessly so that I can access my account with minimal effort.
+- Acceptance Criteria:
+  - Remember me option for trusted devices
+  - Biometric login where available (future enhancement)
+  - Password recovery via SMS/email within 2 minutes
+  - Session persistence across browser restarts (30 days)
+  - Clear indication of authentication status in UI
+
+**UC-ID-03:** As a privacy-conscious user, I want to control what personal information is visible so that I can use the platform comfortably while maintaining my privacy.
+- Acceptance Criteria:
+  - Only minimal required info shown in public profile (name, city, avatar)
+  - Phone number masked (showing last 4 digits only)
+  - Email never displayed publicly
+  - Easy toggle to show/hide social media links after moderation
+  - Clear explanation of what data is stored vs displayed
+
+### Profile Management
+**UC-ID-04:** As an active user, I want to easily update my profile information so that my information stays current and accurate.
+- Acceptance Criteria:
+  - Profile editing accessible from main navigation
+  - Real-time validation of inputs (phone format, name length, etc.)
+  - Instant preview of avatar changes
+  - One-click deactivation/reactivation option
+  - Confirmation dialogs for destructive actions
+  - Success notification after profile updates
+
+**UC-ID-05:** As a user concerned about account security, I want to monitor and control access to my account so that I can prevent unauthorized use.
+- Acceptance Criteria:
+  - Login history showing location/time/device
+  - Active sessions management (terminate specific sessions)
+  - Password change requires current password verification
+  - Security alerts for new device/login attempts
+  - Easy linkage/unlinking of OAuth providers
+
 ## Data Model (Conceptual)
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
