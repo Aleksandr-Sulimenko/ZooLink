@@ -1,7 +1,7 @@
 # Integrations: ZooLink
 
 ## Purpose
-Documents external systems and services that ZooLink integrates with to provide core functionality. This includes both MVP integrations and planned future integrations.
+Documents external systems and services that ZooLink integrates with to provide core functionality. This includes both MVP integrations and planned future integrations. These integrations support the domain-driven design bounded contexts by providing specialized capabilities while maintaining loose coupling between core domains and external systems.
 
 ## MVP Integrations
 These integrations are required for the MVP to function.
