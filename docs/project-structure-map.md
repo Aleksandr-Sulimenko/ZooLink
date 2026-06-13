@@ -1,7 +1,7 @@
 # Project Structure Map (SDD)
 
-**Последнее обновление:** 2026-06-06
-**Версия документа:** 1.1
+**Последнее обновление:** 2026-06-13
+**Версия документа:** 1.2
 **Статус:** Living Document
 
 ## 1. Общая архитектура проекта
@@ -11,27 +11,33 @@ ZooLink — это платформа для связи зоопарков, пр
 Ниже показана рекурсивная структура проекта от корня, исключая служебные каталоги Git и IDE, а также большие бинарные файлы (если они есть). Для читаемости глубина показана с отступами.
 
 ```bash
-/home/asulimenko/Project/ZooLink
-├── .github/
-│   └── workflows/
-│       └── performance-tests.yml
+/home/asulimenko/Project/workspace/ZooLink
 ├── 03-architecture/
-│   └── api-contracts/
-│       ├── admin-api.yaml
-│       ├── animals-api.yaml
-│       ├── auth-api.yaml
-│       ├── branch-api.yaml
-│       ├── listings-api.yaml
-│       ├── matching-api.yaml
-│       └── organization-api.yaml
-├── ANALYSIS_PROFESSIONAL_USERS.md
-├── ANALYSIS_PROFESSIONAL_USERS_RU.md
-├── bottom_part.md
+│   ├── api-contracts/
+│   │   ├── admin-api.yaml
+│   │   ├── animals-api.yaml
+│   │   ├── auth-api.yaml
+│   │   ├── branch-api.yaml
+│   │   ├── listings-api.yaml
+│   │   ├── matching-api.yaml
+│   │   └── organization-api.yaml
+│   ├── containers.md
+│   ├── context.svg
+│   ├── data-model.md
+│   ├── domains-and-bc.md
+│   ├── storage.md
+│   └── system-context.md
 ├── checklists/
 │   ├── ACCURACY_FIX_CHECKLIST.md
 │   ├── API-TECH-STACK-CHECKLIST.md
+│   ├── BUSINESS_ANALYSIS_CHECKLIST.md
 │   ├── DOCUMENTATION_CHECKLIST.md
-│   └── FURTHER_IMPLEMENTATION_CHECKLIST.md
+│   ├── FURTHER_IMPLEMENTATION_CHECKLIST.md
+│   ├── PENDING_DOCUMENTATION_CHECKLIST.md
+│   └── spec_review_checklist.md
+├── checklistsRU/
+│   ├── BUSINESS_ANALYSIS_CHECKLIST.md
+│   └── PENDING_DOCUMENTATION_CHECKLIST.md
 ├── database_schema.sql
 ├── docs/
 │   ├── 00-project-brief.md
@@ -40,7 +46,7 @@ ZooLink — это платформа для связи зоопарков, пр
 │   │   ├── future-features.md
 │   │   ├── mvp-scope.md
 │   │   ├── problem-statement.md
-│   │   └── target-audience.md
+│   │   ├── target-audience.md
 │   ├── 02-requirements/
 │   │   ├── business-requirements/
 │   │   │   ├── admin-domain.md
@@ -56,28 +62,47 @@ ZooLink — это платформа для связи зоопарков, пр
 │   │       ├── performance.md
 │   │       └── security.md
 │   ├── 03-architecture/
+│   │   ├── containers.md
 │   │   ├── context.svg
+│   │   ├── data-model.md
+│   │   ├── domains-and-bc.md
+│   │   ├── storage.md
 │   │   └── system-context.md
 │   ├── 04-decisions/
-│   │   └── 0001-tech-stack.md
+│   │   ├── README.md
+│   │   ├── 0001-tech-stack.md
+│   │   ├── 0002-hard-split-markets.md
+│   │   ├── 0003-pre-moderation-workflow.md
+│   │   ├── 0004-animal-as-aggregate.md
+│   │   ├── 0005-no-chat-mvp.md
+│   │   └── template.md
+│   ├── 05-ui-ux/
+│   │   ├── user-flows.md
+│   │   └── wireframes/
+│   ├── 06-operations/
+│   │   ├── deployment.md
+│   │   └── monitoring.md
+│   ├── localization/
+│   │   ├── approach.md
+│   │   └── migration-summary.md
 │   ├── project-structure-map.md
 │   ├── README.md
-│   └── specs/
-│       ├── 01-identity-domain.md
-│       ├── 02-animal-domain.md
-│       ├── 03-pet-marketplace-domain.md
-│       ├── 04-livestock-marketplace-domain.md
-│       ├── 05-matching-domain.md
-│       ├── 06-admin-domain.md
-│       ├── 07-geo-search-service.md
-│       ├── 08-frontend-architecture.md
-│       ├── 09-testing-strategy.md
-│       ├── 10-implementation-roadmap.md
-│       ├── glossary.md
-│       ├── README.md
-│       ├── security/
-│       │   └── threat-model.md
-│       └── traceability Matrix.md
+│   ├── specs/
+│   │   ├── 01-identity-domain.md
+│   │   ├── 02-animal-domain.md
+│   │   ├── 03-pet-marketplace-domain.md
+│   │   ├── 04-livestock-marketplace-domain.md
+│   │   ├── 05-matching-domain.md
+│   │   ├── 06-admin-domain.md
+│   │   ├── 07-geo-search-service.md
+│   │   ├── 08-frontend-architecture.md
+│   │   ├── 09-testing-strategy.md
+│   │   ├── 10-implementation-roadmap.md
+│   │   ├── glossary.md
+│   │   ├── README.md
+│   │   ├── security/
+│   │   │   └── threat-model.md
+│   │   └── traceability Matrix.md
 ├── docsRU/
 │   ├── 00-project-brief.md
 │   ├── 01-discovery/
@@ -85,7 +110,7 @@ ZooLink — это платформа для связи зоопарков, пр
 │   │   ├── future-features.md
 │   │   ├── mvp-scope.md
 │   │   ├── problem-statement.md
-│   │   └── target-audience.md
+│   │   ├── target-audience.md
 │   ├── 02-requirements/
 │   │   ├── business-requirements/
 │   │   │   ├── admin-domain.md
@@ -98,13 +123,19 @@ ZooLink — это платформа для связи зоопарков, пр
 │   │   ├── integrations.md
 │   │   └── nfr/
 │   │       ├── accessibility.md
-│   │       ├── performance.md
+│   │       += performance.md
 │   │       └── security.md
 │   ├── 03-architecture/
 │   │   ├── context.svg
 │   │   └── system-context.md
 │   ├── 04-decisions/
-│   │   └── 0001-tech-stack.md
+│   │   ├── README.md
+│   │   ├── 0001-tech-stack.md
+│   │   += 0002-hard-split-markets.md
+│   │   += 0003-pre-moderation-workflow.md
+│   │   += 0004-animal-as-aggregate.md
+│   │   += 0005-no-chat-mvp.md
+│   │   └── template.md
 │   ├── README.md
 │   └── specs/
 │       ├── 01-identity-domain.md
@@ -113,31 +144,31 @@ ZooLink — это платформа для связи зоопарков, пр
 │       ├── 04-livestock-marketplace-domain.md
 │       ├── 05-matching-domain.md
 │       ├── 06-admin-domain.md
-│       ├── 07-geo-search-service.md
-│       ├── 08-frontend-architecture.md
-│       ├── 09-testing-strategy.md
-│       ├── 10-implementation-roadmap.md
-│       ├── glossary.md
-│       ├── README.md
-│       ├── security/
+│       += 07-geo-search-service.md
+│       += 08-frontend-architecture.md
+│       += 09-testing-strategy.md
+│       += 10-implementation-roadmap.md
+│       += glossary.md
+│       += README.md
+│       += security/
 │       │   └── threat-model.md
 │       └── traceability Matrix.md
-├── ERD_DESCRIPTION.md
+├── .claude/
+├── .github/
+│   └── workflows/
+│       └── performance-tests.yml
 ├── .idea/
 │   ├── .gitignore
 │   ├── modules.xml
 │   ├── vcs.xml
 │   ├── workspace.xml
 │   └── ZooLink.iml
+├── .skills/
 ├── tests/
 │   └── performance/
-│       # ( директория для скриптов нагрузочного тестирования; в зависимости от потребностей можно добавить файлы )
-├── top28.md
-├── top_part.md
-└── ZooLink_ERD.mmd
+├── ZooLink_ERD.mmd
+└── README.md
 ```
-
-> Примечание: папка `documentation/checklists` была перемещена в корневой `checklists/` и более не используется; оставлена пустой для возможного будущего использования.
 
 ## 3. Детальная карта с описаниями (основной раздел)
 *(Кратко, как требуется в шаблоне SDD; детали см. в полном дереве выше)*
@@ -200,8 +231,7 @@ ZooLink — это платформа для связи зоопарков, пр
 | 2026-05-29 | Добавлена документация по доменам в `docs/specs/` и `docs/02-requirements/` | Уточнение требований и спецификаций по доменам |
 | 2026-05-28 | INITIAL commit с базовой структурой и папкой `03-architecture/` для API-контрактов | Инициализация репозитория проекта |
 | 2026-06-06 | Обновлено дерево структуры проекта, добавлены новые файлы и каталоги (.github/workflows/performance-tests.yml, tests/performance/, обновлённые yaml‑контракты и glossary) | Соответствие актуальному состоянию репозитория после выполнения рекомендаций senior‑business‑analyst |
-
-> `project-structure-map.md` обновлён.
+| 2026-06-13 | Добавлен новый чек-лист spec_review_checklist.md и обновлены спецификации с user stories | Улучшение качества спецификаций и добаление пользовательских историй для фокуса на UX |
 
 ## 8. Как поддерживать карту структуры в актуальном состоянии
 Чтобы гарантировать, что данная карта всегда отражает текущее состояние репозитория, предлагается следовать одному из следующих лёгких подходов:
@@ -212,4 +242,4 @@ ZooLink — это платформа для связи зоопарков, пр
 
 Выбранный механизм можно оформить как отдельный скрипт `scripts/update-structure-map.sh`, который использует команду `find . -type f -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./.*" | sort` и формирует вывод в стиле дерева, заменяя соответствующий раздел в файле.
 
-Эти шаги помогут поддерживать живую документацию в синхроне с кодовой базой без значительных нагрузок на разработчиков.
+Эти шаги помогут сохранять живую документацию в синхроне с кодовой базой без значительных нагрузок на разработчиков.
