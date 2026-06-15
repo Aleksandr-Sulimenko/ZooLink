@@ -9,55 +9,55 @@ graph TD
     %% Core Components
     subgraph Core_Components
         direction TB
-        Auth_Service[Authentication Service<br/>(JWT, OAuth, SMS)]
-        User_Profile[User Profile Service<br/>(CRUD, preferences)]
-        Animal_Service[Animal Service<br/>(Lifecycle, ownership)]
-        Listing_Service[Listing Service<br/>(CRUD, search, moderation)]
-        Moderation_Service[Moderation Service<br/>(Queue, decisions)]
-        Matching_Service[Matching Service<br/>(Compatibility, suggestions)]
-        Notification_Service[Notification Service<br/>(Email, SMS, push)]
-        Geo_Service[Geo Service<br/>(Spatial search, distance)]
-        Admin_Service[Admin Service<br/>(Config, reference data)]
-        Payment_Service[Payment Service<br/>(Future: transactions)]
+        Auth_Service["Authentication Service<br/>(JWT, OAuth, SMS)"]
+        User_Profile["User Profile Service<br/>(CRUD, preferences)"]
+        Animal_Service["Animal Service<br/>(Lifecycle, ownership)"]
+        Listing_Service["Listing Service<br/>(CRUD, search, moderation)"]
+        Moderation_Service["Moderation Service<br/>(Queue, decisions)"]
+        Matching_Service["Matching Service<br/>(Compatibility, suggestions)"]
+        Notification_Service["Notification Service<br/>(Email, SMS, push)"]
+        Geo_Service["Geo Service<br/>(Spatial search, distance)"]
+        Admin_Service["Admin Service<br/>(Config, reference data)"]
+        Payment_Service["Payment Service<br/>(Future: transactions)"]
     end
 
     %% Supporting Services
     subgraph Supporting_Services
         direction TB
-        APIGateway[API Gateway<br/>(Routing, auth, rate limit)]
-        Web_Gateway[Web Gateway<br/>(SSR, asset serving)]
-        File_Storage[File Storage Service<br/>(S3, CDN)]
-        Search_Engine[Search Engine<br/>(Elasticsearch)]
-        Cache_Layer[Cache Layer<br/>(Redis)]
-        Event_Bus[Event Bus<br/>(Pub/Sub, messaging)]
-        Monitoring[Monitoring & Observability<br/>(Metrics, logs, traces)]
+        APIGateway["API Gateway<br/>(Routing, auth, rate limit)"]
+        Web_Gateway["Web Gateway<br/>(SSR, asset serving)"]
+        File_Storage["File Storage Service<br/>(S3, CDN)"]
+        Search_Engine["Search Engine<br/>(Elasticsearch)"]
+        Cache_Layer["Cache Layer<br/>(Redis)"]
+        Event_Bus["Event Bus<br/>(Pub/Sub, messaging)"]
+        Monitoring["Monitoring & Observability<br/>(Metrics, logs, traces)"]
     end
 
     %% Data Layer
     subgraph Data_Layer
         direction TB
-        Primary_DB[(PostgreSQL<br/>Primary)]
-        Replica_DB[(PostgreSQL<br/>Replicas)]
-        Archive_DB[(Object Storage<br/>Backups)]
+        Primary_DB[("PostgreSQL<br/>Primary")]
+        Replica_DB[("PostgreSQL<br/>Replicas")]
+        Archive_DB[("Object Storage<br/>Backups")]
     end
 
     %% External Systems
     subgraph External_Systems
         direction TB
-        SMS_Gateway[SMS Provider<br/>(Twilio)]
-        Email_Service[Email Provider<br/>(SendGrid)]
-        Maps_Service[Maps Provider<br/>(Yandex.Maps)]
-        OAuth_Providers[OAuth Providers<br/>(Google, Apple, etc.)]
-        Payment_Gateways[Payment Gateways<br/>(Stripe, PayPal)]
+        SMS_Gateway["SMS Provider<br/>(Twilio)"]
+        Email_Service["Email Provider<br/>(SendGrid)"]
+        Maps_Service["Maps Provider<br/>(Yandex.Maps)"]
+        OAuth_Providers["OAuth Providers<br/>(Google, Apple, etc.)"]
+        Payment_Gateways["Payment Gateways<br/>(Stripe, PayPal)"]
     end
 
     %% User Interfaces
     subgraph User_Interfaces
         direction TB
-        Web_App[Web Application<br/>(SPA/PWA)]
-        Mobile_App[Mobile Applications<br/>(Future: iOS/Android)]
-        Admin_Panel[Admin Panel<br/>(Dashboard, management)]
-        Moderator_UI[Moderator Interface<br/>(Queue review)]
+        Web_App["Web Application<br/>(SPA/PWA)"]
+        Mobile_App["Mobile Applications<br/>(Future: iOS/Android)"]
+        Admin_Panel["Admin Panel<br/>(Dashboard, management)"]
+        Moderator_UI["Moderator Interface<br/>(Queue review)"]
     end
 
     %% Relationships

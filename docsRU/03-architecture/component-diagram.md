@@ -5,69 +5,67 @@
 
 ## Описание диаграммы
 ```mermaid
-graph TD
+flowchart TD
     %% Основные компоненты
     subgraph Core_Components
         direction TB
-        Auth_Service[Сервис аутентификации<br/>(JWT, OAuth, SMS)]
-        User_Profile[Сервис профиля пользователя<br/>(CRUD, предпочтения)]
-        Animal_Service[Сервис животного<br/>(Жизненный цикл, право собственности)]
-        Listing_Service[Сервис объявлений<br/>(CRUD, поиск, модерация)]
-        Moderation_Service[Сервис модерации<br/>(Очередь, решения)]
-        Matching_Service[Сервис подбора<br/>(Совместимость, предложения)]
-        Notification_Service[Сервис уведомлений<br/>(Email, SMS, push)]
-        Geo_Service[Геосервис<br/>(Пространственный поиск, расстояние)]
-        Admin_Service[Административный сервис<br/>(Конфигурация, справочные данные)]
-        Payment_Service[Сервис платежей<br/>(Будущее: транзакции)]
+        Auth_Service["Сервис аутентификации<br/>(JWT, OAuth, SMS)"]
+        User_Profile["Сервис профиля пользователя<br/>(CRUD, предпочтения)"]
+        Animal_Service["Сервис животного<br/>(Жизненный цикл, право собственности)"]
+        Listing_Service["Сервис объявлений<br/>(CRUD, поиск, модерация)"]
+        Moderation_Service["Сервис модерации<br/>(Очередь, решения)"]
+        Matching_Service["Сервис подбора<br/>(Совместимость, предложения)"]
+        Notification_Service["Сервис уведомлений<br/>(Email, SMS, push)"]
+        Geo_Service["Геосервис<br/>(Пространственный поиск, расстояние)"]
+        Admin_Service["Административный сервис<br/>(Конфигурация, справочные данные)"]
+        Payment_Service["Сервис платежей<br/>(Будущее: транзакции)"]
     end
 
     %% Вспомогательные сервисы
     subgraph Supporting_Services
         direction TB
-        APIGateway[Шлюз API<br/>(Маршрутизация, аутентификация, ограничение скорости)]
-        Web_Gateway[Веб-шлюз<br/>(SSR, обслуживание активов)]
-        File_Storage[Сервис хранения файлов<br/>(S3, CDN)]
-        Search_Engine[Поисковый движок<br/>(Elasticsearch)]
-        Cache_Layer[Слой кеширования<br/>(Redis)]
-        Event_Bus[Шина событий<br/>(Pub/Sub, обмен сообщениями)]
-        Monitoring[Мониторинг и наблюдаемость<br/>(Метрики, логи, трассировки)]
+        APIGateway["Шлюз API<br/>(Маршрутизация, аутентификация, ограничение скорости)"]
+        Web_Gateway["Веб-шлюз<br/>(SSR, обслуживание активов)"]
+        File_Storage["Сервис хранения файлов<br/>(S3, CDN)"]
+        Search_Engine["Поисковый движок<br/>(Elasticsearch)"]
+        Cache_Layer["Слой кеширования<br/>(Redis)"]
+        Event_Bus["Шина событий<br/>(Pub/Sub, обмен сообщениями)"]
+        Monitoring["Мониторинг и наблюдаемость<br/>(Метрики, логи, трассировки)"]
     end
 
     %% Слой данных
     subgraph Data_Layer
         direction TB
-        Primary_DB[(PostgreSQL<br/>Основная)]
-        Replica_DB[(PostgreSQL<br/>Реплика)]
-        Archive_DB[(Объектное хранилище<br/>Резервные копии)]
+        Primary_DB[("PostgreSQL<br/>Основная")]
+        Replica_DB[("PostgreSQL<br/>Реплика")]
+        Archive_DB[("Объектное хранилище<br/>Резервные копии")]
     end
 
     %% Внешние системы
     subgraph External_Systems
         direction TB
-        SMS_Gateway[SMS-провайдер<br/>(Twilio)]
-        Email_Service[Email-провайдер<br/>(SendGrid)]
-        Maps_Service[Провайдер карт<br/>(Yandex.Maps)]
-        OAuth_Providers[Провайдеры OAuth<br/>(Google, Apple, и др.)]
-        Payment_Gateways[Платежные шлюзы<br/>(Stripe, PayPal)]
+        SMS_Gateway["SMS-провайдер<br/>(Twilio)"]
+        Email_Service["Email-провайдер<br/>(SendGrid)"]
+        Maps_Service["Провайдер карт<br/>(Yandex.Maps)"]
+        OAuth_Providers["Провайдеры OAuth<br/>(Google, Apple, и др.)"]
+        Payment_Gateways["Платежные шлюзы<br/>(Stripe, PayPal)"]
     end
 
     %% Пользовательские интерфейсы
     subgraph User_Interfaces
         direction TB
-        Web_App[Веб-приложение<br/>(SPA/PWA)]
-        Mobile_App[Мобильные приложения<br/>(Будущее: iOS/Android)]
-        Admin_Panel[Панель администратора<br/>(Дашборд, управление)]
-        Moderator_UI[Интерфейс модератора<br/>(Осмотр очереди)]
+        Web_App["Веб-приложение<br/>(SPA/PWA)"]
+        Mobile_App["Мобильные приложения<br/>(Будущее: iOS/Android)"]
+        Admin_Panel["Панель администратора<br/>(Дашборд, управление)"]
+        Moderator_UI["Интерфейс модератора<br/>(Осмотр очереди)"]
     end
 
     %% Отношения
-    %% Пользовательские интерфейсы к шлюзам
     Web_App --> APIGateway
     Mobile_App --> APIGateway
     Admin_Panel --> APIGateway
     Moderator_UI --> APIGateway
 
-    %% Шлюзы к сервисам
     APIGateway --> Auth_Service
     APIGateway --> User_Profile
     APIGateway --> Animal_Service
@@ -79,7 +77,6 @@ graph TD
     APIGateway --> Admin_Service
     APIGateway --> Payment_Service
 
-    %% Зависимости сервисов
     Auth_Service --> User_Profile
     Listing_Service --> Animal_Service
     Listing_Service --> Moderation_Service
@@ -89,7 +86,6 @@ graph TD
     Geo_Service --> Animal_Service
     Geo_Service --> Listing_Service
 
-    %% Сервисы к вспомогательной инфраструктуре
     Auth_Service --> Cache_Layer
     User_Profile --> Cache_Layer
     Animal_Service --> Cache_Layer
@@ -111,12 +107,10 @@ graph TD
     Listing_Service --> Search_Engine
     Animal_Service --> Search_Engine
 
-    %% Сервисы к хранению файлов
     Listing_Service --> File_Storage
     User_Profile --> File_Storage
     Animal_Service --> File_Storage
 
-    %% Слой данных
     Auth_Service --> Primary_DB
     User_Profile --> Primary_DB
     Animal_Service --> Primary_DB
@@ -128,11 +122,9 @@ graph TD
     Admin_Service --> Primary_DB
     Payment_Service --> Primary_DB
 
-    %% Репликация и резервное копирование
     Primary_DB --> Replica_DB
     Primary_DB --> Archive_DB
 
-    %% Внешние интеграции
     Auth_Service --> SMS_Gateway
     Auth_Service --> OAuth_Providers
     Notification_Service --> SMS_Gateway
@@ -141,7 +133,6 @@ graph TD
     Payment_Service --> Payment_Gateways
     File_Storage --> Maps_Service
 
-    %% Мониторинг
     Monitoring .-> Auth_Service
     Monitoring .-> User_Profile
     Monitoring .-> Animal_Service
