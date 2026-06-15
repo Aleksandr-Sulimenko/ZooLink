@@ -1,0 +1,615 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Listings API
+  version: 1.0.0
+  description: API for managing listings (sale, breeding, show, adoption) in ZooLink.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /listings:
+    get:
+      summary: List listings with filtering
+      operationId: listListings
+      parameters:
+        - in: query
+          name: animal_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by animal ID
+        - in: query
+          name: seller_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by seller ID
+        - in: query
+          name: organization_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by organization ID (for organizational listings)
+        - in: query
+          name: branch_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by branch ID
+        - in: query
+          name: listing_type
+          schema:
+            type: string
+            enum: [sale, breeding, show, adoption, stud_service]
+          description: Filter by listing type
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+          description: Filter by active status
+        - in: query
+          name: price_min
+          schema:
+            type: integer
+          description: Minimum price in cents
+        - in: query
+          name: price_max
+          schema:
+            type: integer
+          description: Maximum price in cents
+        - in: query
+          name: currency
+          schema:
+            type: string
+            maxLength: 3
+          description: Currency code (e.g., RUB, USD)
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number for pagination
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of items per page
+      responses:
+        '200':
+          description: Paginated list of listings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Listing'
+                  total:
+                    type: integer
+                    description: Total number of listings
+                  page:
+                    type: integer
+                    description: Current page number
+                  limit:
+                    type: integer
+                    description: Items per page
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    post:
+      summary: Create a new listing
+      operationId: createListing
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListingCreate'
+      responses:
+        '201':
+          description: Listing created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Listing'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions or validation fails)
+  /listings/{id}:
+    get:
+      summary: Get listing by ID
+      operationId: getListingById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Listing details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Listing'
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    patch:
+      summary: Update listing
+      operationId: updateListing
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListingUpdate'
+      responses:
+        '200':
+          description: Listing updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Listing'
+        '400':
+          description: Bad request (validation error)
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+    delete:
+      summary: Delete listing (soft delete via is_active=false or actual delete?)
+      operationId: deleteListing
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Listing deleted successfully
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /listings/{id}/photos:
+    get:
+      summary: Get photos for a listing
+      operationId: getListingPhotos
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Listing photos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ListingPhoto'
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    post:
+      summary: Add a photo to a listing
+      operationId: createListingPhoto
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Listing ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListingPhotoCreate'
+      responses:
+        '201':
+          description: Photo added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListingPhoto'
+        '400':
+          description: Bad request (validation error)
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /listings/{id}/photos/{photoId}:
+    delete:
+      summary: Remove a photo from a listing
+      operationId: deleteListingPhoto
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Listing ID
+        - in: path
+          name: photoId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Photo ID
+      responses:
+        '204':
+          description: Photo removed successfully
+        '404':
+          description: Listing or photo not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /listings/{id}/conversations:
+    get:
+      summary: Get conversations for a listing
+      operationId: getListingConversations
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Conversations for the listing
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Conversation'
+        '404':
+          description: Listing not found
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Listing:
+      type: object
+      required:
+        - id
+        - animal_id
+        - seller_id
+        - listing_type
+        - title
+        - is_active
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        animal_id:
+          type: string
+          format: uuid
+          description: Foreign key to animal
+        seller_id:
+          type: string
+          format: uuid
+          description: Foreign key to user (seller)
+        organization_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to organization (nullable for personal listings)
+        branch_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to branch (nullable for personal listings or when not specified)
+        metadata:
+          type: object
+          description: JSONB field for extensibility (social media links, video URL placeholder, etc.)
+          default: {}
+        listing_type:
+          type: string
+          enum: [sale, breeding, show, adoption, stud_service]
+          description: Type of listing
+        title_localized:
+          type: object
+          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 255
+        description_localized:
+          type: object
+          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
+        price_cents:
+          type: integer
+          nullable: true
+          description: Price in cents (nullable for non-price listings e.g., breeding)
+        currency:
+          type: string
+          maxLength: 3
+          default: RUB
+          description: Currency code (ISO 4217)
+        quantity:
+          type: integer
+          default: 1
+          description: Quantity (number of items/animals)
+        location_point:
+          type: object
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
+          nullable: true
+        search_radius_m:
+          type: integer
+          nullable: true
+          description: Search radius in meters for geo-search
+        is_active:
+          type: boolean
+          description: Active status
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration date/time for the listing
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp
+    ListingCreate:
+      type: object
+      required:
+        - animal_id
+        - seller_id
+        - listing_type
+        - title
+      properties:
+        animal_id:
+          type: string
+          format: uuid
+          description: Foreign key to animal
+        seller_id:
+          type: string
+          format: uuid
+          description: Foreign key to user (seller)
+        organization_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to organization (nullable for personal listings)
+        branch_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Foreign key to branch (nullable for personal listings or when not specified)
+        metadata:
+          type: object
+          description: JSONB field for extensibility (social media links, video URL placeholder, etc.)
+          default: {}
+        listing_type:
+          type: string
+          enum: [sale, breeding, show, adoption, stud_service]
+          description: Type of listing
+        title_localized:
+          type: object
+          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          additionalProperties:
+            type: string
+            maxLength: 255
+        description_localized:
+          type: object
+          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          additionalProperties:
+            type: string
+        price_cents:
+          type: integer
+          nullable: true
+          description: Price in cents (nullable for non-price listings e.g., breeding)
+        currency:
+          type: string
+          maxLength: 3
+          default: RUB
+          description: Currency code (ISO 4217)
+        quantity:
+          type: integer
+          default: 1
+          description: Quantity (number of items/animals)
+        location_point:
+          type: object
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
+          nullable: true
+        search_radius_m:
+          type: integer
+          nullable: true
+          description: Search radius in meters for geo-search
+        is_active:
+          type: boolean
+          description: Active status
+          default: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration date/time for the listing
+    ListingUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 255
+          description: Listing title
+        description:
+          type: string
+          description: Listing description
+        price_cents:
+          type: integer
+          nullable: true
+          description: Price in cents (nullable for non-price listings e.g., breeding)
+        currency:
+          type: string
+          maxLength: 3
+          description: Currency code (ISO 4217)
+        quantity:
+          type: integer
+          description: Quantity (number of items/animals)
+        location_point:
+          type: object
+          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
+          nullable: true
+        search_radius_m:
+          type: integer
+          nullable: true
+          description: Search radius in meters for geo-search
+        is_active:
+          type: boolean
+          description: Active status
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration date/time for the listing
+        metadata:
+          type: object
+          description: JSONB field for extensibility (social media links, video URL placeholder, etc.)
+    ListingPhoto:
+      type: object
+      required:
+        - id
+        - listing_id
+        - url
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        listing_id:
+          type: string
+          format: uuid
+          description: Foreign key to listing
+        url:
+          type: string
+          format: uri
+          description: Photo URL
+        order_index:
+          type: integer
+          default: 0
+          description: Display order index
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+    ListingPhotoCreate:
+      type: object
+      required:
+        - listing_id
+        - url
+      properties:
+        listing_id:
+          type: string
+          format: uuid
+          description: Foreign key to listing
+        url:
+          type: string
+          format: uri
+          description: Photo URL
+        order_index:
+          type: integer
+          default: 0
+          description: Display order index
+    Conversation:
+      type: object
+      required:
+        - id
+        - listing_id
+        - participant_a_id
+        - participant_b_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        listing_id:
+          type: string
+          format: uuid
+          description: Foreign key to listing
+        participant_a_id:
+          type: string
+          format: uuid
+          description: Foreign key to user (participant A)
+        participant_b_id:
+          type: string
+          format: uuid
+          description: Foreign key to user (participant B)
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp

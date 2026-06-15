@@ -1,0 +1,769 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Matching API
+  version: 1.0.0
+  description: API for finding compatible mates for breeding purposes in ZooLink.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /matching/new-target/{animal_id}:
+    get:
+      summary: Get targeting animal verification for matching
+      operationId: getMatchingTarget
+      parameters:
+        - in: path
+          name: animal_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the animal for which to find matches
+        - in: query
+          name: includeSuggestions
+          schema:
+            type: boolean
+            default: false
+          description: Whether to include initial match suggestions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Animal verification and optional initial matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchingTargetResponse'
+        '400':
+          description: Bad request (invalid animal ID)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions or animal not eligible for matching)
+        '404':
+          description: Animal not found
+  /matching/find-matches:
+    post:
+      summary: Find matches for target animal with preferences
+      operationId: findMatches
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindMatchesRequest'
+      responses:
+        '200':
+          description: List of potential matches with scores and explanations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindMatchesResponse'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+        '429':
+          description: Too Many Requests (rate limit exceeded)
+  /matching/{id}:
+    get:
+      summary: Get specific match details by ID
+      operationId: getMatchById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Match ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Match details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchDetails'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+        '404':
+          description: Match not found
+  /matching/history:
+    get:
+      summary: Get user's past match views/engagements
+      operationId: getMatchingHistory
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of items to return
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of items to skip
+        - in: query
+          name: minScore
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100
+          description: Minimum compatibility score filter
+        - in: query
+          name: fromDate
+          schema:
+            type: string
+            format: date
+          description: Start date for filtering (inclusive)
+        - in: query
+          name: toDate
+          schema:
+            type: string
+            format: date
+          description: End date for filtering (inclusive)
+      responses:
+        '200':
+          description: Paginated matching history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchingHistoryResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+  /matching/{id}/feedback:
+    post:
+      summary: Submit feedback on match quality
+      operationId: submitMatchFeedback
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Match ID
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchFeedbackRequest'
+      responses:
+        '200':
+          description: Feedback submitted successfully
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient permissions)
+        '404':
+          description: Match not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    MatchingTargetResponse:
+      type: object
+      required:
+        - animal
+        - eligibleForMatching
+      properties:
+        animal:
+          $ref: '#/components/schemas/AnimalSummary'
+        eligibleForMatching:
+          type: boolean
+          description: Whether animal is eligible for matching (active, mating age, etc.)
+        ineligibilityReason:
+          type: string
+          nullable: true
+          description: Reason if not eligible for matching
+        species:
+          $ref: '#/components/schemas/SpeciesSummary'
+        breed:
+          $ref: '#/components/schemas/BreedSummary'
+        initialMatches:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSummary'
+          default: []
+          description: Initial match suggestions (if requested and available)
+    AnimalSummary:
+      type: object
+      required:
+        - id
+        - speciesId
+        - sex
+        - dateOfBirth
+        - isActive
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Animal ID
+        speciesId:
+          type: string
+          format: uuid
+          description: Species reference
+        breedId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Breed reference (null if custom/other)
+        breedText:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Custom breed text if breedId is null
+        nickname:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal nickname/display name
+        sex:
+          type: string
+          enum: [Male, Female]
+          description: Animal sex
+        dateOfBirth:
+          type: string
+          format: date
+          description: Animal date of birth
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Animal color/coat pattern
+        microchipId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal microchip ID
+        tattooBrandId:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Animal tattoo/brand ID (for livestock)
+        isActive:
+          type: boolean
+          description: Animal active status
+        ownedSince:
+          type: string
+          format: date
+          nullable: true
+          description: Date when current owner acquired the animal
+        motherId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to mother for pedigree
+        fatherId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to father for pedigree
+        healthRecords:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of health record (vaccination, test, etc.)
+              detail:
+                type: string
+                description: Detail of health record
+              date:
+                type: string
+                format: date
+                description: Date of health event
+              provider:
+                type: string
+                description: Provider/veterinary clinic
+          description: Animal health records
+          default: []
+        reproductiveData:
+          type: array
+          items:
+            type: object
+            properties:
+              event:
+                type: string
+                description: Event type (heat_start, mating, etc.)
+              date:
+                type: string
+                format: date
+                description: Date of event
+              partnerId:
+                type: string
+                format: uuid
+                nullable: true
+                description: Partner animal ID (if applicable)
+          description: Animal reproductive data (for females)
+          default: []
+        photos:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Animal photo URLs
+          default: []
+    SpeciesSummary:
+      type: object
+      required:
+        - id
+        - code
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Species ID
+        code:
+          type: string
+          maxLength: 50
+          description: Species code (e.g., 'dog', 'cattle')
+        name:
+          type: string
+          maxLength: 100
+          description: Species name (Russian)
+        nameEn:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Species name (English)
+    BreedSummary:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - speciesId
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Breed ID
+        code:
+          type: string
+          maxLength: 50
+          description: Breed code
+        name:
+          type: string
+          maxLength: 100
+          description: Breed name (Russian)
+        nameEn:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Breed name (English)
+        speciesId:
+          type: string
+          format: uuid
+          description: Reference to species
+    FindMatchesRequest:
+      type: object
+      required:
+        - targetAnimalId
+      properties:
+        targetAnimalId:
+          type: string
+          format: uuid
+          description: ID of the animal for which to find matches
+        maxDistanceKm:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+          description: Maximum distance in kilometers for search
+        breedingGoals:
+          type: array
+          items:
+            type: string
+          description: Specific breeding goals to prioritize (e.g., ['milk_production', 'temperament'])
+        minScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 60
+          description: Minimum compatibility score threshold (0-100)
+        maxResults:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+          description: Maximum number of results to return
+        excludePreviouslyMatched:
+          type: boolean
+          default: true
+          description: Exclude animals user has previously matched with
+        includeDetails:
+          type: boolean
+          default: false
+          description: Include full animal details in results (for performance, default false)
+    FindMatchesResponse:
+      type: object
+      required:
+        - matches
+        - searchParameters
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSummary'
+          description: List of potential matches sorted by compatibility score
+        searchParameters:
+          $ref: '#/components/schemas/SearchParametersUsed'
+        totalFound:
+          type: integer
+          description: Total number of matches found (before pagination/limits)
+        searchDurationMs:
+          type: integer
+          description: Time taken to compute matches in milliseconds
+    SearchParametersUsed:
+      type: object
+      properties:
+        targetAnimalId:
+          type: string
+          format: uuid
+        maxDistanceKm:
+          type: integer
+        breedingGoals:
+          type: array
+          items:
+            type: string
+        minScore:
+          type: integer
+        maxResults:
+          type: integer
+        excludePreviouslyMatched:
+          type: boolean
+    MatchSummary:
+      type: object
+      required:
+        - id
+        - targetAnimalId
+        - candidateAnimalId
+        - compatibilityScore
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Match instance ID
+        targetAnimalId:
+          type: string
+          format: uuid
+          description: Target animal ID
+        candidateAnimalId:
+          type: string
+          format: uuid
+          description: Candidate animal ID
+        compatibilityScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Overall compatibility score (0-100)
+        scoreBreakdown:
+          $ref: '#/components/schemas/ScoreBreakdown'
+          description: Detailed score breakdown by factor category
+        matchReasons:
+          type: array
+          items:
+            type: string
+          maxItems: 5
+          description: Top positive factors contributing to match
+        matchConcerns:
+          type: array
+          items:
+            type: string
+          maxItems: 3
+          description: Potential concerns or negative factors
+        candidateSummary:
+          $ref: '#/components/schemas/AnimalSummary'
+          description: Summary of candidate animal (always included)
+        targetSummary:
+          type: string
+          format: uuid
+          description: Reference to target animal (to avoid duplication)
+        createdAt:
+          type: string
+          format: date-time
+          description: When match was generated
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When match becomes stale (default 7 days from creation)
+    ScoreBreakdown:
+      type: object
+      properties:
+        geneticScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Genetic compatibility sub-score (0-100)
+        healthScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Health compatibility sub-score (0-100)
+        reproductiveScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Reproductive timing sub-score (0-100)
+        productionScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Production/conformation sub-score (0-100)
+        logisticsScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Location/logistics sub-score (0-100)
+        weightsApplied:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 1
+          description: Weight applied to each factor category (sums to 1.0)
+    MatchDetails:
+      type: object
+      required:
+        - id
+        - targetAnimalId
+        - candidateAnimalId
+        - compatibilityScore
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Match instance ID
+        targetAnimalId:
+          type: string
+          format: uuid
+          description: Target animal ID
+        candidateAnimalId:
+          type: string
+          format: uuid
+          description: Candidate animal ID
+        compatibilityScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Overall compatibility score (0-100)
+        scoreBreakdown:
+          $ref: '#/components/schemas/ScoreBreakdown'
+          description: Detailed score breakdown by factor category
+        matchReasons:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+          description: All positive factors contributing to match
+        matchConcerns:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+          description: All potential concerns or negative factors
+        targetAnimal:
+          $ref: '#/components/schemas/AnimalSummary'
+          description: Full target animal details
+        candidateAnimal:
+          $ref: '#/components/schemas/AnimalSummary'
+          description: Full candidate animal details
+        targetListings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ListingReference'
+          description: Active MATING/STUD_SERVICE listings for target animal
+          default: []
+        candidateListings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ListingReference'
+          description: Active MATING/STUD_SERVICE listings for candidate animal
+          default: []
+        createdAt:
+          type: string
+          format: date-time
+          description: When match was generated
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When match becomes stale (default 7 days from creation)
+        metadata:
+          type: object
+          description: Species-specific or experimental data
+          additionalProperties: true
+    ListingReference:
+      type: object
+      required:
+        - id
+        - listingType
+        - title
+        - priceCents
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Listing ID
+        listingType:
+          type: string
+          enum: [sale, breeding, show, adoption, stud_service]
+          description: Type of listing
+        title:
+          type: string
+          maxLength: 255
+          description: Listing title
+        priceCents:
+          type: integer
+          nullable: true
+          description: Price in cents (null for non-price listings)
+        currency:
+          type: string
+          maxLength: 3
+          default: RUB
+          description: Currency code
+        quantity:
+          type: integer
+          default: 1
+          description: Quantity
+        isActive:
+          type: boolean
+          description: Listing active status
+        createdAt:
+          type: string
+          format: date-time
+          description: Listing creation timestamp
+    MatchingHistoryResponse:
+      type: object
+      required:
+        - history
+        - limit
+        - offset
+      properties:
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryEntry'
+          description: Array of matching history entries
+        limit:
+          type: integer
+          description: Limit parameter used for pagination
+        offset:
+          type: integer
+          description: Offset parameter used for pagination
+        total:
+          type: integer
+          description: Total number of history entries (before pagination)
+        hasMore:
+          type: boolean
+          description: Whether there are more entries available
+    HistoryEntry:
+      type: object
+      required:
+        - id
+        - targetAnimalId
+        - candidateAnimalId
+        - compatibilityScore
+        - actionType
+        - timestamp
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: History entry ID
+        targetAnimalId:
+          type: string
+          format: uuid
+          description: Target animal ID
+        candidateAnimalId:
+          type: string
+          format: uuid
+          description: Candidate animal ID
+        compatibilityScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: Compatibility score for this match (if applicable)
+        actionType:
+          type: string
+          enum: [viewed, engaged, contacted, feedback]
+          description: Type of user action with this match
+        timestamp:
+          type: string
+          format: date-time
+          description: When the action occurred
+        userNotes:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: User notes or feedback (if actionType is 'feedback')
+        matchId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to match record (if applicable)
+    MatchFeedbackRequest:
+      type: object
+      required:
+        - rating
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: User rating of match quality (1-5 stars)
+        isUseful:
+          type: boolean
+          description: Whether user found the match useful
+        feedbackText:
+          type: string
+          maxLength: 1000
+          nullable: true
+          description: Detailed feedback on why match was useful/not useful
+        wouldRecommend:
+          type: boolean
+          nullable: true
+          description: Whether user would recommend this match to others
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+          description: Tags for categorizing feedback (e.g., ['accurate_genetics', 'poor_location'])
