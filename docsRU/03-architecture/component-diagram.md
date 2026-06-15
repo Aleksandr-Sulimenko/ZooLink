@@ -5,8 +5,8 @@
 
 ## Описание диаграммы
 ```mermaid
-flowchart TD
-    %% Основные компоненты
+graph TD
+    %% Core Components
     subgraph Core_Components
         direction TB
         Auth_Service["Сервис аутентификации<br/>(JWT, OAuth, SMS)"]
@@ -21,7 +21,7 @@ flowchart TD
         Payment_Service["Сервис платежей<br/>(Будущее: транзакции)"]
     end
 
-    %% Вспомогательные сервисы
+    %% Supporting Services
     subgraph Supporting_Services
         direction TB
         APIGateway["Шлюз API<br/>(Маршрутизация, аутентификация, ограничение скорости)"]
@@ -33,7 +33,7 @@ flowchart TD
         Monitoring["Мониторинг и наблюдаемость<br/>(Метрики, логи, трассировки)"]
     end
 
-    %% Слой данных
+    %% Data Layer
     subgraph Data_Layer
         direction TB
         Primary_DB[("PostgreSQL<br/>Основная")]
@@ -41,7 +41,7 @@ flowchart TD
         Archive_DB[("Объектное хранилище<br/>Резервные копии")]
     end
 
-    %% Внешние системы
+    %% External Systems
     subgraph External_Systems
         direction TB
         SMS_Gateway["SMS-провайдер<br/>(Twilio)"]
@@ -51,7 +51,7 @@ flowchart TD
         Payment_Gateways["Платежные шлюзы<br/>(Stripe, PayPal)"]
     end
 
-    %% Пользовательские интерфейсы
+    %% User Interfaces
     subgraph User_Interfaces
         direction TB
         Web_App["Веб-приложение<br/>(SPA/PWA)"]
@@ -60,12 +60,14 @@ flowchart TD
         Moderator_UI["Интерфейс модератора<br/>(Осмотр очереди)"]
     end
 
-    %% Отношения
+    %% Relationships
+    %% User Interfaces to Gateways
     Web_App --> APIGateway
     Mobile_App --> APIGateway
     Admin_Panel --> APIGateway
     Moderator_UI --> APIGateway
 
+    %% Gateways to Services
     APIGateway --> Auth_Service
     APIGateway --> User_Profile
     APIGateway --> Animal_Service
@@ -77,6 +79,7 @@ flowchart TD
     APIGateway --> Admin_Service
     APIGateway --> Payment_Service
 
+    %% Service Dependencies
     Auth_Service --> User_Profile
     Listing_Service --> Animal_Service
     Listing_Service --> Moderation_Service
@@ -86,6 +89,7 @@ flowchart TD
     Geo_Service --> Animal_Service
     Geo_Service --> Listing_Service
 
+    %% Services to Supporting Infrastructure
     Auth_Service --> Cache_Layer
     User_Profile --> Cache_Layer
     Animal_Service --> Cache_Layer
@@ -107,10 +111,12 @@ flowchart TD
     Listing_Service --> Search_Engine
     Animal_Service --> Search_Engine
 
+    %% Services to File Storage
     Listing_Service --> File_Storage
     User_Profile --> File_Storage
     Animal_Service --> File_Storage
 
+    %% Data Layer Connections
     Auth_Service --> Primary_DB
     User_Profile --> Primary_DB
     Animal_Service --> Primary_DB
@@ -122,9 +128,11 @@ flowchart TD
     Admin_Service --> Primary_DB
     Payment_Service --> Primary_DB
 
+    %% Replication and Backup
     Primary_DB --> Replica_DB
     Primary_DB --> Archive_DB
 
+    %% External Integrations
     Auth_Service --> SMS_Gateway
     Auth_Service --> OAuth_Providers
     Notification_Service --> SMS_Gateway
@@ -133,6 +141,7 @@ flowchart TD
     Payment_Service --> Payment_Gateways
     File_Storage --> Maps_Service
 
+    %% Monitoring
     Monitoring .-> Auth_Service
     Monitoring .-> User_Profile
     Monitoring .-> Animal_Service
