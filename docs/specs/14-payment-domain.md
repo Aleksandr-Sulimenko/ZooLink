@@ -66,6 +66,55 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Payment service achieves PCI DSS compliance via tokenization; sensitive data never touches our servers (see docs/02-requirements/nfr/security.md)
 - **Availability (NFR-AVAIL)**: Payment service handles gateway downtime gracefully with queuing and user notifications (see docs/02-requirements/nfr/availability.md)
 
+## Process Flow (BPMN-style)
+
+Status transitions are formalized in [`statemachines/payment_state_machine.md`](statemachines/payment_state_machine.md). The end-to-end flow with actors and error branches:
+
+```mermaid
+flowchart TD
+    subgraph User_Frontend["User / Frontend"]
+        A[User initiates payment] --> B[Frontend requests payment intent]
+        K[Confirm payment with gateway elements]
+        Z1[Show success + receipt]
+        Z2[Show failure + Retry option]
+    end
+
+    subgraph Backend["Backend (Payment Service)"]
+        B --> C{Idempotency key<br/>already seen?}
+        C -- Yes --> C1[Return existing intent]
+        C -- No --> D[Create gateway intent<br/>persist txn = PENDING]
+        D --> E[Return client secret]
+        E --> K
+        W[Webhook endpoint] --> V{Signature valid?}
+        V -- No --> VX[Reject 400 / log alert]
+        V -- Yes --> X{Event type}
+        X -- payment_succeeded --> S1[txn -> COMPLETED<br/>fulfill purpose<br/>emit Payment.Completed]
+        X -- payment_failed --> S2[txn -> FAILED<br/>record reason]
+        X -- dispute_created --> S3[txn -> DISPUTED<br/>freeze benefit, alert ops]
+        TO{Confirm timeout<br/>elapsed?} -- Yes --> S2
+    end
+
+    subgraph Gateway["Payment Gateway (PCI)"]
+        K --> G{Authorization result}
+        G -- Success --> GW1[Async webhook: payment_succeeded]
+        G -- Decline/Error --> GW2[Async webhook: payment_failed]
+        GW1 --> W
+        GW2 --> W
+    end
+
+    S1 --> Z1
+    S2 --> Z2
+    Z2 -->|within retry window| A
+    S1 -.refund requested.-> R[Process refund via gateway<br/>create refunds row<br/>txn -> REFUNDED]
+```
+
+### Key rules
+- **Idempotency:** every create/confirm/webhook carries an idempotency key; replays must not double-charge or double-transition.
+- **Async truth:** the gateway webhook (not the client redirect) is the source of truth for COMPLETED/FAILED/DISPUTED.
+- **Timeout branch:** a PENDING transaction with no webhook within `PAYMENT_CONFIRM_TIMEOUT` auto-fails.
+- **Retry:** a FAILED payment may be retried within `PAYMENT_RETRY_WINDOW`, creating a **new** transaction (same `purpose_id`).
+- **Gating:** entire flow is behind `feature_toggles.payments` (off until post-MVP).
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `payment` module with NestJS CLI

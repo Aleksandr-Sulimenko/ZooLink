@@ -56,6 +56,49 @@ status: "Черновик"
 - **Безопасность (NFR-SEC)**: Действия модерации требуют аутентификации и авторизации; журналы аудита защищены от подделки (см. docs/02-requirements/nfr/security.md)
 - **Доступность (NFR-ACC)**: Интерфейс модератора следует рекомендациям WCAG 2.1 AA (см. docs/02-requirements/nfr/accessibility.md)
 
+## Поток процесса (в стиле BPMN)
+
+Рабочий процесс пре-модерации (ADR-0003): листинг не виден публично до одобрения. Связан со [`statemachines/listing_state_machine.md`](statemachines/listing_state_machine.md). Все решения пишутся в `moderation_decisions` только на дозапись (append-only).
+
+```mermaid
+flowchart TD
+    subgraph Owner["Владелец листинга"]
+        A[Отправить листинг на проверку] --> Q
+        N1[Получено: Одобрено -> публикуется]
+        N2[Получено: Отклонено + причина]
+        N3[Получено: Запрошены изменения + заметки]
+        N3 --> ED[Редактировать и переотправить]
+        ED --> Q
+    end
+
+    subgraph System["Система ZooLink"]
+        Q[листинг -> PENDING_MODERATION<br/>в очередь; запустить таймер SLA] --> SLA{Таймер SLA<br/>истёк?}
+        SLA -- Да, нет действия --> TO[Авто-отклонение<br/>листинг -> EXPIRED<br/>moderation_status = REJECTED<br/>записать решение]
+        SLA -- Нет --> WAIT[Элемент ждёт в очереди]
+    end
+
+    subgraph Moderator["Модератор (MODERATOR/ADMIN)"]
+        WAIT --> R[Открыть элемент, проверить по политике]
+        R --> D{Решение}
+        D -- Одобрить --> AP[moderation_status = APPROVED<br/>листинг -> ACTIVE<br/>дозапись moderation_decisions]
+        D -- Отклонить --> RJ[moderation_status = REJECTED<br/>листинг -> DEACTIVATED<br/>дозапись moderation_decisions + причина]
+        D -- Запросить изменения --> CR[moderation_status = CHANGES_REQUESTED<br/>листинг -> DRAFT<br/>дозапись moderation_decisions + заметки]
+    end
+
+    AP --> N1
+    RJ --> N2
+    CR --> N3
+    TO --> N2
+    AP --> E([Конец: опубликован])
+    RJ --> E2([Конец: не опубликован])
+```
+
+### Ключевые правила
+- **Актёры:** Владелец (отправляет/редактирует), Модератор (решает), Система (очередь, SLA, сохранение, уведомления).
+- **Покрытые ветки:** Одобрить / Отклонить / Запросить изменения / **авто-отклонение по таймауту SLA** — каждая ведёт к переходу `listings.status` + `moderation_status`.
+- **Аудит:** каждое решение — append-only строка `moderation_decisions` (неизменяемая; UPDATE/DELETE блокируется триггером).
+- **Уведомления** отправляются через домен уведомлений на каждое терминальное решение.
+
 ## Разбивка на задачи
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `moderation` с помощью CLI NestJS

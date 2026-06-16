@@ -56,6 +56,49 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Moderation actions require authentication and authorization; audit logs are tamper-evident (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Moderator interface follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
 
+## Process Flow (BPMN-style)
+
+Pre-moderation workflow (ADR-0003): a listing is not publicly visible until approved. Couples to [`statemachines/listing_state_machine.md`](statemachines/listing_state_machine.md). All decisions are written append-only to `moderation_decisions`.
+
+```mermaid
+flowchart TD
+    subgraph Owner["Listing Owner"]
+        A[Submit listing for review] --> Q
+        N1[Receive: Approved -> live]
+        N2[Receive: Rejected + reason]
+        N3[Receive: Changes requested + notes]
+        N3 --> ED[Edit & resubmit]
+        ED --> Q
+    end
+
+    subgraph System["ZooLink System"]
+        Q[listing -> PENDING_MODERATION<br/>enqueue; start SLA timer] --> SLA{SLA timer<br/>expired?}
+        SLA -- Yes, no action --> TO[Auto-reject<br/>listing -> EXPIRED<br/>moderation_status = REJECTED<br/>record decision]
+        SLA -- No --> WAIT[Item waits in queue]
+    end
+
+    subgraph Moderator["Moderator (MODERATOR/ADMIN)"]
+        WAIT --> R[Open item, review against policy]
+        R --> D{Decision}
+        D -- Approve --> AP[moderation_status = APPROVED<br/>listing -> ACTIVE<br/>append moderation_decisions]
+        D -- Reject --> RJ[moderation_status = REJECTED<br/>listing -> DEACTIVATED<br/>append moderation_decisions + reason]
+        D -- Request changes --> CR[moderation_status = CHANGES_REQUESTED<br/>listing -> DRAFT<br/>append moderation_decisions + notes]
+    end
+
+    AP --> N1
+    RJ --> N2
+    CR --> N3
+    TO --> N2
+    AP --> E([End: live])
+    RJ --> E2([End: not published])
+```
+
+### Key rules
+- **Actors:** Owner (submits/edits), Moderator (decides), System (queue, SLA, persistence, notifications).
+- **Branches covered:** Approve / Reject / Changes-requested / **SLA-timeout auto-reject** — each maps to a `listings.status` + `moderation_status` transition.
+- **Audit:** every decision is an append-only `moderation_decisions` row (immutable; UPDATE/DELETE blocked by trigger).
+- **Notifications** are dispatched via the Notification domain on every terminal decision.
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `moderation` module with NestJS CLI
