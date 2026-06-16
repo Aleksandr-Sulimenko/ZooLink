@@ -15,7 +15,13 @@ status: "Final"
 > - **BPMN-поток платежа** (актёры User/Backend/Gateway + ветки success/fail/timeout/dispute/refund) → раздел в `specs/14-payment-domain.md`.
 > - **BPMN-поток передачи владения** (2-стороннее подтверждение + вет/юр/платёж ветки) → `specs/statemachines/ownership_transfer_state_machine.md` (+ state-диаграмма).
 > - **BPMN-поток модерации** (approve/reject/changes_requested/SLA-timeout, актёры Owner/Moderator/System) → раздел в `specs/12-moderation-domain.md`.
-> Осталось: **P1** (модели favorites/saved-search/user-reports + решения скоупа), **P2** (нарисовать 3 существующие стейт-машины listing/user, синхронизировать ASCII-ERD, текстовые противоречия).
+> ## ✅ Статус устранения — P1 закрыт (2026-06-17)
+> Решения владельца по скоупу + модели (проверены на живом PG14, 26 таблиц; ERD рендерится):
+> - **Favorite** (MVP) → таблица `favorites(user_id, listing_id)` + ERD + миграция.
+> - **SavedSearch** → MVP-модель `saved_searches` (фильтры+локация); алерты — Phase 2.
+> - **UserReport** → лёгкая `content_reports` (reporter, entity, reason, status) в MVP, питает модерацию.
+>
+> Осталось: **P2** (нарисовать 3 существующие стейт-машины listing/user/ownership как mermaid; синхронизировать/удалить ASCII-ERD в data-model.md; устранить текстовые противоречия reviews-reserved-fields).
 
 > Цель: оценить, достаточно ли **визуальных моделей** (ER/SQL для данных, BPMN/процессные схемы для логики), чтобы команда начала реализацию по диаграммам. Источник истины по данным — `database_schema.sql` + `ZooLink_ERD.mmd`; процессы — спеки `docs/specs/01..15`, бизнес-требования `docs/02-requirements/business-requirements/*`, стейт-машины `docs/specs/statemachines/*`.
 

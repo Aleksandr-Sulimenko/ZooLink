@@ -203,6 +203,52 @@ CREATE TABLE IF NOT EXISTS favorites (
 CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_listing ON favorites(listing_id);
 
+-- ========== Saved Searches (MVP; alerts deferred) ==========
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100),
+    filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+    lat DOUBLE PRECISION,
+    lng DOUBLE PRECISION,
+    radius_m INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_saved_searches_latlng CHECK (
+        (lat IS NULL AND lng IS NULL) OR (lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_saved_searches_user ON saved_searches(user_id);
+
+-- ========== Content Reports (MVP; user-submitted flags feed moderation) ==========
+CREATE TABLE IF NOT EXISTS content_reports (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    entity_type VARCHAR(20) NOT NULL CHECK (entity_type IN ('LISTING', 'ANIMAL', 'USER', 'MESSAGE')),
+    entity_id UUID NOT NULL,
+    reason VARCHAR(50) NOT NULL,
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'REVIEWED', 'DISMISSED', 'ACTIONED')),
+    resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_content_reports_entity ON content_reports(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_content_reports_status ON content_reports(status);
+CREATE INDEX IF NOT EXISTS idx_content_reports_reporter ON content_reports(reporter_id) WHERE reporter_id IS NOT NULL;
+
+-- updated_at triggers for the two new MVP tables
+DO $$
+DECLARE tbl text;
+BEGIN
+    FOR tbl IN SELECT unnest(ARRAY['saved_searches','content_reports'])
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_'||tbl||'_updated_at') THEN
+            EXECUTE format('CREATE TRIGGER update_%I_updated_at BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();', tbl, tbl);
+        END IF;
+    END LOOP;
+END $$;
+
 -- ========== Feature toggle: payments gated off (Payment tables defined, inactive until post-MVP) ==========
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage)
 VALUES ('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0)

@@ -330,6 +330,23 @@ CREATE TABLE favorites (
 CREATE INDEX idx_favorites_user ON favorites(user_id);
 CREATE INDEX idx_favorites_listing ON favorites(listing_id);
 
+-- ========== Saved Searches (MVP; alerts deferred to Phase 2 — UC-GS-03) ==========
+CREATE TABLE saved_searches (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100),
+    filters JSONB NOT NULL DEFAULT '{}'::jsonb, -- species/breed/price/listing_type/etc.
+    lat DOUBLE PRECISION,
+    lng DOUBLE PRECISION,
+    radius_m INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_saved_searches_latlng CHECK (
+        (lat IS NULL AND lng IS NULL) OR (lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
+    )
+);
+CREATE INDEX idx_saved_searches_user ON saved_searches(user_id);
+
 -- ========== Moderation Domain (spec docs/specs/12-moderation-domain.md) ==========
 -- Predefined, Admin-configurable reason codes (12-moderation:48,66)
 CREATE TABLE moderation_reasons (
@@ -366,6 +383,24 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_moderation_decisions_immutable
 BEFORE UPDATE OR DELETE ON moderation_decisions
 FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
+
+-- User-submitted reports/flags on content (MVP; feeds moderation queue) — 06-admin:87
+CREATE TABLE content_reports (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    reporter_id UUID REFERENCES users(id) ON DELETE SET NULL, -- keep report if reporter deleted
+    entity_type VARCHAR(20) NOT NULL CHECK (entity_type IN ('LISTING', 'ANIMAL', 'USER', 'MESSAGE')),
+    entity_id UUID NOT NULL,
+    reason VARCHAR(50) NOT NULL, -- e.g., SPAM, ABUSE, FRAUD, INAPPROPRIATE
+    notes TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'OPEN'
+        CHECK (status IN ('OPEN', 'REVIEWED', 'DISMISSED', 'ACTIONED')),
+    resolved_by UUID REFERENCES users(id) ON DELETE SET NULL, -- moderator who handled it
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_content_reports_entity ON content_reports(entity_type, entity_id);
+CREATE INDEX idx_content_reports_status ON content_reports(status);
+CREATE INDEX idx_content_reports_reporter ON content_reports(reporter_id) WHERE reporter_id IS NOT NULL;
 
 -- ========== Payment Domain (spec docs/specs/14-payment-domain.md) ==========
 CREATE TABLE payment_transactions (
@@ -499,7 +534,8 @@ BEGIN
                             'animals', 'animal_ownership_history', 'listings', 'conversations',
                             'messages', 'feature_toggles', 'outbox_events',
                             'payment_transactions', 'refunds', 'notification_templates',
-                            'notification_logs', 'ownership_transfers')
+                            'notification_logs', 'ownership_transfers',
+                            'saved_searches', 'content_reports')
     LOOP
         EXECUTE format('
             CREATE TRIGGER update_%I_updated_at
