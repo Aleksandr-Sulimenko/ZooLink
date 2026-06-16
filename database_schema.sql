@@ -293,6 +293,9 @@ CREATE INDEX idx_listings_type_active ON listings(listing_type, is_active) WHERE
 CREATE INDEX idx_listings_price ON listings(price_cents) WHERE price_cents IS NOT NULL;
 CREATE INDEX idx_listings_status ON listings(status);
 CREATE INDEX idx_listings_moderation_status ON listings(moderation_status);
+-- At most one ACTIVE listing of a given type per animal (prevents duplicate active listings;
+-- still allows e.g. an active 'sale' and an active 'stud_service' on the same animal)
+CREATE UNIQUE INDEX uq_active_listing_per_type ON listings(animal_id, listing_type) WHERE status = 'ACTIVE';
 -- Geo: always index lat/lng (MVP primary). If PostGIS is enabled, also add the GEOGRAPHY column + GiST index.
 CREATE INDEX idx_listings_latlng ON listings(lat, lng) WHERE lat IS NOT NULL;
 DO $$
@@ -524,6 +527,7 @@ ON CONFLICT DO NOTHING;
 -- Initial feature toggles (MVP: everything off except core)
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) VALUES
 ('premium_profiles', 'Включить премиум‑профили с расширенной галереей и аналитикой', false, 0),
+('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0),
 ('boosted_listings', 'Платное продвижение объявлений в поиске', false, 0),
 ('vet_leadgen', 'Генерация лидов для ветеринарных клиник', false, 0),
 ('service_marketplace', 'Рынок услуг (ветеринары, тренеры, перевозчики)', false, 0),

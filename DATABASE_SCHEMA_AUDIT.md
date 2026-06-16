@@ -402,13 +402,13 @@ CREATE INDEX idx_animals_breeding_visible ON animals(is_visible_in_breeding_sear
 
 ---
 
-## Открытые вопросы владельцу (требуют решения, не выдуманы аудитором)
+## Открытые вопросы владельцу — РЕШЕНЫ (2026-06-17)
 
-1. **Владелец животного — XOR или AND-допустимо?** Схема: ровно один из `owner_id`/`organization_id`. Требование organization-domain: «at least one». Какой вариант канон?
-2. **MVP-скоуп статус-сущностей.** Стейт-машины listing/user/ownership_transfer и домены Payment/Moderation/Notification — входят ли они в MVP-схему сейчас, или это осознанно отложенный пост-MVP скоуп? (Влияет на приоритет P0-5..P0-8.)
-3. **PostGIS vs lat/lng.** geo-spec называет lat/lng основным MVP-вариантом, схема — PostGIS. Что является целевым для MVP?
-4. **`nickname_localized` обязателен без DEFAULT?** Схема требует значение при INSERT; намеренно ли (нет пустого дефолта)?
-5. **Один активный листинг на животное?** Нужен ли UNIQUE-партиал `listings(animal_id) WHERE is_active`? В доках явно не указано.
+1. **Владелец животного — XOR или AND?** → **XOR (ровно один).** Схема оставлена как есть (`chk_animal_ownership`); формулировка `organization-domain.md` (EN+RU) исправлена с «at least one» на «exactly one». Контактное лицо орг-животного — отдельная роль (`organization_users`).
+2. **MVP-скоуп статус-доменов.** → **Все таблицы остаются в схеме, активация гейтится тогглами.** Moderation — ON (ADR-0003 пре-модерация); Notification — ON (транзакционные); Payment — таблицы определены, но выключены (`feature_toggles.payments = false`, пост-MVP).
+3. **PostGIS vs lat/lng.** → **lat/lng — основной MVP-вариант** (Haversine + bounding box); PostGIS `location_point` опционален (создаётся только при наличии расширения). Реализовано.
+4. **`nickname_localized` без DEFAULT?** → **Да, обязателен без дефолта** (имя должно задаваться при создании). Схема канон; `data-model.md` приведён в соответствие.
+5. **Один активный листинг на животное?** → **UNIQUE `(animal_id, listing_type) WHERE status='ACTIVE'`** — один активный листинг каждого типа на животное (разрешает sale + stud_service одновременно). Добавлено в схему и миграцию, проверено на живом PG.
 
 ---
 

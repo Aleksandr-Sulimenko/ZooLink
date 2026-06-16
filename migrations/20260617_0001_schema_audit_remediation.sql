@@ -50,6 +50,8 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS sold_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS transaction_id UUID;
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_listings_moderation_status ON listings(moderation_status);
+-- At most one ACTIVE listing of a given type per animal
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_listing_per_type ON listings(animal_id, listing_type) WHERE status = 'ACTIVE';
 
 -- ========== P0-4: geo lat/lng fallback (MVP primary), optional PostGIS ==========
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
@@ -189,5 +191,10 @@ BEGIN
         END IF;
     END LOOP;
 END $$;
+
+-- ========== Feature toggle: payments gated off (Payment tables defined, inactive until post-MVP) ==========
+INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage)
+VALUES ('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0)
+ON CONFLICT (key) DO NOTHING;
 
 COMMIT;

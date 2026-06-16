@@ -54,7 +54,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 
 ### 5. Animal Ownership by Organization
 - Animals can be owned either by a personal user (`owner_id`) or by an organization (`organization_id`).
-- At least one of `owner_id` or `organization_id` must be set (application-level validation).
+- Exactly one of `owner_id` or `organization_id` must be set — not both, not neither (enforced by DB CHECK `chk_animal_ownership`, XOR). A contact person for an organization-owned animal is a separate role (see `organization_users`), not `owner_id`.
 - This allows animals owned by breeding farms, shelters, or clinics to be represented accurately.
 
 ### 6. Search and Discovery
@@ -147,7 +147,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 - Organization name must be unique (case-insensitive) within the platform to avoid duplicates.
 - INN, if provided, must be unique (nullable allowed).
 - A user must have an active affiliation (`organization_users`) with an organization to create a listing on its behalf.
-- For animal ownership: at least one of `owner_id` (FK to users) or `organization_id` must be NOT NULL.
+- For animal ownership: exactly one of `owner_id` (FK to users) or `organization_id` must be NOT NULL (XOR; `chk_animal_ownership`).
 
 ## User Journey: Managing an Organization
 ```mermaid
