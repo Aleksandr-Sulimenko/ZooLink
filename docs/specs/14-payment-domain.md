@@ -104,3 +104,13 @@ This specification addresses the following Non-Functional Requirements:
    - [ ] Reliability: verify graceful handling of gateway downtime (queueing, user notifications)
    - [ ] Documentation: OpenAPI spec generated and available at /api/docs
    - [ ] NFR Traceability: Verify that performance, security, and availability requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Pet Marketplace](03-pet-marketplace-domain.md)
+- [Livestock Marketplace](04-livestock-marketplace-domain.md)
+- [Notification Domain](13-notification-domain.md)
+- 🌐 RU mirror: [docsRU/specs/14-payment-domain.md](../../docsRU/specs/14-payment-domain.md)

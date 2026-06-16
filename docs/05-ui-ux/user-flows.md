@@ -1,163 +1,163 @@
-# Пользовательские потоки (User Flows) для ZooLink
+# User Flows for ZooLink
 
-## Обзор
-Этот документ описывает ключевые пользовательские путешествия в системе ZooLink, покрывающие основные роли: обычный пользователь (продавец/покупатель), заводчик/фермер, модератор и администратор.
+## Overview
+This document describes the key user journeys in the ZooLink system, covering the main roles: regular user (seller/buyer), breeder/farmer, moderator, and administrator.
 
-## 1. Регистрация и аутентификация
-### 1.1 Регистрация через телефон
-1. Пользователь указывает номер телефона
-2. Система отправляет SMS-код
-3. Пользователь вводит код
-4. Пользователь заполняет имя и выбирает город
-5. По желанию добавляет email и аватар
-6. Аккаунт создан, пользователь вошёл в систему
+## 1. Registration and authentication
+### 1.1 Registration via phone
+1. The user provides a phone number
+2. The system sends an SMS code
+3. The user enters the code
+4. The user fills in their name and selects a city
+5. Optionally adds an email and an avatar
+6. The account is created and the user is logged in
 
-### 1.2 Регистрация через OAuth
-1. Пользователь нажимает кнопку "Войти через Google" (или другой провайдер)
-2. Перенаправление на страницу авторизации провайдера
-3. Пользователь предоставляет согласие на partage базовых данных (имя, email)
-4. Система создаёт/входит аккаунт привязанный к OAuth ID
-5. Пользователь заполняет недостающие данные (город) при первом входе
+### 1.2 Registration via OAuth
+1. The user clicks the "Sign in with Google" button (or another provider)
+2. Redirect to the provider's authorization page
+3. The user gives consent to share basic data (name, email)
+4. The system creates/logs in an account linked to the OAuth ID
+5. The user fills in the missing data (city) on first login
 
-### 1.3 Вход в систему
-- Аналогично регистрации: запрос учетных данных (SMS или OAuth) и выдача JWT/refresh токенов.
+### 1.3 Signing in
+- Similar to registration: the credentials are requested (SMS or OAuth) and JWT/refresh tokens are issued.
 
-## 2. Управление профилем
-1. Пользователь заходит в "Мой профиль"
-2. Может отредактировать: имя, город, аватар, email, привязать/отвязать OAuth аккаунты
-3. При изменении телефона требуется повторная верификация через SMS
-4. Есть опция деактивировать аккаунт (скрыть, снять объявления с публикации, войти нельзя); можно позже реактивировать.
+## 2. Profile management
+1. The user goes to "My Profile"
+2. Can edit: name, city, avatar, email, link/unlink OAuth accounts
+3. Changing the phone number requires re-verification via SMS
+4. There is an option to deactivate the account (hide it, unpublish listings, login disabled); it can be reactivated later.
 
-## 3. Управление животными
-### 3.1 Создание профиля животного
-1. Пользователь переходит в "Мои животные" → "Добавить новое животное"
-2. Выбирает вид из справочника (собака, кошка, КРС и т.д.)
-3. Выбирает породу из справочника (или указывает "Другое" и вводит текст на модерацию)
-4. Указывает пол, дату рождения или примерный возраст
-5. Заполняет кличку (необязательно), цвет/окрас
-6. Необязательно добавляет: чип, клеймо/тату, начальные медицинские записи
-7. Подтверждает создание → животное сохраняется и привязывается к владельцу (пользователь или организация).
+## 3. Animal management
+### 3.1 Creating an animal profile
+1. The user goes to "My Animals" → "Add a new animal"
+2. Selects a species from the reference catalog (dog, cat, cattle, etc.)
+3. Selects a breed from the reference catalog (or specifies "Other" and enters text for moderation)
+4. Specifies sex, date of birth, or an approximate age
+5. Fills in the nickname (optional), color/coat
+6. Optionally adds: microchip, brand/tattoo, initial health records
+7. Confirms creation → the animal is saved and linked to the owner (user or organization).
 
-### 3.2 Редактирование животного
-- Доступно изменение: кличка, цвет/окрас, чип/тату, добавление новых медицинских/репродуктивных записей.
-- Запрещено изменение: вид, порода (если из справочника), пол, дата рождения (можно уточнить approximation, но не менять кардинально).
+### 3.2 Editing an animal
+- Editable: nickname, color/coat, chip/tattoo, adding new health/reproductive records.
+- Not editable: species, breed (if from the catalog), sex, date of birth (the approximation can be refined, but not changed drastically).
 
-### 3.3 Деактивация/реактивация животного
-- Деактивировать: животное пропадает из поиска и списка владельца, существующие объявления остаются активными, но отмечены как с деактивированным животным.
-- Реактивировать: восстанавливает возможность создавать новые объявления.
+### 3.3 Deactivating/reactivating an animal
+- Deactivate: the animal disappears from search and from the owner's list; existing listings remain active but are marked as having a deactivated animal.
+- Reactivate: restores the ability to create new listings.
 
-## 4. Создание объявления (Маркетплейс)
-### Общий поток (одинаков для pet и livestock, с отличиями в полях)
-1. Пользователь заходит в "Мои объявления" → "Создать объявление"
-2. Выбирает тип объявления: Продажа, Вязка, Выставка, Усыновление, Услуги производителя (Stud Service)
-3. Система предлагает выбрать животное из списка активных животных владельца (или организации, если пользователь действует от её имени)
-4. Пользователь заполняет:
-   - Заголовок (до 100 символов)
-   - Подробное описание (лимит варьируется: pet 2000, livestock 3000)
-   - Цена/условия (число, "бесплатно", "договорная", часто с единицей измерения)
-   - Город (из справочника) – используется для геопоиска
-   - Необходимое количество фото (min 1 для pet, рекомендовано min 3 для livestock; загрузка через предзначенные URL)
-   - Специфичные поля (см. ниже по типу объявления и домену)
-5. Пользователь нажимает "Отправить на модерацию".
-6. Статус объявления меняется на `PENDING_MODERATION`.
+## 4. Creating a listing (Marketplace)
+### General flow (the same for pet and livestock, with field differences)
+1. The user goes to "My Listings" → "Create a listing"
+2. Selects the listing type: Sale, Mating, Show, Adoption, Stud Service
+3. The system offers a choice of an animal from the list of the owner's active animals (or the organization's, if the user is acting on its behalf)
+4. The user fills in:
+   - Title (up to 100 characters)
+   - Detailed description (the limit varies: pet 2000, livestock 3000)
+   - Price/terms (a number, "free", "negotiable", often with a unit of measure)
+   - City (from the catalog) – used for geo-search
+   - The required number of photos (min 1 for pet, min 3 recommended for livestock; uploaded via pre-signed URLs)
+   - Specific fields (see below by listing type and domain)
+5. The user clicks "Submit for moderation".
+6. The listing status changes to `PENDING_MODERATION`.
 
-### Специфичные поля по типу объявления (Pet Marketplace)
-- **Продажа**: цена (число или "бесплатно"/"договорная"), статус стерилизации/кастрации (опционально)
-- **Вязка**: условия (познать помёт, фикс. сумм., переговоры); данные о течках самцы/самки
-- **Усыновление**: часто бесплатно, возможна рекомендация сделать пожертвование приюту
-- **Выставка**: класс, титул, даты мероприятий
-- **Услуги производителя**: стоимость за вязку/За семя etc.
+### Specific fields by listing type (Pet Marketplace)
+- **Sale**: price (a number or "free"/"negotiable"), sterilization/neutering status (optional)
+- **Mating**: terms (pick of the litter, fixed fee, negotiable); information about heat cycles for males/females
+- **Adoption**: often free, a recommendation to donate to a shelter is possible
+- **Show**: class, title, event dates
+- **Stud Service**: cost per mating/per semen, etc.
 
-### Специфичные поля по типу объявления (Livestock Marketplace)
-- **Продажа**: назначение (племенной, откорм, убой); продуктивные записи (удой, привес)
-- **Вязка/Услуги производителя**: тип (естественное семя, ИИ, эмбрион); гарантии (беременность, живой потомство)
-- **Выставка**: класс, оценки экстерьер
-- **Усыновление**: реже используется, в основном для мелкого скота (козы, овцы)
+### Specific fields by listing type (Livestock Marketplace)
+- **Sale**: purpose (breeding, fattening, slaughter); productivity records (milk yield, weight gain)
+- **Mating/Stud Service**: type (natural service, AI, embryo); guarantees (pregnancy, live offspring)
+- **Show**: class, conformation scores
+- **Adoption**: used less often, mainly for small livestock (goats, sheep)
 
-## 5. Процесс премодерации
-### 5.1 Просмотр очереди модератором
-1. Модератор заходит в панель модерации
-2. Видит список объявлений со статусом `PENDING_MODERATION`, сгруппированных по типу (pet/livestock)
-3. Для каждого объявления показывается превью: фото, вид/порода, цена, город.
+## 5. Pre-moderation process
+### 5.1 Reviewing the queue by the moderator
+1. The moderator opens the moderation panel
+2. Sees a list of listings with the `PENDING_MODERATION` status, grouped by type (pet/livestock)
+3. For each listing a preview is shown: photo, species/breed, price, city.
 
-### 5.2 Рассмотрение объявления
-Модератор проверяет:
-- Соответствие фото объявленному виду/породе и животному
-- Заполненность обязательных полей
-- Соответствие правилам (нет спама, нет незаконного контента, нет ложных заявлений)
-- Для livestock: опционально отмечаются регуляторные флаги (требуется сопроводительная документация для перемещения)
-Модератор может:
-- **Одобрить** → статус становится `PUBLISHED`, объявление появляется в поиске
-- **Отклонить** → статус возвращается в `DRAFT` с комментариями о требуемых правках; владелец может исправить и повторно отправить.
+### 5.2 Reviewing a listing
+The moderator checks:
+- Whether the photos match the declared species/breed and the animal
+- Whether the required fields are filled in
+- Compliance with the rules (no spam, no illegal content, no false claims)
+- For livestock: regulatory flags are optionally noted (accompanying documentation is required for transport)
+The moderator can:
+- **Approve** → the status becomes `PUBLISHED`, the listing appears in search
+- **Reject** → the status returns to `DRAFT` with comments about the required corrections; the owner can fix the issues and resubmit.
 
-### 5.3 Время модерации
-- Целевое время: менее 4 часов в рабочее время (9:00–21:00) для pet, менее 6 часов для livestock.
+### 5.3 Moderation time
+- Target time: under 4 hours during business hours (9:00–21:00) for pet, under 6 hours for livestock.
 
-## 6. Поиск и просмотр объявлений
-### 6.1 Поиск
-1. Пользователь (авторизованный или гость) попадает на главную страницу поиска
-2. Может указать:
-   - Вид животного (собака, кошка, КРС и т.д.)
-   - Порода (из справочника, поддержка "Смешанное/Неизвестно")
-   - Пол
-   - Возрастной диапазон (от/до лет/мес.)
-   - Радиус поиска от города (1–100 км)
-   - Ценовой диапазон (для продажи) или условия (бесплатно, переговоры)
-   - Дополнительные фильтры:
-        - Pet: характер (дружба с детьми, с собаками/кошками), прививки, наличие ветеринарного паспорта
-        - Livestock: продуктивность (удой, яйценоскость), генетические признаки (бесполый, овец без рогов), санитарные сертификаты (TB-free, Brucellosis-free)
-   - Ограничение по организации/филиалу (если залогинен как представитель организации)
-3. Нажимает "Найти".
+## 6. Searching and viewing listings
+### 6.1 Search
+1. The user (authorized or guest) lands on the main search page
+2. Can specify:
+   - Animal species (dog, cat, cattle, etc.)
+   - Breed (from the catalog, with "Mixed/Unknown" support)
+   - Sex
+   - Age range (from/to in years/months)
+   - Search radius from the city (1–100 km)
+   - Price range (for a sale) or terms (free, negotiable)
+   - Additional filters:
+        - Pet: temperament (friendly with children, with dogs/cats), vaccinations, presence of a veterinary passport
+        - Livestock: productivity (milk yield, egg production), genetic traits (polled, hornless sheep), sanitary certificates (TB-free, Brucellosis-free)
+   - A restriction by organization/branch (if logged in as an organization representative)
+3. Clicks "Search".
 
-### 6.2 Результаты поиска
-Отображаются карточки объявлений:
-- Миниатюра фото
-- Заголовок, вид/порода, пол, возраст
-- Цена/условия
-- Расстояние от пользователя
-- Бейдж организации/филиала (если применимо)
-- Бейдж "Верифицированный производитель" или "Привито" (если данные есть)
-При нажатии на карточку открывается детальная страница объявления.
+### 6.2 Search results
+Listing cards are displayed:
+- Photo thumbnail
+- Title, species/breed, sex, age
+- Price/terms
+- Distance from the user
+- Organization/branch badge (if applicable)
+- A "Verified Breeder" or "Vaccinated" badge (if the data is available)
+Clicking a card opens the listing's detail page.
 
-### 6.3 Страница объявления
-- Карусель всех фото
-- Полное описание
-- Данные животного (вид, порода, пол, примерный возраст, кличка, окрас, медицинские/репродуктивные заметки – зависят от типа и согласия владельца)
-- Специфичные поля (производительность, здоровье, условия вязки и т.д.)
-- Кнопка "Показать контакты" (доступна только после `PUBLISHED` статуса)
-    При нажатии:
-    - Система логирует запрос (кто, когда, какое объявление)
-    - Показывает номер телефона (если владелец разрешил показ) и ссылки на профили в Telegram/VK (если привязаны и разрешено)
-    - Точный адрес НЕ показывается
+### 6.3 Listing page
+- A carousel of all photos
+- Full description
+- Animal data (species, breed, sex, approximate age, nickname, coat, health/reproductive notes – depend on the type and the owner's consent)
+- Specific fields (productivity, health, mating terms, etc.)
+- A "Show contacts" button (available only after the `PUBLISHED` status)
+    When clicked:
+    - The system logs the request (who, when, which listing)
+    - Shows the phone number (if the owner allowed it to be shown) and links to Telegram/VK profiles (if linked and allowed)
+    - The exact address is NOT shown
 
-## 7. Взаимодействие после просмотра (Контакт)
-1. Пользователь, заинтересованный в объявлении, нажимает "Показать контакты"
-2. Система показывает контактную информацию владельца (или представителя организации)
-3. Пользователь связывается вне платформы (телефон, мессенджеры) для обсуждения деталей сделки, организации встречи.
-4. После успешной сделки (по соглашению сторон) участник может отметить объявление как `COMPLETED` в своём аккаунте (для статистики и обратной связи).
+## 7. Post-view interaction (Contact)
+1. A user interested in a listing clicks "Show contacts"
+2. The system shows the owner's contact information (or the organization representative's)
+3. The user gets in touch off-platform (phone, messengers) to discuss the deal details and arrange a meeting.
+4. After a successful deal (as agreed by the parties), a participant can mark the listing as `COMPLETED` in their account (for statistics and feedback).
 
-## 8. Аналитика и статистика
-### 8.1 Для владельца объявления
-- В разделе "Мои объявления" пользователь может выбрать объявление и посмотреть статистику:
-    - Количество просмотров (попадания в результаты поиска)
-    - Количество показов контактов
-    - Даты последних действий
+## 8. Analytics and statistics
+### 8.1 For the listing owner
+- In the "My Listings" section the user can select a listing and view statistics:
+    - Number of views (appearances in search results)
+    - Number of contact reveals
+    - Dates of the latest actions
 
-### 8.2 Для животного (опционально, будущее)
-- Возможно увидеть историю объявлений, связанных с этим животным.
+### 8.2 For an animal (optional, future)
+- It may be possible to see the history of listings associated with this animal.
 
-## 9. Модератор и Администратор
-### 9.1 Модератор
-- Просматривает очередь объявлений на премодерацию
-- Одобряет/отклоняет с комментариями
-- Может блокировать пользователей за нарушение правил
-- Управляет справочниками видов/пород (через админ-панель, связанную с доменом Admin)
+## 9. Moderator and Administrator
+### 9.1 Moderator
+- Reviews the queue of listings for pre-moderation
+- Approves/rejects with comments
+- Can block users for rule violations
+- Manages the species/breed reference catalogs (via the admin panel linked to the Admin domain)
 
-### 9.2 Администратор
-- Все права модератора +
-- Назначение ролей moderator/admin
-- Просмотр системной аналитики (количество пользователей, объявлений, активности)
-- Управление глобальными настройками (ценообразование лимитов, правила модерации и т.д.)
+### 9.2 Administrator
+- All moderator rights, plus:
+- Assigning moderator/admin roles
+- Viewing system analytics (number of users, listings, activity)
+- Managing global settings (limit pricing, moderation rules, etc.)
 
 ---
-*Документ является живым и может уточняться по мере проработки макетов и получения обратной связи от пользователей и заинтересованных сторон.*
+*This is a living document and may be refined as mockups are developed and feedback is received from users and stakeholders.*

@@ -27,14 +27,12 @@ paths:
         - in: query
           name: species_id
           schema:
-            type: string
-            format: uuid
+            type: integer
           description: Filter by species ID
         - in: query
           name: breed_id
           schema:
-            type: string
-            format: uuid
+            type: integer
           description: Filter by breed ID
         - in: query
           name: sex
@@ -377,12 +375,10 @@ components:
           nullable: true
           description: Foreign key to organization (nullable if owner_id set)
         species_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to species
         breed_id:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
           description: Foreign key to breed (nullable if custom/other)
         breed_text_localized:
@@ -509,12 +505,10 @@ components:
           nullable: true
           description: Foreign key to organization (set if organizational ownership, null if personal ownership)
         species_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to species
         breed_id:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
           description: Foreign key to breed (nullable if custom/other)
         breed_text_localized:

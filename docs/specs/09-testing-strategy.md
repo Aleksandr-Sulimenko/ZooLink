@@ -195,3 +195,12 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Coverage reports show no significant drop over time
 - [ ] Documentation: testing guidelines are clear and followed by contributors
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Performance Specification](performance_specification.md)
+- [Traceability Matrix](traceability%20Matrix.md)
+- [Implementation Roadmap](10-implementation-roadmap.md)
+- 🌐 RU mirror: [docsRU/specs/09-testing-strategy.md](../../docsRU/specs/09-testing-strategy.md)

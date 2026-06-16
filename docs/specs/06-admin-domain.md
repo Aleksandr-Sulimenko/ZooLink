@@ -138,3 +138,14 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: admin actions are fully auditable; personal data handling follows 152-ФЗ; content moderation follows 149-ФЗ
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Admin API](../03-architecture/api-contracts/admin-api.yaml)
+- [Moderation Domain](12-moderation-domain.md)
+- [Identity Domain](01-identity-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/admin-domain.md)
+- 🌐 RU mirror: [docsRU/specs/06-admin-domain.md](../../docsRU/specs/06-admin-domain.md)

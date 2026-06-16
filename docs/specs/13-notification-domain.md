@@ -93,3 +93,13 @@ This specification addresses the following Non-Functional Requirements:
    - [ ] Security: verify that API keys are not exposed in logs or responses
    - [ ] Documentation: OpenAPI spec generated and available at /api/docs
    - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Moderation Domain](12-moderation-domain.md)
+- [Payment Domain](14-payment-domain.md)
+- [Identity Domain](01-identity-domain.md)
+- 🌐 RU mirror: [docsRU/specs/13-notification-domain.md](../../docsRU/specs/13-notification-domain.md)

@@ -81,7 +81,7 @@ flowchart LR
 - The system does not directly integrate with hardware devices (e.g., microchip readers) on MVP.
 
 ## Related Documents
-- `containers.md` (C4 Level 2: breaks down the ZooLink System into internal components)
+- `container-diagram.md` (C4 Level 2: breaks down the ZooLink System into internal components)
 - `domains-and-bc.md` (maps bounded contexts to technical modules)
 - `data-model.md` (logical data structure)
 - `storage.md` (file storage organization)

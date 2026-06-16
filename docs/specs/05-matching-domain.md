@@ -138,3 +138,15 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: adheres to Russian breeding regulations; owner PII protected until after moderation
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Matching API](../03-architecture/api-contracts/matching-api.yaml)
+- [Pet Marketplace](03-pet-marketplace-domain.md)
+- [Livestock Marketplace](04-livestock-marketplace-domain.md)
+- [Animal Domain](02-animal-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/matching-domain.md)
+- 🌐 RU mirror: [docsRU/specs/05-matching-domain.md](../../docsRU/specs/05-matching-domain.md)

@@ -27,14 +27,12 @@ paths:
         - in: query
           name: species_id
           schema:
-            type: string
-            format: uuid
+            type: integer
           description: Filter by species ID
         - in: query
           name: breed_id
           schema:
-            type: string
-            format: uuid
+            type: integer
           description: Filter by breed ID
         - in: query
           name: sex

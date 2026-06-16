@@ -92,8 +92,8 @@ CREATE TABLE animals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID REFERENCES users(id) ON DELETE RESTRICT,
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
-    species_id UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
-    breed_id UUID REFERENCES breeds(id) ON DELETE SET NULL,
+    species_id INT NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
+    breed_id INT REFERENCES breeds(id) ON DELETE SET NULL,
     breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')),
@@ -188,7 +188,7 @@ CREATE TABLE users (
 **Ключевые моменты:**
 - Множественные способы аутентификации (телефон/SMS + OAuth провайдеры)
 - Роль пользователя определяет доступ к функциям системы
-- Связь с городом для геопоис кодов поиска по местоположению
+- Связь с городом для геопоиска по местоположению
 - Мягкое удаление через поле deactivated_at
 
 ## Связи и ограничения
@@ -207,7 +207,7 @@ CREATE TABLE users (
 11. `organization_users.user_id → users.id`
 
 ### Ограничения целостности
-- **CHK_CONSTRAINT_ON_ANIMAL_OWNERSHIP:** Животное должно иметь либо личного владельца, либо бытьowned организацией (не оба и не ninguno)
+- **CHK_CONSTRAINT_ON_ANIMAL_OWNERSHIP:** Животное должно иметь либо личного владельца, либо принадлежать организации (не оба и не ни одного)
 - **CHK_CONSTRAINT_ON_LISTING_OWNERSHIP:** Объявление либо личное (без организации/филиала), либо организационное (с организацией)
 - **ROLE_CONSTRAINTS:** Ограничения ролей пользователей и их ролей в организациях
 - **IMMUTABLE_FIELDS_TRIGGER:** Триггер предотвращающий изменение неизменяемых полей животного после создания
@@ -228,8 +228,8 @@ CREATE TABLE users (
 - `idx_listings_seller` - поиск объявлений конкретного продавца
 - `idx_listings_type_active` - комбинированный индекс для поиска активных объявлений по типу
 - `idx_listings_price` - поиск по цене (только для объявлений с ценой)
-- GIST индекс на `location_point` (если PostGIS доступен) - эффективный геопоisk
-- `idx_listings_expires` - поиск未 еще не истекших объявлений
+- GIST индекс на `location_point` (если PostGIS доступен) - эффективный геопоиск
+- `idx_listings_expires` - поиск ещё не истекших объявлений
 - `idx_listing_photos_listing` - связь фотографий с объявлениями
 
 ### Другие важные индексы

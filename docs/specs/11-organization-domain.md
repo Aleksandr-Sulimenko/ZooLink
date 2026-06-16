@@ -512,3 +512,15 @@ Feature: Listing Attribution to Organizations
 8. Should we support hierarchical organization structures (parent/sub-organization) for franchises or large networks?
 9. What fields should be included in the search index for organization name lookup (full text search vs exact match)?
 10. Should we implement organization analytics API endpoint as mentioned in the business requirements document?
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Organization API](../03-architecture/api-contracts/organization-api.yaml)
+- [Branch API](../03-architecture/api-contracts/branch-api.yaml)
+- [Identity Domain](01-identity-domain.md)
+- [Animal Domain](02-animal-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/organization-domain.md)
+- 🌐 RU mirror: [docsRU/specs/11-organization-domain.md](../../docsRU/specs/11-organization-domain.md)

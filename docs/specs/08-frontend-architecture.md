@@ -177,3 +177,12 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Performance: bundle size analyzed, lazy loading implemented for large features
 - [ ] Documentation: Storybook or similar for component library (deferred to phase 2)
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [API Gateway Domain](15-api-gateway-domain.md)
+- [Testing Strategy](09-testing-strategy.md)
+- 🌐 RU mirror: [docsRU/specs/08-frontend-architecture.md](../../docsRU/specs/08-frontend-architecture.md)

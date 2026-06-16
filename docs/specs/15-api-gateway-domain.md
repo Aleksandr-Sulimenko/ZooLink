@@ -107,3 +107,13 @@ This specification addresses the following Non-Functional Requirements:
    - [ ] Observability: verify logs contain correlation IDs; metrics are exposed and scrapable; tracing works
    - [ ] Documentation: OpenAPI spec generated and available at /api/docs
    - [ ] NFR Traceability: Verify that performance, security, availability, and observability requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Auth API](../03-architecture/api-contracts/auth-api.yaml)
+- [Identity Domain](01-identity-domain.md)
+- [Frontend Architecture](08-frontend-architecture.md)
+- 🌐 RU mirror: [docsRU/specs/15-api-gateway-domain.md](../../docsRU/specs/15-api-gateway-domain.md)

@@ -1,99 +1,99 @@
-# Логическая модель данных (ERD)
+# Logical Data Model (ERD)
 
-Этот документ описывает логическую модель данных системы ZooLink, соответствующую концептуальным моделям доменов и реализованную в PostgreSQL схеме.
+This document describes the logical data model of the ZooLink system, which corresponds to the conceptual domain models and is implemented in the PostgreSQL schema.
 
-## Обзор
+## Overview
 
-Логическая модель данных представляет собой структурированное представление данных системы, включая:
-- Сущности и их атрибуты
-- Связи между сущностями
-- Ограничения и бизнес-правила на уровне данных
-- Индексы для производительности
-- Расширяемость через JSONB и другие механизмы
+The logical data model is a structured representation of the system's data, including:
+- Entities and their attributes
+- Relationships between entities
+- Constraints and business rules at the data level
+- Indexes for performance
+- Extensibility through JSONB and other mechanisms
 
-Физическая реализация схемы данных находится в файле [`database_schema.sql`](../../database_schema.sql).
+The physical implementation of the data schema is located in the file [`database_schema.sql`](../../database_schema.sql).
 
-## Основные принципы моделирования
+## Core Modeling Principles
 
-### 1. Соответствие доменной модели (DDD)
-- Таблицы и отношения отражают агрегаты, сущности и объекты-значения из доменных моделей
-- Каждый ограниченный контекст имеет четко выраженную структуру данных
-- Агрегатные корни имеют глобальные идентификаторы (UUID)
-- Внешние ключи устанавливают связи внутри и между агрегатами
+### 1. Alignment with the Domain Model (DDD)
+- Tables and relationships reflect the aggregates, entities, and value objects from the domain models
+- Each bounded context has a clearly expressed data structure
+- Aggregate roots have global identifiers (UUID)
+- Foreign keys establish relationships within and between aggregates
 
-### 2. Расширяемость
-- Использование колонок JSONB для атрибутов, которые могут меняться или иметь переменную структуру
-- Метаданные и расширяемые поля в ключевых таблицах
-- Поддержка мультиязычности через локализованные JSONB поля
+### 2. Extensibility
+- Use of JSONB columns for attributes that may change or have a variable structure
+- Metadata and extensible fields in key tables
+- Multilingual support through localized JSONB fields
 
-### 3. Целостность данных
-- Ограничения CHECK для бизнес-правил на уровне БД
-- Внешние ключи для ссылочной целостности
-- Уникальные ограничения там, где необходимо
-- Триггеры для автоматического поддержания производных данных
+### 3. Data Integrity
+- CHECK constraints for business rules at the database level
+- Foreign keys for referential integrity
+- Unique constraints where necessary
+- Triggers for automatic maintenance of derived data
 
-### 4. Производительность
-- Стратегически подобранные индексы для частых шаблонов запросов
-- Разделение нагрузки через соответствующие типы индексов (B-tree, GIN, GiST, GIST)
-- Предварительно вычисленные или кэшируемые значения там, где уместно
+### 4. Performance
+- Strategically chosen indexes for frequent query patterns
+- Load distribution through appropriate index types (B-tree, GIN, GiST, GIST)
+- Pre-computed or cacheable values where appropriate
 
-### 5. Audit и traceability
-- Временные метки создания и обновления на всех таблицах
-- Специальные таблицы для истории изменений там, где требуется полная прослеживаемость
-- Мягкое удаление вместо физического удаления для ключевых сущностей
-- Таблица исходящих событий (Outbox) для надежной интеграции
+### 5. Audit and Traceability
+- Creation and update timestamps on all tables
+- Dedicated tables for change history where full traceability is required
+- Soft deletion instead of physical deletion for key entities
+- Outbox event table for reliable integration
 
-## Основные сущности и их отношения
+## Core Entities and Their Relationships
 
-Данная модель поддерживает все ограниченные контексты системы ZooLink:
+This model supports all bounded contexts of the ZooLink system:
 
-### Контекст идентичности
-- `users` - основная сущность пользователя
-- Связи с аутентификационными провайдерами через отдельные колонки
-- Роли и права доступа
+### Identity Context
+- `users` - the core user entity
+- Relationships with authentication providers via dedicated columns
+- Roles and access rights
 
-### Контекст организации
-- `organizations` - организации и компании
-- `branches` - филиалы организаций
-- `organization_users` - связь пользователей с организациями и их роли
+### Organization Context
+- `organizations` - organizations and companies
+- `branches` - branches of organizations
+- `organization_users` - association of users with organizations and their roles
 
-### Контекст животных (ядро системы)
-- `animals` - агрегатный корень, центральная сущность системы
-- `species` и `breeds` - справочные данные из контекста администрирования
-- `animal_ownership_history` - история смены владельцев
-- Связи с родителями для отслеживания pedigree (планируемое расширение)
+### Animal Context (System Core)
+- `animals` - the aggregate root, the central entity of the system
+- `species` and `breeds` - reference data from the administration context
+- `animal_ownership_history` - ownership change history
+- Relationships to parents for pedigree tracking (planned extension)
 
-### Контекст объявлений (маркетплейсы)
-- `listings` - объявления, связанные с животными через внешний ключ
-- `listing_photos` - фотографии объявлений
-- `location_point` - геопространственная позиция для поиска по радиусу
-- Различные типы объявлений: продажа, разведение, выставка, усыновление, услуги случки
+### Listings Context (Marketplaces)
+- `listings` - listings, linked to animals through a foreign key
+- `listing_photos` - listing photos
+- `location_point` - geospatial position for radius search
+- Various listing types: sale, breeding, show, adoption, stud service
 
-### Контекст взаимодействий
-- `conversations` и `messages` - система коммуникации между пользователями (после модерации)
-- Связи с объявлениями для контекстуализации коммуникации
+### Interactions Context
+- `conversations` and `messages` - communication system between users (after moderation)
+- Relationships with listings to contextualize communication
 
-### Контекст администрирования
-- `cities` - справочник городов для геопоиска
-- `feature_toggles` - управление функциональностью через переключатели
-- `outbox_events` - таблица исходящих событий для надежной интеграции
-- `supported_languages` - управление поддерживаемыми языками
+### Administration Context
+- `cities` - city reference table for geo-search
+- `feature_toggles` - management of functionality through toggles
+- `outbox_events` - outbox event table for reliable integration
+- `supported_languages` - management of supported languages
 
-### Вспомогательные таблицы
-- Таблицы для хранения локализованных данных (все *_localized JSONB колонки)
-- Таблицы для временных данных и кеша (через приложение)
-- Таблицы для медиа-файлов (через объектное хранилище, ссылки в БД)
+### Supporting Tables
+- Tables for storing localized data (all *_localized JSONB columns)
+- Tables for temporary data and cache (via the application)
+- Tables for media files (via object storage, with references in the DB)
 
-## Детальное описание ключевых таблиц
+## Detailed Description of Key Tables
 
-### Таблица animals (Агрегатный корень животного)
+### animals Table (Animal Aggregate Root)
 ```sql
 CREATE TABLE animals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID REFERENCES users(id) ON DELETE RESTRICT,
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
-    species_id UUID NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
-    breed_id UUID REFERENCES breeds(id) ON DELETE SET NULL,
+    species_id INT NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
+    breed_id INT REFERENCES breeds(id) ON DELETE SET NULL,
     breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')),
@@ -118,14 +118,14 @@ CREATE TABLE animals (
 );
 ```
 
-**Ключевые моменты:**
-- Именно один владелец (либо пользователь, либо организация) через ограничение CHECK
-- Неизменяемые поля после создания: species_id, sex, date_of_birth, breed_id (через триггер приложения)
-- JSONB колонки для расширяемых и локализованных данных
-- Связи с родителями для будущего отслеживания родословной
-- Мягкое удаление через поле deactivated_at
+**Key points:**
+- Exactly one owner (either a user or an organization) enforced through a CHECK constraint
+- Immutable fields after creation: species_id, sex, date_of_birth, breed_id (via an application trigger)
+- JSONB columns for extensible and localized data
+- Relationships to parents for future pedigree tracking
+- Soft deletion through the deactivated_at field
 
-### Таблица listings (Сущность внутри агрегата животного)
+### listings Table (Entity Within the Animal Aggregate)
 ```sql
 CREATE TABLE listings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -153,15 +153,15 @@ CREATE TABLE listings (
 );
 ```
 
-**Ключевые моменты:**
-- Обязательная связь с животным (каждое объявление относится к конкретному животному)
-- Продавец всегда пользователь (даже для организационных объявлений)
-- Опциональная привязка к организации/филиалу
-- Геопространственная позиция для поиска по радиусу
-- Различные типы объявлений через ограничение CHECK
-- Ограничение собственности: либо личное объявление, либо организационное
+**Key points:**
+- Mandatory relationship to an animal (each listing relates to a specific animal)
+- The seller is always a user (even for organizational listings)
+- Optional association with an organization/branch
+- Geospatial position for radius search
+- Various listing types through a CHECK constraint
+- Ownership constraint: either a personal listing or an organizational listing
 
-### Таблица users (Контекст идентичности)
+### users Table (Identity Context)
 ```sql
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -185,110 +185,110 @@ CREATE TABLE users (
 );
 ```
 
-**Ключевые моменты:**
-- Множественные способы аутентификации (телефон/SMS + OAuth провайдеры)
-- Роль пользователя определяет доступ к функциям системы
-- Связь с городом для геопоис кодов поиска по местоположению
-- Мягкое удаление через поле deactivated_at
+**Key points:**
+- Multiple authentication methods (phone/SMS + OAuth providers)
+- The user role determines access to system features
+- Relationship with a city for geo-search by location
+- Soft deletion through the deactivated_at field
 
-## Связи и ограничения
+## Relationships and Constraints
 
-### Основные связи
-1. `animals.species_id → species.id` (тип животного)
-2. `animals.breed_id → breeds.id` (порода животного)  
-3. `animals.owner_id → users.id` (личный владелец)
-4. `animals.organization_id → organizations.id` (организационный владелец)
-5. `listings.animal_id → animals.id` (объявление относится к животному)
-6. `listings.seller_id → users.id` (кто разместил объявление)
-7. `listings.organization_id → organizations.id` (организация, разместившая объявление)
-8. `listings.branch_id → branches.id` (филиал организации)
-9. `users.city_id → cities.id` (город пользователя для геопоиска)
+### Core Relationships
+1. `animals.species_id → species.id` (animal species)
+2. `animals.breed_id → breeds.id` (animal breed)
+3. `animals.owner_id → users.id` (individual owner)
+4. `animals.organization_id → organizations.id` (organizational owner)
+5. `listings.animal_id → animals.id` (listing relates to an animal)
+6. `listings.seller_id → users.id` (who posted the listing)
+7. `listings.organization_id → organizations.id` (organization that posted the listing)
+8. `listings.branch_id → branches.id` (branch of the organization)
+9. `users.city_id → cities.id` (user's city for geo-search)
 10. `organization_users.organization_id → organizations.id`
 11. `organization_users.user_id → users.id`
 
-### Ограничения целостности
-- **CHK_CONSTRAINT_ON_ANIMAL_OWNERSHIP:** Животное должно иметь либо личного владельца, либо бытьowned организацией (не оба и не ninguno)
-- **CHK_CONSTRAINT_ON_LISTING_OWNERSHIP:** Объявление либо личное (без организации/филиала), либо организационное (с организацией)
-- **ROLE_CONSTRAINTS:** Ограничения ролей пользователей и их ролей в организациях
-- **IMMUTABLE_FIELDS_TRIGGER:** Триггер предотвращающий изменение неизменяемых полей животного после создания
-- **OWNERSHIP_CHANGE_LOCK_MVP:** Триггер блокирующий изменение собственности на фазе MVP
+### Integrity Constraints
+- **CHK_CONSTRAINT_ON_ANIMAL_OWNERSHIP:** An animal must have either an individual owner or be owned by an organization (not both and not neither)
+- **CHK_CONSTRAINT_ON_LISTING_OWNERSHIP:** A listing is either personal (without an organization/branch) or organizational (with an organization)
+- **ROLE_CONSTRAINTS:** Constraints on user roles and their roles within organizations
+- **IMMUTABLE_FIELDS_TRIGGER:** A trigger that prevents changing an animal's immutable fields after creation
+- **OWNERSHIP_CHANGE_LOCK_MVP:** A trigger that blocks ownership changes during the MVP phase
 
-## Индексы для производительности
+## Indexes for Performance
 
-### Таблица animals
-- `idx_animals_owner` - поиск по владельцу (личный или организационный)
-- `idx_animals_species_breed` - поиск по виду и породе (частый фильтр)
-- `idx_animals_microchip` / `idx_animals_tattoo` - поиск по идентификаторам
-- GIN индексы на JSONB колонках (`health_records`, `reproductive_data`) - поиск по содержимому
-- `idx_animals_active` - частичный индекс только для активных животных
-- `idx_animals_owned_since` - поиск по дате приобретения
+### animals Table
+- `idx_animals_owner` - search by owner (individual or organizational)
+- `idx_animals_species_breed` - search by species and breed (frequent filter)
+- `idx_animals_microchip` / `idx_animals_tattoo` - search by identifiers
+- GIN indexes on JSONB columns (`health_records`, `reproductive_data`) - search by content
+- `idx_animals_active` - partial index only for active animals
+- `idx_animals_owned_since` - search by acquisition date
 
-### Таблица listings
-- `idx_listings_animal` - поиск объявлений конкретного животного
-- `idx_listings_seller` - поиск объявлений конкретного продавца
-- `idx_listings_type_active` - комбинированный индекс для поиска активных объявлений по типу
-- `idx_listings_price` - поиск по цене (только для объявлений с ценой)
-- GIST индекс на `location_point` (если PostGIS доступен) - эффективный геопоisk
-- `idx_listings_expires` - поиск未 еще не истекших объявлений
-- `idx_listing_photos_listing` - связь фотографий с объявлениями
+### listings Table
+- `idx_listings_animal` - search for listings of a specific animal
+- `idx_listings_seller` - search for listings of a specific seller
+- `idx_listings_type_active` - composite index for searching active listings by type
+- `idx_listings_price` - search by price (only for listings with a price)
+- GIST index on `location_point` (if PostGIS is available) - efficient geo-search
+- `idx_listings_expires` - search for listings that have not yet expired
+- `idx_listing_photos_listing` - relationship of photos to listings
 
-### Другие важные индексы
-- Индексы на таблицах пользователей для быстрого поиска по разным способам аутентификации
-- Индексы на справочных таблицах (species, breeds, cities)
-- Индексы на таблицах истории владения и организационных связях
+### Other Important Indexes
+- Indexes on the users table for fast lookup by different authentication methods
+- Indexes on reference tables (species, breeds, cities)
+- Indexes on ownership history tables and organization association tables
 
-## Механизмы расширяемости
+## Extensibility Mechanisms
 
-### JSONB колонки
-Используются для:
-- Локализованных строк (все *_localized колонки)
-- Расширяемых атрибутов со сложной структурой (medical records, reproductive data)
-- Метаданных и экспериментальных полей
-- Хранения данных с переменной схемой без необходимости миграций
+### JSONB Columns
+Used for:
+- Localized strings (all *_localized columns)
+- Extensible attributes with a complex structure (medical records, reproductive data)
+- Metadata and experimental fields
+- Storing data with a variable schema without the need for migrations
 
-### Метаданные таблицы
-- `metadata` колонка в ключевых таблицах (organizations, listings, feature_toggles)
-- Для хранения экспериментальных или временных атрибутов
-- Позволяет добавлять новые функции без изменения схемы БД
+### Table Metadata
+- A `metadata` column in key tables (organizations, listings, feature_toggles)
+- For storing experimental or temporary attributes
+- Allows adding new features without changing the DB schema
 
-### Таблица feature_toggles
-- Управление функциональностью через переключатели
-- Прогрессивный розлив функций (rollout_percentage)
-- Легкое включение/выключение функций без деплоя
+### feature_toggles Table
+- Management of functionality through toggles
+- Progressive rollout of features (rollout_percentage)
+- Easy enabling/disabling of features without a deployment
 
-## Паттерны обработки специальных данных
+## Patterns for Handling Special Data
 
-### Геопространственные данные
-- Основное: колонка `location_point` типа GEOGRAPHY(POINT, 4326) (требует PostGIS)
-- Резервный вариант: отдельные широта/долгота колонки (не включены в текущую схему, но можно добавить через ALTER TABLE)
-- Радиус поиска: колонка `search_radius_m` в метрах
-- Индексы: GIST индекс для эффективных операций Distance Within и KNN поиска
-- Единицы: Метры для расстояний, SRID 4326 (WGS84) для координат
+### Geospatial Data
+- Primary: a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS)
+- Fallback option: separate latitude/longitude columns (not included in the current schema, but can be added via ALTER TABLE)
+- Search radius: a `search_radius_m` column in meters
+- Indexes: a GIST index for efficient Distance Within operations and KNN search
+- Units: Meters for distances, SRID 4326 (WGS84) for coordinates
 
-### Мультиязычность
-- Все текстовые поля, требующие локализации, представлены как JSONB колонки
-- Структура: {"en": "English text", "ru": "Russian text"}
-- Функции БД: `get_localized()` и `has_translation()` для работы с локализованными данными
-- Индексы: GIN индексы на конкретных языковых компонентах для поиска по локализованному тексту
+### Multilingualism
+- All text fields requiring localization are represented as JSONB columns
+- Structure: {"en": "English text", "ru": "Russian text"}
+- DB functions: `get_localized()` and `has_translation()` for working with localized data
+- Indexes: GIN indexes on specific language components for searching localized text
 
-### История изменений и аудит
-- Мягкое удаление: поля `deactivated_at` в ключевых таблицах
-- История владения животными: отдельная таблица `animal_ownership_history`
-- Исходящие события: таблица `outbox_events` для надежной интеграции
-- Временные метки: `created_at` и `updated_at` на всех таблицах через триггеры
-- Планируемое расширение: отдельная таблица аудита для критических операций
+### Change History and Audit
+- Soft deletion: `deactivated_at` fields in key tables
+- Animal ownership history: a dedicated `animal_ownership_history` table
+- Outbox events: an `outbox_events` table for reliable integration
+- Timestamps: `created_at` and `updated_at` on all tables via triggers
+- Planned extension: a dedicated audit table for critical operations
 
-## Связанные решения
+## Related Decisions
 
-- [ADR-0001: Выбор технологического стека](../04-decisions/0001-tech-stack.md)
-- [ADR-0002: Жёсткое разделение рынков](../04-decisions/0002-hard-split-markets.md)
-- [ADR-0003: Премодерация рабочего процесса](../04-decisions/0003-pre-moderation-workflow.md)
-- [ADR-0004: Животное как агрегатный корень](../04-decisions/0004-animal-as-aggregate.md)
-- [ADR-0005: Нет встроенного чата в MVP](../04-decisions/0005-no-chat-mvp.md)
+- [ADR-0001: Technology stack selection](../04-decisions/0001-tech-stack.md)
+- [ADR-0002: Hard split of markets](../04-decisions/0002-hard-split-markets.md)
+- [ADR-0003: Pre-moderation workflow](../04-decisions/0003-pre-moderation-workflow.md)
+- [ADR-0004: Animal as the aggregate root](../04-decisions/0004-animal-as-aggregate.md)
+- [ADR-0005: No built-in chat in the MVP](../04-decisions/0005-no-chat-mvp.md)
 
-## Диаграмма ERD
+## ERD Diagram
 
-Текстовое представление основных связей:
+A textual representation of the core relationships:
 
 ```
 users 1 ○───────○ many organization_users
@@ -314,31 +314,31 @@ species 1 ○───────○ many breeds ○...................○ anim
         ○───────○ many listings (seller_id)
 ```
 
-Где:
-- 1 = один
-- many = многие
-- ○ = необязательная связь
-- ● = обязательная связь
-- .................. = связь через другие таблицы или сложное условие
+Where:
+- 1 = one
+- many = many
+- ○ = optional relationship
+- ● = mandatory relationship
+- .................. = relationship through other tables or a complex condition
 
-## Инструкции по поддержке
+## Maintenance Instructions
 
-### При изменении схемы
-1. Всегда обновляйте `database_schema.sql` как источник истины
-2. Обновляйте этот документ, чтобы отражать изменения в логической модели
-3. Учитывайте обратную совместимость при добавлении/изменении полей
-4. Добавляйте миграционные скрипты для существующих данных
-5. Обновляйте связанные документы (доменные спецификации, API контракты)
+### When Changing the Schema
+1. Always update `database_schema.sql` as the source of truth
+2. Update this document to reflect changes in the logical model
+3. Consider backward compatibility when adding/changing fields
+4. Add migration scripts for existing data
+5. Update related documents (domain specifications, API contracts)
 
-### При добавлении новых функций
-1. Рассмотрите возможность использования JSONB колонок перед изменением схемы
-2. Используйте таблицу `feature_toggles` для постепенного включения функций
-3. Добавляйте необходимые индексы для новых шаблонов запросов
-4. Убедитесь, что ограничения и бизнес-правила правильно представлены на уровне БД
-5. Добавьте комментарии и документацию для новых таблиц и колонок
+### When Adding New Features
+1. Consider using JSONB columns before changing the schema
+2. Use the `feature_toggles` table for gradual feature enablement
+3. Add the necessary indexes for new query patterns
+4. Ensure that constraints and business rules are correctly represented at the DB level
+5. Add comments and documentation for new tables and columns
 
-### Производительность и мониторинг
-1. Периодически пересматривайте и обновляйте индексы на основе реальных шаблонов запросов
-2. Мониторьте медленные запросы и корректируйте индексы соответственно
-3. Рассмотрите партиционирование больших таблиц (listings, messages) по времени
-4. Настройте оповещения на использование ресурсов БД и время выполнения запросов
+### Performance and Monitoring
+1. Periodically review and update indexes based on real query patterns
+2. Monitor slow queries and adjust indexes accordingly
+3. Consider partitioning large tables (listings, messages) by time
+4. Set up alerts for DB resource usage and query execution time

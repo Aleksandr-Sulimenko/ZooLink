@@ -1,21 +1,21 @@
-# Архитектурные решения (Architecture Decision Records)
+# Architecture Decision Records
 
-Этот каталог содержит все архитектурные решения (ADR) для проекта ZooLink.
+This directory contains all the Architecture Decision Records (ADRs) for the ZooLink project.
 
-## Список ADR
+## ADR list
 
-- [ADR-0001: Wyбор технологического стека](0001-tech-stack.md)
-- [ADR-0002: Жёсткое разделение рынков домашних животных и скота](0002-hard-split-markets.md)
-- [ADR-0003: Премодерация рабочего процесса для объявлений](0003-pre-moderation-workflow.md)
-- [ADR-0004: Животное как агрегатный корень](0004-animal-as-aggregate.md)
-- [ADR-0005: Нет встроенного чата в MVP](0005-no-chat-mvp.md)
+- [ADR-0001: Technology stack selection](0001-tech-stack.md)
+- [ADR-0002: Hard split between the pet and livestock markets](0002-hard-split-markets.md)
+- [ADR-0003: Pre-moderation workflow for listings](0003-pre-moderation-workflow.md)
+- [ADR-0004: Animal as the aggregate root](0004-animal-as-aggregate.md)
+- [ADR-0005: No built-in chat in the MVP](0005-no-chat-mvp.md)
 
-## Шаблон
+## Template
 
-Используйте [шаблон ADR](template.md) для создания новых архитектурных решений.
+Use the [ADR template](template.md) to create new architecture decisions.
 
-## Связанные документы
+## Related documents
 
-- [Спецификации доменов](../specs/)
-- [Требования](../02-requirements/)
-- [Архитектура](../03-architecture/)
+- [Domain specifications](../specs/)
+- [Requirements](../02-requirements/)
+- [Architecture](../03-architecture/)

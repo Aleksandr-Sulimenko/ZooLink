@@ -91,3 +91,14 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Security: verify that only MODERATOR and ADMIN roles can access moderation endpoints
 - [ ] Documentation: OpenAPI spec generated and available at /api/docs
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Listing State Machine](statemachines/listing_state_machine.md)
+- [Admin API](../03-architecture/api-contracts/admin-api.yaml)
+- [Admin Domain](06-admin-domain.md)
+- [Notification Domain](13-notification-domain.md)
+- 🌐 RU mirror: [docsRU/specs/12-moderation-domain.md](../../docsRU/specs/12-moderation-domain.md)

@@ -1,351 +1,351 @@
-# Ограниченные контексты и взаимодействия
+# Bounded Contexts and Interactions
 
-Этот документ описывает ограниченные контексты (Bounded Contexts) системы ZooLink согласно принципам предметно-ориентированного проектирования (DDD) и их взаимодействия.
+This document describes the bounded contexts of the ZooLink system according to the principles of Domain-Driven Design (DDD) and their interactions.
 
-## Обзор системы ZooLink как набора ограниченных контекстов
+## Overview of the ZooLink System as a Set of Bounded Contexts
 
-ZooLink состоит из нескольких ограниченных контекстов, каждый из которых имеет свою отдельную модель домена, ubiquitous language и четко определенные границы ответственности. Контексты взаимодействуют через хорошо определенные интерфейсы (API, события).
+ZooLink consists of several bounded contexts, each of which has its own separate domain model, ubiquitous language, and clearly defined boundaries of responsibility. The contexts interact through well-defined interfaces (APIs, events).
 
-## Ограниченные контексты
+## Bounded Contexts
 
-### 1. Контекст идентичности (Identity Context)
+### 1. Identity Context
 
-**Цель:** Управление пользователями, аутентификацией, авторизацией и профилями.
+**Purpose:** Management of users, authentication, authorization, and profiles.
 
-**Основные сущности:**
-- Пользователь (User)
-- Роль (Role)
-- Разрешение (Permission)
-- Сессия (Session)
-- Провайдер аутентификации (AuthProvider)
-
-**Ubiquitous Language:**
-- аутентификация, авторизация, вход, регистрация, профиль, роль, разрешение, сессия, токен
-- поставщик идентификации (Google, Apple, Telegram, VK)
-- верификация телефона/email, двухфакторная аутентификация
-
-**Границы:**
-- Не содержит информации о животных или объявлениях
-- Отвечает за все вопросы доступа и идентификации
-- Предоставляет сервисы аутентификации/авторизации другим контекстам
-
-### 2. Контекст организации (Organization Context)
-
-**Цель:** Управление организациями (питомники, приюты, фермы, ветеринарные клиники) и их структурой.
-
-**Основные сущности:**
-- Организация (Organization)
-- Филиал/Branch (Branch)
-- Член организации (OrganizationMember)
-- Роль в организации (OrganizationRole)
+**Core entities:**
+- User
+- Role
+- Permission
+- Session
+- AuthProvider
 
 **Ubiquitous Language:**
-- организация, филиал, подразделение, владелец, сотрудник, модератор, администратор
-- иерархия организации, центральный офис, региональное отделение
+- authentication, authorization, login, registration, profile, role, permission, session, token
+- identity provider (Google, Apple, Telegram, VK)
+- phone/email verification, two-factor authentication
 
-**Границы:**
-- Не содержит информации об животных или объявлениях напрямую
-- Связывается с контекстом идентичности через пользователей
-- Связывается с контекстом животных через владельца
+**Boundaries:**
+- Does not contain information about animals or listings
+- Responsible for all access and identity matters
+- Provides authentication/authorization services to other contexts
 
-### 3. Контекст животных (Animal Context) - Ядро системы
+### 2. Organization Context
 
-**Цель:** Управление информацией о животных как центральной сущностью системы.
+**Purpose:** Management of organizations (kennels, shelters, farms, veterinary clinics) and their structure.
 
-**Основные сущности:**
-- Животное (Animal) - агрегатный корень
-- Вид (Species)
-- Порода (Breed)
-- Окрас/Цвет (Color)
-- Медицинские записи (HealthRecord)
-- Репродуктивная история (ReproductionHistory)
-
-**Ubiquitous Language:**
-- животное, вид, порода, пол, возраст, кличка, окрас, чип
-- медицинская история, прививки, стерилизация/кастрация
-- вес, высота, особенности поведения, родословная
-
-**Границы:**
-- Содержит всю информацию о животном на протяжении его жизни
-- Связывается с контекстом объявлений (одно животное -> много объявлений)
-- Может иметь нескольких владельцев через время (передача собственности)
-- Не содержит информации о ценах или условиях сделки
-
-### 4. Контекст рыночного места домашних животных (Pet Marketplace Context)
-
-**Цель:** Управление объявлениями о домашних животных (собаки, кошки, птицы, рептилии и т.д.).
-
-**Основные сущности:**
-- Объявление (Listing) - сущность внутри агрегата животного
-- Фотографии объявления
-- Статусы модерации
-- Типы объявлений (продажа, усыновление,lost & found)
+**Core entities:**
+- Organization
+- Branch
+- OrganizationMember
+- OrganizationRole
 
 **Ubiquitous Language:**
-- домашнее животное, компаньон, усыновление, потеряно-найдено
-- продажа, цена, торг, доставка, встреча
-- прививки, стерилизован, не агрессивен, хорош с детьми
+- organization, branch, division, owner, employee, moderator, administrator
+- organization hierarchy, headquarters, regional office
 
-**Границы:**
-- Специфичный для домашних животных (не для скота)
-- Использует общую сущность животного из контекста животных
-- Уникальные атрибуты: характер, способность к дрессировке, совместимость с другими животными
-- Разделенная очередь модерации с контекстом скота
+**Boundaries:**
+- Does not directly contain information about animals or listings
+- Connects to the Identity Context through users
+- Connects to the Animal Context through ownership
 
-### 5. Контекст рыночного места скота (Livestock Marketplace Context)
+### 3. Animal Context - System Core
 
-**Цель:** Управление объявлениями о сельскохозяйственных животных (КРС, лошади, овцы, козы, свины, птица).
+**Purpose:** Management of information about animals as the central entity of the system.
 
-**Основные сущности:**
-- Объявление (Listing) - сущность внутри агрегата животного
-- Фотографии объявления
-- Статусы модерации
-- Типы объявлений (продажа, племенное разведение, выставка, убой)
-
-**Ubiquitous Language:**
-- скот, продуктивность, племенная ценность, генетика
-- удой, привес, яйценоскость, шерсть
-- ветеринарный паспорт, генетический тест, племенная книга
-- транспортировка, погрузка/разгрузка, ветеринарное сопровождение
-
-**Границы:**
-- Специфичный для сельскохозяйственных животных
-- Использует общую сущность животного из контекста животных
-- Уникальные атрибуты: продуктивные качества, генетическая ценность, племенная принадлежность
-- Требует регуляторной документации (разрешения на перемещение, ветеринарные справки)
-
-### 6. Контекст сопоставления (Matching Context)
-
-**Цель:** Нахождение подходящих пар/групп животных для различных целей (размножение, дружба, совместное содержание).
-
-**Основные сущности:**
-- Пара для размножения (BreedingPair)
-- Правило совместимости (CompatibilityRule)
-- Алгоритм сопоставления (MatchingAlgorithm)
-- Результат матча (MatchResult)
+**Core entities:**
+- Animal - the aggregate root
+- Species
+- Breed
+- Color
+- HealthRecord
+- ReproductionHistory
 
 **Ubiquitous Language:**
-- совместимость, генетическое разнообразие, близкородственное скрещивание
-- темперамент, размер, возрастная разница
-- коэффициент родства, генетическая дальность
-- предпочтительные условия содержания, режим выгула
+- animal, species, breed, sex, age, nickname, coat color, chip
+- medical history, vaccinations, sterilization/castration
+- weight, height, behavioral traits, pedigree
 
-**Границы:**
-- Не хранит окончательные результаты как транзакции
-- Предоставляет рекомендации на основе алгоритмов
-- Может использовать данные из контекстов животных и маркетплейсов
-- Результаты могут привести к созданию объявлений в маркетплейс контекстах
+**Boundaries:**
+- Contains all information about an animal throughout its life
+- Connects to the Listings Context (one animal -> many listings)
+- May have several owners over time (ownership transfer)
+- Does not contain information about prices or transaction terms
 
-### 7. Контекст администрирования (Admin Context)
+### 4. Pet Marketplace Context
 
-**Цель:** Управление справочными данными, модерацией и системным администрированием.
+**Purpose:** Management of listings for pets (dogs, cats, birds, reptiles, etc.).
 
-**Основные сущности:**
-- Справочные данные: виды, породы, города, регионы
-- Очередь модерации (ModerationQueue)
-- Действие модерации (ModerationAction)
-- Журнал аудита (AuditLog)
-- Настройки системы (SystemSettings)
+**Core entities:**
+- Listing - an entity within the animal aggregate
+- Listing photos
+- Moderation statuses
+- Listing types (sale, adoption, lost & found)
 
 **Ubiquitous Language:**
-- модерация, одобрение, отклонение, причина, комментарий
-- справочник, классификация, стандартизация
-- журнал активности, отслеживание изменений, соответствие
-- настройки, конфигурация, пороги, лимиты
+- pet, companion, adoption, lost-and-found
+- sale, price, bargaining, delivery, meetup
+- vaccinations, sterilized, not aggressive, good with children
 
-**Границы:**
-- Предоставляет справочные данные другим контекстам
-- Управляет рабочим процессом модерации объявлений
-- Не содержит бизнес-логики домена (животные, объявления и т.д.)
-- Обеспечивает сквозное отслеживание и соответствие требованиям
+**Boundaries:**
+- Specific to pets (not for livestock)
+- Uses the shared animal entity from the Animal Context
+- Unique attributes: temperament, trainability, compatibility with other animals
+- A moderation queue separate from the livestock context
 
-### 8. Контекст уведомлений (Notifications Context)
+### 5. Livestock Marketplace Context
 
-**Цель:** Управление созданием, хранением и доставкой уведомлений пользователям.
+**Purpose:** Management of listings for agricultural animals (cattle, horses, sheep, goats, pigs, poultry).
 
-**Основные сущности:**
-- Шаблон уведомления (NotificationTemplate)
-- Уведомление (Notification)
-- Канал доставки (DeliveryChannel)
-- Предпочтения уведомлений (NotificationPreferences)
-
-**Ubiquitous Language:**
-- уведомление, алерт, напоминание, событие, обновление
-- email, SMS, push-уведомление, в приложении
-- немедленно, отложено, пакетно, отключено
-- подписка, отметка как прочитанное, архивирование
-
-**Границы:**
-- Реагирует на события из других контекстов
-- Не содержит бизнес-логики домена
-- Поддерживает множество каналов доставки
-- Уважает предпочтения пользователей по типам и каналам
-
-### 9. Контекст платежей (Payments Context) - Фаза 2+
-
-**Цель:** Обработка платежей за премиум-услуги, продвижение объявлений и т.д.
-
-**Основные сущности:**
-- Платеж (Payment)
-- Подписка (Subscription)
-- Счет (Invoice)
-- Платёжный метод (PaymentMethod)
+**Core entities:**
+- Listing - an entity within the animal aggregate
+- Listing photos
+- Moderation statuses
+- Listing types (sale, breeding, show, slaughter)
 
 **Ubiquitous Language:**
-- платеж, возврат, спор, верификация
-- подписка, период, возобновление
-- автоматическое списание, попытка, неудача
-- escrow, залог, обеспечительный платеж
+- livestock, productivity, breeding value, genetics
+- milk yield, weight gain, egg production, wool
+- veterinary passport, genetic test, herd book
+- transportation, loading/unloading, veterinary escort
 
-**Границы:**
-- Интегрируется с внешними платежными шлюзами
-- Не хранит чувствительные платежные данные (PCI DSS)
-- Взаимодействует с контекстом маркетплейсов для платных услуг
-- Планируется на фазу 2+
+**Boundaries:**
+- Specific to agricultural animals
+- Uses the shared animal entity from the Animal Context
+- Unique attributes: productive qualities, genetic value, breeding pedigree
+- Requires regulatory documentation (movement permits, veterinary certificates)
 
-## Взаимодействия между контекстами
+### 6. Matching Context
 
-### Синхронные взаимодействия (запрос/ответ)
+**Purpose:** Finding suitable pairs/groups of animals for various purposes (breeding, companionship, co-housing).
 
-1. **Идентичность ↔ Все контексты**
-   - Все контексты проверяют аутентификацию и авторизацию через контекст идентичности
-   - Используется: проверка токена, получение информации о пользователе/роли
+**Core entities:**
+- BreedingPair
+- CompatibilityRule
+- MatchingAlgorithm
+- MatchResult
 
-2. **Организация → Жвотные / Маркетплейсы**
-   - При создании объявления проверяется принадлежность животного организации/пользователю
-   - Используется: получение информации о владельце животного
+**Ubiquitous Language:**
+- compatibility, genetic diversity, inbreeding
+- temperament, size, age difference
+- coefficient of relationship, genetic distance
+- preferred housing conditions, exercise regimen
 
-3. **Маркетплейсы → Животные**
-   - Для валидации объявления необходимо проверить существование и принадлежность животного
-   - Используется: получение базовой информации о животном (вид, порода, пол и т.д.)
+**Boundaries:**
+- Does not store final results as transactions
+- Provides recommendations based on algorithms
+- May use data from the Animal and Marketplace contexts
+- Results may lead to the creation of listings in the marketplace contexts
 
-4. **Маркетплейсы → Администрирование**
-   - При модерации используются справочные данные (виды, породы и т.д.)
-   - При получении списка объявлений для модерации используется очередь модерации
-   - Используется: справочники для валидации, очередь модерации
+### 7. Admin Context
 
-5. **Сопоставление → Животные**
-   - Для расчета совместимости необходимы характеристики животных
-   - Используется: получение атрибутов животных (вид, порода, возраст, здоровье и т.д.)
+**Purpose:** Management of reference data, moderation, and system administration.
 
-6. **Уведомления ← Все контексты**
-   - Другие контексты отправляют события для создания уведомлений
-   - Используется: публикация событий о важных действиях (создание объявления, изменение статуса и т.д.)
+**Core entities:**
+- Reference data: species, breeds, cities, regions
+- ModerationQueue
+- ModerationAction
+- AuditLog
+- SystemSettings
 
-### Асинхронные взаимодействия (события)
+**Ubiquitous Language:**
+- moderation, approval, rejection, reason, comment
+- reference table, classification, standardization
+- activity log, change tracking, compliance
+- settings, configuration, thresholds, limits
 
-1. **Животные → Маркетплейсы**
-   - Событие: животное создано/обновлено/деактивировано
-   - Обработчики: обновление связанных объявлений, проверка валидности объявлений
+**Boundaries:**
+- Provides reference data to other contexts
+- Manages the listing moderation workflow
+- Does not contain domain business logic (animals, listings, etc.)
+- Ensures end-to-end tracking and compliance with requirements
 
-2. **Маркетплейсы → Уведомления**
-   - Событие: объявление создано/модерировано/опубликовано/отклонено
-   - Обработчики: уведомление владельца, потенциальных покупателей, модераторов
+### 8. Notifications Context
 
-3. **Маркетплейсы → Животные**
-   - Событие: объявление опубликовано с определенной ценой/условиями
-   - Обработчики: обновление статистики животного (количество продаж, средняя цена и т.д.)
+**Purpose:** Management of the creation, storage, and delivery of notifications to users.
 
-4. **Администрирование → Маркетплейсы**
-   - Событие: справочные данные обновлены (добавлена новая порода, изменен список городов)
-   - Обработчики: обновление кэша справочников, валидация существующих данных
+**Core entities:**
+- NotificationTemplate
+- Notification
+- DeliveryChannel
+- NotificationPreferences
 
-5. **Организации → Уведомления**
-   - Событие: пользователь добавлен/удален из организации, изменена роль
-   - Обработчики: уведомление об изменении доступа, приглашение присоединиться
+**Ubiquitous Language:**
+- notification, alert, reminder, event, update
+- email, SMS, push notification, in-app
+- immediate, deferred, batched, disabled
+- subscription, mark as read, archiving
 
-## Паттерны взаимодействия
+**Boundaries:**
+- Reacts to events from other contexts
+- Does not contain domain business logic
+- Supports multiple delivery channels
+- Respects user preferences for types and channels
 
-### API composición
-- Контексты предоставляют RESTful API для взаимодействия
-- Каждый контекст отвечает за свою собственную модель данных
-- Запросы между контекстами идут через хорошо определенные endpoints
+### 9. Payments Context - Phase 2+
+
+**Purpose:** Processing payments for premium services, listing promotion, etc.
+
+**Core entities:**
+- Payment
+- Subscription
+- Invoice
+- PaymentMethod
+
+**Ubiquitous Language:**
+- payment, refund, dispute, verification
+- subscription, period, renewal
+- automatic charge, attempt, failure
+- escrow, deposit, security payment
+
+**Boundaries:**
+- Integrates with external payment gateways
+- Does not store sensitive payment data (PCI DSS)
+- Interacts with the marketplace context for paid services
+- Planned for phase 2+
+
+## Interactions Between Contexts
+
+### Synchronous Interactions (request/response)
+
+1. **Identity ↔ All contexts**
+   - All contexts verify authentication and authorization through the Identity Context
+   - Used for: token verification, retrieving user/role information
+
+2. **Organization → Animals / Marketplaces**
+   - When creating a listing, the ownership of the animal by the organization/user is verified
+   - Used for: retrieving information about the animal's owner
+
+3. **Marketplaces → Animals**
+   - To validate a listing, it is necessary to verify the existence and ownership of the animal
+   - Used for: retrieving basic information about the animal (species, breed, sex, etc.)
+
+4. **Marketplaces → Administration**
+   - During moderation, reference data is used (species, breeds, etc.)
+   - When retrieving the list of listings for moderation, the moderation queue is used
+   - Used for: reference tables for validation, moderation queue
+
+5. **Matching → Animals**
+   - To calculate compatibility, animal characteristics are required
+   - Used for: retrieving animal attributes (species, breed, age, health, etc.)
+
+6. **Notifications ← All contexts**
+   - Other contexts send events to create notifications
+   - Used for: publishing events about important actions (listing creation, status change, etc.)
+
+### Asynchronous Interactions (events)
+
+1. **Animals → Marketplaces**
+   - Event: animal created/updated/deactivated
+   - Handlers: updating related listings, validating listings
+
+2. **Marketplaces → Notifications**
+   - Event: listing created/moderated/published/rejected
+   - Handlers: notifying the owner, potential buyers, moderators
+
+3. **Marketplaces → Animals**
+   - Event: listing published with a specific price/terms
+   - Handlers: updating animal statistics (number of sales, average price, etc.)
+
+4. **Administration → Marketplaces**
+   - Event: reference data updated (new breed added, city list changed)
+   - Handlers: updating the reference data cache, validating existing data
+
+5. **Organizations → Notifications**
+   - Event: user added/removed from an organization, role changed
+   - Handlers: notification about access change, invitation to join
+
+## Interaction Patterns
+
+### API Composition
+- Contexts provide RESTful APIs for interaction
+- Each context is responsible for its own data model
+- Requests between contexts go through well-defined endpoints
 
 ### Event-driven Architecture
-- Значительные изменения домена публикуются как события
-- Другие контексты подписываются на соответствующие события
-- Используется легковесный брокер событий (Redis Pub/Sub в MVP, планируется переход на Apache Kafka/RabbitMQ)
+- Significant domain changes are published as events
+- Other contexts subscribe to the relevant events
+- A lightweight event broker is used (Redis Pub/Sub in the MVP, with a planned migration to Apache Kafka/RabbitMQ)
 
 ### Shared Kernel
-- Небольшая часть кода, совместно используемая несколькими контекстами
-- В ZooLink: общая инфраструктура (логирование, обработка исключений, базовые DDD-структуры)
-- Минимален по размеру и тщательно контролируется
+- A small part of the code shared by several contexts
+- In ZooLink: shared infrastructure (logging, exception handling, basic DDD structures)
+- Minimal in size and carefully controlled
 
-### Конформный (Conformist)
-- Один контекст следует модели другого контекста
-- Пример: контексты маркетплейсов conform to модель животного из контекста животных
-- Не дублируют данные, а ссылаются на них
+### Conformist
+- One context follows the model of another context
+- Example: the marketplace contexts conform to the animal model from the Animal Context
+- They do not duplicate data, but reference it
 
-### Анти-corruption Layer (ACL)
-- Защищает контекст от внешних нежелательных влияний
-- Используется при взаимодействии с внешними системами (платежные шлюзы, регулятивные системы)
-- Переводит внешние модели во внутреннюю модель домена
+### Anti-Corruption Layer (ACL)
+- Protects a context from unwanted external influences
+- Used when interacting with external systems (payment gateways, regulatory systems)
+- Translates external models into the internal domain model
 
-## Межконтекстные зависимости
+## Cross-Context Dependencies
 
-| Контекст потребитель | Зависит от контекста | Тип зависимости | Описание |
+| Consumer Context | Depends on Context | Dependency Type | Description |
 |----------------------|----------------------|-----------------|----------|
-| Маркетплейсы (pet)   | Животные             | Команда         | Нужно существование и владение животным для объявления |
-| Маркетплейсы (livestock) | Животные         | Команда         | Нужно существование и владение животным для объявления |
-| Маркетплейсы (pet/livestock) | Администрирование | Команда       | Нужны справочные данные для валидации и модерации |
-| Маркетплейсы         | Идентичность         | Команда         | Нужна аутентификация/авторизация для действий |
-| Сопоставление       | Животные             | Команда         | Нужны характеристики животных для расчета совместимости |
-| Уведомления          | Все доменные контексты| Широкий        | Генерируют уведомления на основе событий домена |
-| Организация         | Идентичность         | Команда         | Пользователи организации должны существовать в контексте идентичности |
-| Администрирование   | None                 | Самостоятельный | Предоставляет услуги другим контекстам |
-| Животные            | None                 | Самостоятельный | Ядро системы, не зависит от бизнес-логики других контекстов |
+| Marketplaces (pet)   | Animals              | Command         | Requires the existence and ownership of an animal for a listing |
+| Marketplaces (livestock) | Animals          | Command         | Requires the existence and ownership of an animal for a listing |
+| Marketplaces (pet/livestock) | Administration | Command       | Requires reference data for validation and moderation |
+| Marketplaces         | Identity             | Command         | Requires authentication/authorization for actions |
+| Matching             | Animals              | Command         | Requires animal characteristics to calculate compatibility |
+| Notifications        | All domain contexts  | Broad           | Generate notifications based on domain events |
+| Organization         | Identity             | Command         | Organization users must exist in the Identity Context |
+| Administration       | None                 | Self-contained  | Provides services to other contexts |
+| Animals              | None                 | Self-contained  | System core, does not depend on the business logic of other contexts |
 
-## Политические границы
+## Political Boundaries
 
-### Владельцы контекстов
-- Контекст идентичности: Команда бекенда (аут/авз)
-- Контекст организации: Команда бекенда (организационная структура)
-- Контекст животных: Команда бекенда (ядро системы, самое стабильное)
-- Контекст маркетплейса домашних животных: Команда бекенда + команда модерации домашних животных
-- Контекст маркетплейса скота: Команда бекенда + команда модерации скота
-- Контекст сопоставления: Команда бекенда (алгоритмы и правила)
-- Контекст администрирования: Команда администрирования + команда модерации
-- Контекст уведомлений: Команда бекенда (инфраструктура доставки)
-- Контекст платежей: Команда бекенда (финансовые операции)
+### Context Owners
+- Identity Context: Backend team (authn/authz)
+- Organization Context: Backend team (organizational structure)
+- Animal Context: Backend team (system core, the most stable)
+- Pet Marketplace Context: Backend team + pet moderation team
+- Livestock Marketplace Context: Backend team + livestock moderation team
+- Matching Context: Backend team (algorithms and rules)
+- Admin Context: Administration team + moderation team
+- Notifications Context: Backend team (delivery infrastructure)
+- Payments Context: Backend team (financial operations)
 
-### Единственный источник правды (Single Source of Truth)
-- **Животные:** Контекст животных (единственный источник информации о животном)
-- **Пользователи:** Контекст идентичности (единственный источник аут/инфо)
-- **Организации:** Контекст организации (единственный источник org-структуры)
-- **Справочные данные:** Контекст администрирования (виды, породы, города и т.д.)
-- **Объявления:** Разделены по контекстам маркетплейсов, но ссылаются на животных
-- **Соответствия:** Контекст сопоставления (результаты алогритмов, не хранятся навсегда)
+### Single Source of Truth
+- **Animals:** Animal Context (the only source of information about an animal)
+- **Users:** Identity Context (the only source of authn/info)
+- **Organizations:** Organization Context (the only source of org structure)
+- **Reference data:** Admin Context (species, breeds, cities, etc.)
+- **Listings:** Split across the marketplace contexts, but reference animals
+- **Matches:** Matching Context (algorithm results, not stored permanently)
 
-## Эволюционные пути
+## Evolution Paths
 
-### Из одного контекста в несколько
-- По мере роста сложности контекста он может быть разделен
-- Пример: если функциональность уведомлений вырастет значительно, можно разделить на:
-  - Уведомления внутри приложения
-  - Email уведомления
-  - SMS/Push уведомления
-  - Внешние интеграции (Slack, Webhook и т.д.)
+### From One Context into Several
+- As a context grows in complexity, it can be split
+- Example: if the notification functionality grows significantly, it can be split into:
+  - In-app notifications
+  - Email notifications
+  - SMS/Push notifications
+  - External integrations (Slack, Webhook, etc.)
 
-### Объединение контекстов
-- Мало вероятно в ZooLink из-за четко доменно-ориентированной структуры
-- Возможное будущее объединение: если規要求 изменятся значительно
+### Merging Contexts
+- Unlikely in ZooLink due to the clearly domain-oriented structure
+- Possible future merge: if requirements change significantly
 
-### Технологическая эволюция внутри контекста
-- Каждый контекст может эволюционировать независимо в выборе технологий
-- Пример: контекст уведомлений может начать использовать отдельный сервис для обработки больших объемов
-- Сохранение совместимости через контракты (API/events)
+### Technological Evolution Within a Context
+- Each context can evolve independently in its choice of technologies
+- Example: the notifications context may start using a separate service for processing large volumes
+- Compatibility is maintained through contracts (API/events)
 
-## Связанные решения
+## Related Decisions
 
-- [ADR-0001: Выбор технологического стека](../04-decisions/0001-tech-stack.md)
-- [ADR-0002: Жёсткое разделение рынков](../04-decisions/0002-hard-split-markets.md)
-- [ADR-0003: Премодерация рабочего процесса](../04-decisions/0003-pre-moderation-workflow.md)
-- [ADR-0004: Животное как агрегатный корень](../04-decisions/0004-animal-as-aggregate.md)
-- [ADR-0005: Нет встроенного чата в MVP](../04-decisions/0005-no-chat-mvp.md)
+- [ADR-0001: Technology stack selection](../04-decisions/0001-tech-stack.md)
+- [ADR-0002: Hard split of markets](../04-decisions/0002-hard-split-markets.md)
+- [ADR-0003: Pre-moderation workflow](../04-decisions/0003-pre-moderation-workflow.md)
+- [ADR-0004: Animal as the aggregate root](../04-decisions/0004-animal-as-aggregate.md)
+- [ADR-0005: No built-in chat in the MVP](../04-decisions/0005-no-chat-mvp.md)
 
-## Диаграммы контекстов
+## Context Diagrams
 
-См. дополнительные документы для визуальных представлений:
-- C4 уровень 3 (компоненты внутри контекстов) - планируется
-- Структурная диаграмма доменных моделей - см. диаграммы в доменных спецификациях
-- Диаграмма контекстов и их взаимодействий (планируется как отдельный artifact)
+See additional documents for visual representations:
+- C4 level 3 (components within contexts) - planned
+- Structural diagram of domain models - see the diagrams in the domain specifications
+- Diagram of contexts and their interactions (planned as a separate artifact)

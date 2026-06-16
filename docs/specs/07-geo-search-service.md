@@ -126,3 +126,13 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: uses Yandex.Maps API for geocoding as specified in tech stack
 - [ ] Documentation: API specs show lat/long/radius parameters clearly
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Geo-Search Eligibility (Gherkin)](business_logic/geo_search_eligibility.feature)
+- [Pet Marketplace](03-pet-marketplace-domain.md)
+- [Matching Domain](05-matching-domain.md)
+- 🌐 RU mirror: [docsRU/specs/07-geo-search-service.md](../../docsRU/specs/07-geo-search-service.md)
