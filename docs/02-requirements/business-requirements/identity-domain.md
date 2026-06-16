@@ -4,9 +4,9 @@
 Manages user authentication, authorization, and profile information. This domain is the gateway to the system and ensures secure access while minimizing collection of personal data in compliance with ФЗ-152.
 
 ## Core Concepts
-- **User**: A person who has registered in the system. Can be a private individual, breeder, farmer, or moderator.
+- **User**: A person who has registered in the system. Can be a private individual, breeder, farmer, moderator, veterinarian, or groomer.
 - **Authentication Method**: How the user proves identity (phone SMS, OAuth providers).
-- **User Role**: Defines permissions in the system (regular user, moderator, admin).
+- **User Role**: Defines permissions in the system (regular user, moderator, admin, veterinarian, groomer).
 - **Profile**: Public and private information associated with the user.
 
 ## Business Rules
@@ -34,7 +34,9 @@ Manages user authentication, authorization, and profile information. This domain
    - `USER`: Can create/edit own profile, create/listings, search, view public data, show contacts after moderation.
    - `MODERATOR`: All USER permissions + can moderate listings (approve/reject), manage reference data (breeds, species), ban users.
    - `ADMIN`: All MODERATOR permissions + can manage moderator/admin roles, view system analytics, change global settings.
-   - Roles are additive (ADMIN includes MODERATOR and USER permissions).
+   - `VETERINARIAN`: Can view animal health records, verify vaccination information, provide professional advice on animal health (specific permissions to be defined in future phases).
+   - `GROOMER`: Can view animal grooming-related information, provide grooming services information (specific permissions to be defined in future phases).
+   - Roles are additive (ADMIN includes MODERATOR and USER permissions; VETERINARIAN and GROOMER include USER permissions for basic functionality).
 
 4. **Profile Management**
    - Users can update their profile at any time:
@@ -92,7 +94,6 @@ sequenceDiagram
     Frontend->>OAuth Provider: Redirects to OAuth login
     User->>OAuth Provider: Enters credentials, consents to share profile
     OAuth Provider->>Frontend: Redirects back with auth code
-    Frontend->>Backend: POST /auth/oauth/google {code}
     Backend->>OAuth Provider: Validates code, gets user info
     alt No existing user with this OAuth ID
         Backend->>Database: Creates new user (OAuth ID, name from provider, city default/null)
@@ -169,7 +170,7 @@ sequenceDiagram
 | `email` | VARCHAR(255) | No | For notifications (optional) |
 | `email_verified` | BOOLEAN | No | True if email confirmed via link |
 | `password_hash` | VARCHAR(60) | No (if OAuth only) | Bcrypt hash if using phone auth |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN') | Yes | Default: USER |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER |
 | `is_active` | BOOLEAN | Yes | True = can login; False = deactivated |
 | `created_at` | TIMESTAMP | Yes | Registration timestamp |
 | `updated_at` | TIMESTAMP | Yes | Last profile update |

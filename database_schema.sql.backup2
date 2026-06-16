@@ -103,7 +103,7 @@ CREATE TABLE users (
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60), -- bcrypt hash if using phone auth (nullable if OAuth-only)
-    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
+    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
@@ -128,14 +128,9 @@ CREATE TABLE animals (
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT, -- nullable if owner_id set
     species_id INTEGER NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
     breed_id INTEGER REFERENCES breeds(id) ON DELETE SET NULL, -- nullable if custom/other
-    breed_text_localized JSONB, -- custom breed text if breed_id is null (for moderator review)
-    nickname_localized JSONB NOT NULL, -- display name (per animal-domain.md)
+    breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb, -- custom breed text if breed_id is null (for moderator review)
+    nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb, -- display name (per animal-domain.md)
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')), -- updated to match doc casing
-    -- Ensure exactly one of breed_id or breed_text_localized is set
-    CONSTRAINT chk_animals_breed_dep CHECK (
-        (breed_id IS NOT NULL AND breed_text_localized IS NULL) OR
-        (breed_id IS NULL AND breed_text_localized IS NOT NULL)
-    ),
     date_of_birth DATE NOT NULL,
     color_coat VARCHAR(100),
     microchip_id VARCHAR(50),
@@ -170,7 +165,7 @@ CREATE INDEX idx_animals_tattoo ON animals(tattoo_brand_id) WHERE tattoo_brand_i
 CREATE INDEX idx_animals_health_records ON animals USING GIN (health_records);
 CREATE INDEX idx_animals_reproductive_data ON animals USING GIN (reproductive_data);
 -- For searching by custom breed text
-CREATE INDEX idx_animals_breed_text ON animals(breed_text_localized);
+CREATE INDEX idx_animals_breed_text ON animals(breed_text);
 -- For active animal queries
 CREATE INDEX idx_animals_active ON animals(is_active) WHERE is_active = true;
 -- For ownership date range

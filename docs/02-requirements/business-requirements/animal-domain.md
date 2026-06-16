@@ -115,10 +115,10 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 | `organization_id` | UUID (FK to Organizations.id) | No | Organization that owns the animal (nullable if `owner_id` set) |
 | `species_id` | INT (FK to species directory) | Yes | From reference data |
 | `breed_id` | INT (FK to breed directory) | No (nullable if "Other/custom") | From reference data; can be null if breed_text provided |
-| `breed_text` | VARCHAR(100) | No | Custom breed text if breed_id is null (for moderator review) |
+| `breed_text_localized` | JSONB | No | Localized custom breed text if breed_id is null (for moderator review) |
 | `sex` | ENUM('Male', 'Female') | Yes |  |
 | `date_of_birth` | DATE | Yes | Estimated or actual DoB |
-| `nickname` | VARCHAR(50) | No | Display name |
+| `nickname_localized` | JSONB | No | Localized display name |
 | `color_coat` | VARCHAR(100) | No | Free text description |
 | `microchip_id` | VARCHAR(50) | No | If provided |
 | `tattoo_brand_id` | VARCHAR(50) | No | For livestock |
@@ -134,7 +134,7 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 
 ## Validation Rules (Examples)
 - Species must exist in `species` directory.
-- If `breed_id` is null, `breed_text` must be provided (and vice versa, ideally).
+- If `breed_id` is null, `breed_text_localized` must be provided (and vice versa, ideally).
 - Date of birth ≤ today and ≥ today - 30 years (adjustable per species in future).
 - Nickname, if provided, cannot be empty string.
 - Microchip ID, if provided, must be at least 8 characters.

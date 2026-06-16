@@ -1,7 +1,7 @@
 erDiagram
     %% Reference Data Tables
     species {
-        INTEGER id PK
+        UUID id PK
         VARCHAR_50 code UK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
@@ -9,8 +9,8 @@ erDiagram
         TIMESTAMPTZ updated_at
     }
     breeds {
-        INTEGER id PK
-        INTEGER species_id FK
+        UUID id PK
+        UUID species_id FK
         VARCHAR_50 code
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
@@ -19,7 +19,7 @@ erDiagram
         %% UK (species_id, code)
     }
     cities {
-        INTEGER id PK
+        UUID id PK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
         TIMESTAMPTZ created_at
@@ -42,7 +42,7 @@ erDiagram
         VARCHAR_255 oauth_telegram_id
         VARCHAR_255 oauth_vk_id
         VARCHAR_100 full_name
-        INTEGER city_id FK
+        UUID city_id FK
         TEXT avatar_url
         VARCHAR_255 email
         BOOLEAN email_verified
@@ -60,10 +60,10 @@ erDiagram
         UUID id PK
         UUID owner_id FK
         UUID organization_id FK
-        INTEGER species_id FK
-        INTEGER breed_id FK
+        UUID species_id FK
+        UUID breed_id FK
         JSONB breed_text_localized
-        JSONB nickname_localized NOT NULL
+        JSONB nickname_localized
         VARCHAR_10 sex
         DATE date_of_birth
         VARCHAR_100 color_coat
@@ -109,7 +109,7 @@ erDiagram
     branches {
         UUID id PK
         UUID organization_id FK
-        INTEGER city_id FK
+        UUID city_id FK
         TEXT address
         VARCHAR_30 phone
         VARCHAR_255 email
