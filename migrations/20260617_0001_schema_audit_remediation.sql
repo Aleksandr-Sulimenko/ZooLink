@@ -192,6 +192,17 @@ BEGIN
     END LOOP;
 END $$;
 
+-- ========== Favorites (MVP) ==========
+CREATE TABLE IF NOT EXISTS favorites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_favorite_user_listing UNIQUE (user_id, listing_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_listing ON favorites(listing_id);
+
 -- ========== Feature toggle: payments gated off (Payment tables defined, inactive until post-MVP) ==========
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage)
 VALUES ('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0)

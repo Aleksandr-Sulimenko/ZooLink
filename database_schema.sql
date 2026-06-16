@@ -318,6 +318,18 @@ CREATE INDEX idx_messages_sent_at ON messages(sent_at);
 -- Composite index for paginated message feed per conversation
 CREATE INDEX idx_messages_conversation_sent ON messages(conversation_id, sent_at);
 
+-- ========== Favorites (MVP, spec docs/specs/03-pet-marketplace-domain.md) ==========
+-- A user's saved/favorited listings.
+CREATE TABLE favorites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_favorite_user_listing UNIQUE (user_id, listing_id)
+);
+CREATE INDEX idx_favorites_user ON favorites(user_id);
+CREATE INDEX idx_favorites_listing ON favorites(listing_id);
+
 -- ========== Moderation Domain (spec docs/specs/12-moderation-domain.md) ==========
 -- Predefined, Admin-configurable reason codes (12-moderation:48,66)
 CREATE TABLE moderation_reasons (

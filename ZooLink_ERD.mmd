@@ -280,6 +280,15 @@ erDiagram
         TIMESTAMPTZ updated_at
     }
 
+    %% Favorites (MVP)
+    favorites {
+        UUID id PK
+        UUID user_id FK
+        UUID listing_id FK
+        TIMESTAMPTZ created_at
+        %% UK (user_id, listing_id)
+    }
+
     %% Extensibility / System Tables
     feature_toggles {
         VARCHAR_100 key PK
@@ -320,6 +329,8 @@ erDiagram
     listings ||..o{ listing_photos : "has photos"
     listings ||..o{ conversations : "has conversation"
     conversations ||..o{ messages : "contains"
+    users ||..o{ favorites : "saves"
+    listings ||..o{ favorites : "favorited by"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"
