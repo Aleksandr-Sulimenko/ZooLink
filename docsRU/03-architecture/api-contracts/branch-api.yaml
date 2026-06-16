@@ -21,8 +21,7 @@ paths:
         - in: query
           name: city_id
           schema:
-            type: string
-            format: uuid
+            type: integer
           description: Filter by city ID
         - in: query
           name: is_headquarters
@@ -203,8 +202,7 @@ components:
           format: uuid
           description: Foreign key to organization
         city_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to city for geo-search
         address:
           type: string
@@ -250,8 +248,7 @@ components:
           format: uuid
           description: Foreign key to organization
         city_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to city for geo-search
         address:
           type: string
@@ -285,8 +282,7 @@ components:
           format: uuid
           description: Foreign key to organization
         city_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to city for geo-search
         address:
           type: string

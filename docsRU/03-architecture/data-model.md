@@ -93,9 +93,9 @@ CREATE TABLE animals (
     owner_id UUID REFERENCES users(id) ON DELETE RESTRICT,
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
     species_id INT NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
-    breed_id INT REFERENCES breeds(id) ON DELETE SET NULL,
-    breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
+    breed_id INT REFERENCES breeds(id) ON DELETE RESTRICT,
+    breed_text_localized JSONB, -- nullable: XOR with breed_id (exactly one is set)
+    nickname_localized JSONB NOT NULL, -- display name; required on insert (no default)
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')),
     date_of_birth DATE NOT NULL,
     color_coat VARCHAR(100),
@@ -171,12 +171,12 @@ CREATE TABLE users (
     oauth_telegram_id VARCHAR(255),
     oauth_vk_id VARCHAR(255),
     full_name VARCHAR(100) NOT NULL,
-    city_id UUID REFERENCES cities(id) ON DELETE SET NULL,
+    city_id INTEGER REFERENCES cities(id) ON DELETE SET NULL,
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60),
-    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER',
+    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
@@ -236,6 +236,27 @@ CREATE TABLE users (
 - Индексы на таблицах пользователей для быстрого поиска по разным способам аутентификации
 - Индексы на справочных таблицах (species, breeds, cities)
 - Индексы на таблицах истории владения и организационных связях
+
+## Операционные домены (Moderation / Payment / Notification / Ownership Transfer)
+
+Полный DDL перечисленных таблиц находится в `database_schema.sql` (источник истины); контракты доменов
+заданы в связанных спеках. Они добавлены по итогам аудита схемы (`DATABASE_SCHEMA_AUDIT.md`), чтобы
+сделать документированные требования реализуемыми.
+
+| Таблица | Спека домена | Примечания |
+|---|---|---|
+| `moderation_reasons` | `specs/12-moderation-domain.md` | Настраиваемые админом коды причин (справочник) |
+| `moderation_decisions` | `specs/12-moderation-domain.md` | Append-only журнал аудита (UPDATE/DELETE блокируется триггером) |
+| `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (минорные единицы, никогда FLOAT); `idempotency_key` UNIQUE |
+| `refunds` | `specs/14-payment-domain.md` | Связаны с `payment_transactions` |
+| `notification_templates` | `specs/13-notification-domain.md` | По языкам; FK на `supported_languages` |
+| `notification_logs` | `specs/13-notification-domain.md` | Журнал доставки (SENT/DELIVERED/FAILED/BOUNCED) |
+| `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Процессная сущность стейт-машины передачи (в отличие от `animal_ownership_history` — журнала свершившихся фактов). Смена владения заблокирована в MVP. |
+
+Колонки жизненного цикла/состояния, добавленные в существующие таблицы: `listings.status` +
+`listings.moderation_status` (см. `specs/statemachines/listing_state_machine.md`), `users.status`
+(см. `specs/statemachines/user_state_machine.md`). Гео: `listings.lat`/`listings.lng` — основное
+хранилище для MVP (Haversine + bounding box), с опциональным PostGIS `location_point`.
 
 ## Механизмы расширяемости
 

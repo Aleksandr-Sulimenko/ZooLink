@@ -617,8 +617,7 @@ components:
           format: uuid
           description: Foreign key to organization
         city_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to city for geo-search
         address_localized:
           type: object
@@ -665,8 +664,7 @@ components:
           format: uuid
           description: Foreign key to organization
         city_id:
-          type: string
-          format: uuid
+          type: integer
           description: Foreign key to city for geo-search
         address_localized:
           type: object

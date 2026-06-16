@@ -93,9 +93,9 @@ CREATE TABLE animals (
     owner_id UUID REFERENCES users(id) ON DELETE RESTRICT,
     organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
     species_id INT NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
-    breed_id INT REFERENCES breeds(id) ON DELETE SET NULL,
-    breed_text_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    nickname_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
+    breed_id INT REFERENCES breeds(id) ON DELETE RESTRICT,
+    breed_text_localized JSONB, -- nullable: XOR with breed_id (exactly one is set)
+    nickname_localized JSONB NOT NULL, -- display name; required on insert (no default)
     sex VARCHAR(10) NOT NULL CHECK (sex IN ('Male', 'Female')),
     date_of_birth DATE NOT NULL,
     color_coat VARCHAR(100),
@@ -171,12 +171,12 @@ CREATE TABLE users (
     oauth_telegram_id VARCHAR(255),
     oauth_vk_id VARCHAR(255),
     full_name VARCHAR(100) NOT NULL,
-    city_id UUID REFERENCES cities(id) ON DELETE SET NULL,
+    city_id INTEGER REFERENCES cities(id) ON DELETE SET NULL,
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60),
-    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN')) DEFAULT 'USER',
+    role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
@@ -236,6 +236,27 @@ CREATE TABLE users (
 - Indexes on the users table for fast lookup by different authentication methods
 - Indexes on reference tables (species, breeds, cities)
 - Indexes on ownership history tables and organization association tables
+
+## Operational Domains (Moderation / Payment / Notification / Ownership Transfer)
+
+The full DDL for the following tables lives in `database_schema.sql` (source of truth); the domain
+contracts are specified in the linked specs. They were added per the schema audit
+(`DATABASE_SCHEMA_AUDIT.md`) to make the documented requirements realizable.
+
+| Table | Domain spec | Notes |
+|---|---|---|
+| `moderation_reasons` | `specs/12-moderation-domain.md` | Admin-configurable reason codes (lookup) |
+| `moderation_decisions` | `specs/12-moderation-domain.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger) |
+| `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (minor units, never FLOAT); `idempotency_key` UNIQUE |
+| `refunds` | `specs/14-payment-domain.md` | Linked to `payment_transactions` |
+| `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |
+| `notification_logs` | `specs/13-notification-domain.md` | Delivery log (SENT/DELIVERED/FAILED/BOUNCED) |
+| `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Process entity for transfer state machine (distinct from `animal_ownership_history`, the settled log). Animal ownership is locked during MVP. |
+
+Lifecycle/state columns added to existing tables: `listings.status` + `listings.moderation_status`
+(see `specs/statemachines/listing_state_machine.md`), `users.status` (see
+`specs/statemachines/user_state_machine.md`). Geo: `listings.lat`/`listings.lng` are the MVP-primary
+storage (Haversine + bounding box), with optional PostGIS `location_point`.
 
 ## Extensibility Mechanisms
 
