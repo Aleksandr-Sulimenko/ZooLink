@@ -160,7 +160,7 @@
 |---------|-----|------------|----------|
 | `id` | UUID | Да | Первичный ключ |
 | `animal_id` | UUID (FK к Animals.id) | Да | Домашнее животное, которое выставлено |
-| `creator_id` | UUID (FK к Users.id) | Да | Пользователь, который разместил (всегда присутствует для аудита) |
+| `creator_id` | UUID (FK к Users.id) | Да | Пользователь, который разместил (всегда присутствует для аудита). **Соответствует колонке схемы `listings.seller_id`** — `creator_id` это бизнес-термин, `seller_id` — каноническое имя в БД (одно и то же поле; для орг-объявлений это аффилированный пользователь, создавший объявление). |
 | `organization_id` | UUID (FK к Organizations.id) | Нет | Организация, размещающая объявление (nullable, если личное объявление) |
 | `branch_id` | UUID (FK к Branches.id) | Нет | Конкретный филиал, размещающий объявление (nullable) |
 | `listing_type` | ПЕРЕЧИСЛЕНИЕ('sale', 'breeding', 'show', 'adoption', 'stud_service') | Да | |
@@ -172,7 +172,7 @@
 | `created_at` | TIMESTAMP | Да | |
 | `updated_at` | TIMESTAMP | Да | |
 | `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — канон, см. `specs/statemachines/listing_state_machine.md`. Исход модерации — отдельное поле `moderation_status`. Маппинг прежних пользовательских терминов: «completed»→`SOLD`, «archived»→`DEACTIVATED`; «contacted» — залогированное событие (запрос контактов), а не статус. | Да | По умолчанию: DRAFT |
-| `moderation_log` | JSONB | Нет | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
+| _(история модерации)_ | — | — | Хранится в append-only таблице `moderation_decisions` (не JSONB-колонка на listings); у объявления есть только `moderation_status`. |
 | `contact_shown_count` | INT | Нет | Сколько раз контакты были показаны |
 | `view_count` | INT | Нет | Сколько раз объявление появлялось в результатах поиска |
 | `expires_at` | TIMESTAMP | Нет | Автоматически устанавливается на основе listing_type + даты создания |
@@ -227,7 +227,7 @@ sequenceDiagram
     Бэкенд->>Фронтенд: Возвращает список
 
     Модератор->>Фронтенд: Просматривает объявление, нажимает "Одобрить"
-    Фронтенд->>Бэкенд: PATCH /listings/{id} {status: ACTIVE, moderation_log: [...]}
+    Фронтенд->>Бэкенд: POST /moderation/action {listing_id, action: APPROVE}
     Бэкенд->>База_данных: Обновляет статус + журнал
     Бэкенд->>Фронтенд: Возвращает успех
 

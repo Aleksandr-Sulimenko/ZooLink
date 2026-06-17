@@ -181,7 +181,7 @@
 | `created_at` | TIMESTAMP | Да | |
 | `updated_at` | TIMESTAMP | Да | |
 | `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — канон, см. `specs/statemachines/listing_state_machine.md`. Исход модерации — отдельное поле `moderation_status`. Маппинг прежних пользовательских терминов: «completed»→`SOLD`, «archived»→`DEACTIVATED`; «contacted» — залогированное событие (запрос контактов), а не статус. | Да | По умолчанию: DRAFT |
-| `moderation_log` | JSONB | Нет | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
+| _(история модерации)_ | — | — | Хранится в append-only таблице `moderation_decisions` (не JSONB-колонка на listings); у объявления есть только `moderation_status`. |
 | `contact_shown_count` | INT | Нет | Сколько раз контакты были показаны |
 | `view_count` | INT | Нет | Сколько раз объявление появлялось в результатах поиска |
 | `expires_at` | TIMESTAMP | Нет | Автоматически устанавливается (по умолчанию 90 дней) |
@@ -235,7 +235,7 @@ sequenceDiagram
  Бэкенд->>Frontend: Возвращает список
 
  Модератор->>Frontend: Просматривает объявление, нажимает "Одобрить"
- Frontend->>Бэкенд: PATCH /listings/{id} {status: ACTIVE, moderation_log: [...]}
+ Frontend->>Бэкенд: POST /moderation/action {listing_id, action: APPROVE}
  Бэкенд->>База данных: Обновляет статус + журнал
  Бэкенд->>Frontend: Возвращает успех
 

@@ -181,7 +181,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 | `created_at` | TIMESTAMP | Yes |  |
 | `updated_at` | TIMESTAMP | Yes |  |
 | `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — canonical, see `specs/statemachines/listing_state_machine.md`. Moderation outcome is the separate field `moderation_status`. Mapping of earlier user-facing terms: "completed"→`SOLD`, "archived"→`DEACTIVATED`; "contacted" is a logged event (contact request), not a status. | Yes | Default: DRAFT |
-| `moderation_log` | JSONB | No | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
+| _(moderation history)_ | — | — | Recorded in the append-only `moderation_decisions` table (not a JSONB column on listings); the listing carries `moderation_status` only. |
 | `contact_shown_count` | INT | No | How many times contacts were revealed |
 | `view_count` | INT | No | Times listing appeared in search results |
 | `expires_at` | TIMESTAMP | No | Auto-set (default 90 days) |
@@ -233,7 +233,7 @@ sequenceDiagram
     Backend->>Frontend: Returns list
 
     Moderator->>Frontend: Reviews listing, clicks "Approve"
-    Frontend->>Backend: PATCH /listings/{id} {status: ACTIVE, moderation_log: [...]}
+    Frontend->>Backend: POST /moderation/action {listing_id, action: APPROVE}
     Backend->>Database: Updates status + log
     Backend->>Frontend: Returns success
 

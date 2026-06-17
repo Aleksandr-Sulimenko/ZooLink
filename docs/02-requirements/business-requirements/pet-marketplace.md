@@ -160,7 +160,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
 | `animal_id` | UUID (FK to Animals.id) | Yes | The pet being listed |
-| `creator_id` | UUID (FK to Users.id) | Yes | User who posted (always present for audit) |
+| `creator_id` | UUID (FK to Users.id) | Yes | User who posted (always present for audit). **Maps to the schema column `listings.seller_id`** — `creator_id` is the business term, `seller_id` is the canonical DB name (same field; for org listings it is the affiliated user who created the listing). |
 | `organization_id` | UUID (FK to Organizations.id) | No | Organization posting the listing (nullable if personal listing) |
 | `branch_id` | UUID (FK to Branches.id) | No | Specific branch posting the listing (nullable) |
 | `listing_type` | ENUM('sale', 'breeding', 'show', 'adoption', 'stud_service') | Yes |  |
@@ -172,7 +172,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 | `created_at` | TIMESTAMP | Yes |  |
 | `updated_at` | TIMESTAMP | Yes |  |
 | `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — canonical, see `specs/statemachines/listing_state_machine.md`. Moderation outcome is the separate field `moderation_status`. Mapping of earlier user-facing terms: "completed"→`SOLD`, "archived"→`DEACTIVATED`; "contacted" is a logged event (contact request), not a status. | Yes | Default: DRAFT |
-| `moderation_log` | JSONB | No | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
+| _(moderation history)_ | — | — | Recorded in the append-only `moderation_decisions` table (not a JSONB column on listings); the listing carries `moderation_status` only. |
 | `contact_shown_count` | INT | No | How many times contacts were revealed |
 | `view_count` | INT | No | Times listing appeared in search results |
 | `expires_at` | TIMESTAMP | No | Auto-set based on listing_type + creation date |
@@ -232,7 +232,7 @@ sequenceDiagram
     Backend->>Frontend: Returns list
 
     Moderator->>Frontend: Reviews listing, clicks "Approve"
-    Frontend->>Backend: PATCH /listings/{id} {status: ACTIVE, moderation_log: [...]}
+    Frontend->>Backend: POST /moderation/action {listing_id, action: APPROVE}
     Backend->>Database: Updates status + log
     Backend->>Frontend: Returns success
 
