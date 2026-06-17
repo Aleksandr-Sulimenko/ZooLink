@@ -148,9 +148,9 @@ Guiding rule: **the key task funnel — find a listing → see contacts, or crea
 
 ---
 
-## 3. Textual Wireframes — 3 Key Screens
+## 3. Textual Wireframes — Key Screens
 
-Chosen as the spec's highest-traffic tasks: **(A) Marketplace Search Feed** (primary buyer task), **(B) Create Listing** (primary seller task), **(C) Listing Detail + Show Contacts** (the conversion screen, unique due to no-chat).
+The spec's highest-traffic tasks. Core trio first: **(A) Marketplace Search Feed** (primary buyer task), **(B) Create Listing** (primary seller task), **(C) Listing Detail + Show Contacts** (the conversion screen, unique due to no-chat). Then the seller/operator screens: **(D) My Listings**, **(E) Moderation Queue & Review**, **(F) Add / Edit Animal**.
 
 ### A. Marketplace Search Feed
 *User goal: find relevant animals nearby, fast, with trustworthy info.*
@@ -196,6 +196,43 @@ Chosen as the spec's highest-traffic tasks: **(A) Marketplace Search Feed** (pri
 - Stacked: gallery → title → key facts → sections.
 - **Sticky bottom action bar**: `♥` · **Show Contacts** (primary, wide) · `⋯` (Report/Share). The conversion action is always one thumb-tap away.
 - 💡 **UX improvement:** let users **browse and view details without an account**; gate login only at "Show Contacts"/"Favorite"/"Create" — lowers friction and matches the value moment.
+
+### D. My Listings (Seller Control Center)
+*User goal: see all my listings by status and take the right next action.*
+
+**Layout (Desktop):**
+- **[Top Bar]** standard.
+- **[Status tabs]** `All · Draft · In review · Active · Sold · Expired · Deactivated` (counts per tab).
+- **[Content – Table]** columns: photo+title, market, **status chip** + **moderation badge**, price, views, contacts-shown, updated. Row actions adapt to status: Draft → *Edit / Submit*; In review → *(read-only)*; Active → *Mark sold / Deactivate / Promote(gated)*; **Changes requested → *Edit & resubmit*** (highlighted); Expired → *Renew*.
+- Bulk select for deactivate.
+
+**Layout (Mobile):**
+- Status tabs become a horizontally scrollable chip row; rows become **cards** (photo, title, status chip, 2 metrics, `⋯` action menu).
+- 💡 **UX improvement:** surface `CHANGES_REQUESTED` items at the top with the moderator's note inline, so the fix-and-resubmit loop is obvious and fast.
+
+### E. Moderation Queue & Review (Moderator)
+*Moderator goal: clear the queue quickly and consistently, with an audit trail.*
+
+**Layout (Desktop):**
+- **[Top Bar]** standard + **market filter** `Pet | Livestock`.
+- **[Left – Queue list]** rows: thumbnail, title, species, **waiting time** (SLA), submitter/org. Sorted oldest-first.
+- **[Right – Review panel]** the selected listing in full (photos, all fields, linked animal); decision controls: **Approve** (primary) · **Reject** (reason required, from list) · **Request changes** (reason + note). Below: this entity's **append-only decision history** (read-only).
+- After a decision the item leaves the queue; the next item auto-focuses.
+
+**Layout (Mobile):**
+- Single column: queue cards → tap → full review screen → sticky bottom decision bar (Approve / Reject / Changes). Reason picker is a bottom-sheet.
+- 💡 **UX improvement:** keyboard shortcuts on desktop (A/R/C) and a "next" auto-advance keep high-volume moderation fast; the SLA timer color-shifts as it nears the limit.
+
+### F. Add / Edit Animal
+*User goal: register an animal accurately; it later powers listings and matching.*
+
+**Layout (Desktop):**
+- **[Content – Form]** H1 "New Animal". Fields: species (dropdown), breed (autocomplete) **or** custom breed text (exactly one — XOR), sex, date of birth, nickname, color/coat, microchip/tattoo (optional), description. Sub-sections (collapsible): **Health Records** (add events: type/detail/date/provider), **Reproductive Data** (for females). Org ownership toggle (if acting for an org).
+- Sticky footer: **Save**. Immutable fields (species, sex, DoB, breed) are clearly marked as locked after creation (per ADR-0004 / DB trigger).
+
+**Layout (Mobile):**
+- Single-column form; Health/Reproductive records as expandable lists with an "＋ Add record" row.
+- 💡 **UX improvement:** the breed XOR (`breed_id` vs custom text) is a common error source — use a single control "Breed" with an autocomplete that offers *"Can't find it? Enter custom"*, so the user never faces two competing fields.
 
 ---
 
