@@ -372,13 +372,13 @@ components:
           description: Type of listing
         title_localized:
           type: object
-          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          description: 'Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})'
           additionalProperties:
             type: string
             maxLength: 255
         description_localized:
           type: object
-          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          description: 'Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})'
           additionalProperties:
             type: string
         price_cents:
@@ -404,7 +404,42 @@ components:
           description: Search radius in meters for geo-search
         is_active:
           type: boolean
-          description: Active status
+          description: Active status (legacy boolean; lifecycle is tracked by `status`)
+        status:
+          type: string
+          enum: [DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED, SOLD, DEACTIVATED]
+          default: DRAFT
+          description: Lifecycle state (see specs/statemachines/listing_state_machine.md). Only ACTIVE listings appear in public search.
+        moderation_status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, CHANGES_REQUESTED]
+          default: PENDING
+          description: Moderation review outcome (separate field from lifecycle `status`)
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when `status` transitions to ACTIVE
+        sold_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when `status` transitions to SOLD
+        transaction_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: FK to payment_transactions (set on sale)
+        lat:
+          type: number
+          format: double
+          nullable: true
+          description: Latitude (MVP-primary geo storage; -90..90)
+        lng:
+          type: number
+          format: double
+          nullable: true
+          description: Longitude (MVP-primary geo storage; -180..180)
         expires_at:
           type: string
           format: date-time
@@ -454,13 +489,13 @@ components:
           description: Type of listing
         title_localized:
           type: object
-          description: Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})
+          description: 'Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})'
           additionalProperties:
             type: string
             maxLength: 255
         description_localized:
           type: object
-          description: Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})
+          description: 'Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})'
           additionalProperties:
             type: string
         price_cents:

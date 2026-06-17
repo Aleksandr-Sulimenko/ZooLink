@@ -87,7 +87,7 @@ The moderator checks:
 - Compliance with the rules (no spam, no illegal content, no false claims)
 - For livestock: regulatory flags are optionally noted (accompanying documentation is required for transport)
 The moderator can:
-- **Approve** → the status becomes `PUBLISHED`, the listing appears in search
+- **Approve** → the status becomes `ACTIVE`, the listing appears in search
 - **Reject** → the status returns to `DRAFT` with comments about the required corrections; the owner can fix the issues and resubmit.
 
 ### 5.3 Moderation time
@@ -124,7 +124,7 @@ Clicking a card opens the listing's detail page.
 - Full description
 - Animal data (species, breed, sex, approximate age, nickname, coat, health/reproductive notes – depend on the type and the owner's consent)
 - Specific fields (productivity, health, mating terms, etc.)
-- A "Show contacts" button (available only after the `PUBLISHED` status)
+- A "Show contacts" button (available only after the `ACTIVE` status)
     When clicked:
     - The system logs the request (who, when, which listing)
     - Shows the phone number (if the owner allowed it to be shown) and links to Telegram/VK profiles (if linked and allowed)

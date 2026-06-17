@@ -70,13 +70,13 @@ Cons:
 
 We will implement a **pre-moderation workflow** with the following characteristics:
 
-1. **Listing Lifecycle States**:
-   - `DRAFT`: Initial creation, editable by owner
-   - `PENDING_MODERATION`: Submitted for review, not editable
-   - `PUBLISHED`: Approved, visible in search and listings
-   - `REJECTED`: Not approved, returned to DRAFT with moderator feedback
-   - `ARCHIVED`: Manually hidden by owner or admin
-   - `COMPLETED`: Transaction completed (optional user-triggered)
+1. **Listing Lifecycle States** (aligned 2026-06-17 to the canonical two-field model in `specs/statemachines/listing_state_machine.md` + `database_schema.sql`; the pre-moderation decision is unchanged, only the status vocabulary/model is corrected):
+
+   Two orthogonal fields:
+   - `listings.status` — lifecycle: `DRAFT` → `PENDING_MODERATION` → `ACTIVE` (approved & visible) → `EXPIRED` / `SOLD` / `DEACTIVATED`.
+   - `listings.moderation_status` — review outcome: `PENDING` → `APPROVED` / `REJECTED` / `CHANGES_REQUESTED`.
+
+   Mapping from the earlier single-status wording: `PUBLISHED` → `status=ACTIVE` (with `moderation_status=APPROVED`); `REJECTED` → `moderation_status=REJECTED` (listing goes to `DRAFT` for changes, or `DEACTIVATED` on hard reject); `ARCHIVED` → `DEACTIVATED`; `COMPLETED` → `SOLD`. All decisions are recorded append-only in `moderation_decisions`.
 
 2. **Moderation Process**:
    - Moderators access a dedicated moderation queue
@@ -87,8 +87,8 @@ We will implement a **pre-moderation workflow** with the following characteristi
      - Compliance with platform rules (no spam, illegal content, false claims)
      - For livestock: regulatory flags indicating need for transport documentation
    - Moderator actions:
-     - **Approve**: Listing status → `PUBLISHED`, becomes searchable
-     - **Reject**: Listing status → `DRAFT` with moderator comments; owner can edit and resubmit
+     - **Approve**: `moderation_status` → `APPROVED`, `status` → `ACTIVE`, becomes searchable
+     - **Reject**: `moderation_status` → `REJECTED`; `status` → `DEACTIVATED` (hard reject) or `DRAFT` if changes are requested (`moderation_status=CHANGES_REQUESTED`); owner can edit and resubmit
 
 3. **Timeframe Targets**:
    - Pet listings: Target moderation < 4 hours during business hours (9:00–21:00)
@@ -101,8 +101,8 @@ We will implement a **pre-moderation workflow** with the following characteristi
    - Cross-training available but specialization encouraged for efficiency
 
 5. **Technical Implementation**:
-   - Listings API enforces that only `PUBLISHED` status appears in search/listing endpoints
-   - Moderation queue API provides paginated access to `PENDING_MODERATION` listings
+   - Listings API enforces that only `status=ACTIVE` listings appear in search/listing endpoints
+   - Moderation queue API provides paginated access to `status=PENDING_MODERATION` listings
    - Status transitions are atomic and audited
    - Moderator actions are logged for accountability and training
    - Notifications sent to listing owners upon status changes
@@ -147,9 +147,9 @@ We will implement a **pre-moderation workflow** with the following characteristi
 
 4. **Business Rules**:
    - Only listing owners can transition from `DRAFT` to `PENDING_MODERATION`
-   - Only moderators can transition from `PENDING_MODERATION` to `PUBLISHED` or `REJECTED`
-   - Listing owners can edit and resubmit rejected listings
-   - Once `PUBLISHED`, certain fields become immutable (per ADR-0004)
+   - Only moderators can set `moderation_status` to `APPROVED` (→ `status=ACTIVE`) or `REJECTED`/`CHANGES_REQUESTED` for a `PENDING_MODERATION` listing
+   - Listing owners can edit and resubmit listings sent back via `CHANGES_REQUESTED`
+   - Once `status=ACTIVE`, certain fields become immutable (per ADR-0004)
 
 ## Related Decisions
 

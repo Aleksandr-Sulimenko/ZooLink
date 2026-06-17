@@ -75,7 +75,7 @@ Cons:
 We will **defer in-app chat to a future phase (Phase 2 or later)** and implement a **contact sharing mechanism** in the MVP where:
 
 1. **Contact Information Sharing**:
-   - After a listing reaches `PUBLISHED` status, interested users can request to see contact information
+   - After a listing reaches `ACTIVE` status, interested users can request to see contact information
    - Clicking "Show Contacts" reveals the owner's phone number and links to Telegram/VK profiles (if provided and authorized)
    - Exact address is never disclosed for safety and privacy reasons
    - System logs contact requests for analytics and safety monitoring
@@ -88,7 +88,7 @@ We will **defer in-app chat to a future phase (Phase 2 or later)** and implement
 
 3. **Privacy and Safety Measures**:
    - No exact address sharing under any circumstances
-   - Contact information only revealed for `PUBLISHED` listings (after moderation)
+   - Contact information only revealed for `ACTIVE` listings (after moderation)
    - Logging of who requested contact information for which listing and when
    - Rate limiting on contact requests to prevent harvesting
    - Ability for users to block others from seeing their contact information
@@ -97,7 +97,7 @@ We will **defer in-app chat to a future phase (Phase 2 or later)** and implement
    - User finds listing of interest in search results
    - Views listing details (description, photos, price, etc.)
    - Clicks "Show Contacts" button
-   - System verifies listing is `PUBLISHED` and logs the request
+   - System verifies listing is `ACTIVE` and logs the request
    - Shows available contact information (phone, Telegram/VK links as authorized by owner)
    - User initiates contact outside the platform via their preferred method
 
@@ -138,14 +138,14 @@ We will **defer in-app chat to a future phase (Phase 2 or later)** and implement
    - Rate limiting middleware on contact request endpoints
 
 3. **UI Components**:
-   - "Show Contacts" button on listing detail page (visible only for `PUBLISHED` listings)
+   - "Show Contacts" button on listing detail page (visible only for `ACTIVE` listings)
    - Modal or expanded section showing available contact information
    - Icons/link handlers for phone (tel:) and Telegram/VK (deep links or universal links)
    - Clear indication that exact address is never shared
    - Profile settings to manage which contact methods to share
 
 4. **Business Rules**:
-   - Contact information only shown for listings with status `PUBLISHED`
+   - Contact information only shown for listings with status `ACTIVE`
    - Users must be authenticated to request contact information (prevents scraping)
    - Owners can modify contact sharing preferences at any time (affects future requests)
    - System tracks contact requests but does not store the actual communication content

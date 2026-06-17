@@ -57,14 +57,15 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
     - Vaccination claims moderate trust but not verified on MVP (user honesty).
   - **Duplicate Detection**: Warns if nearly identical listing exists from same user recently (possible error).
 - Moderator actions:
-  - `APPROVE`: Listing becomes `PUBLISHED` and visible in search.
+  - `APPROVE`: Listing becomes `ACTIVE` and visible in search.
   - `REJECT`: Returns to `DRAFT` state with required edit comments; user can resubmit.
 - Time to moderate: Target <4 hours during business hours (9AM-9PM local).
 
 ### 3. Listing Lifecycle States
+> **Canonical mapping** (see `specs/statemachines/listing_state_machine.md`): the persisted `status` is the 6-state set DRAFT/PENDING_MODERATION/ACTIVE/EXPIRED/SOLD/DEACTIVATED; moderation outcome lives in the separate `moderation_status`. The user-facing states below map as: `COMPLETED`→`SOLD`, `ARCHIVED`→`DEACTIVATED`, `CONTACTED` = a logged contact-request event (not a persisted status).
 - `DRAFT`: User-editable, not submitted.
 - `PENDING_MODERATION`: Awaiting review.
-- `PUBLISHED`: Active in search; can receive views/contact requests.
+- `ACTIVE`: Active in search; can receive views/contact requests.
 - `CONTACTED`: System-tracked state when contacts are shown (does not affect visibility).
 - `COMPLETED`: User marks as successful transaction (sale/mating occurred).
 - `ARCHIVED`: User hides listing (retains history; can be reactivated).
@@ -106,7 +107,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - "Show Contacts" button (visible only after moderation approval)
 
 ### 5. Post-Moderation Interaction
-- When a user clicks "Show Contacts" on a PUBLISHED listing:
+- When a user clicks "Show Contacts" on a ACTIVE listing:
   - System logs the event (listing_id, viewer_user_id, timestamp).
   - Reveals:
     - Phone number (if owner/organization provided during registration and opted to share)
@@ -170,7 +171,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 | `location_precision` | ENUM('city', 'district', 'exact') | No | Default: city (exact not shown/displayed) |
 | `created_at` | TIMESTAMP | Yes |  |
 | `updated_at` | TIMESTAMP | Yes |  |
-| `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'PUBLISHED', 'CONTACTED', 'COMPLETED', 'ARCHIVED', 'EXPIRED') | Yes | Default: DRAFT |
+| `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — canonical, see `specs/statemachines/listing_state_machine.md`. Moderation outcome is the separate field `moderation_status`. Mapping of earlier user-facing terms: "completed"→`SOLD`, "archived"→`DEACTIVATED`; "contacted" is a logged event (contact request), not a status. | Yes | Default: DRAFT |
 | `moderation_log` | JSONB | No | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
 | `contact_shown_count` | INT | No | How many times contacts were revealed |
 | `view_count` | INT | No | Times listing appeared in search results |
@@ -231,7 +232,7 @@ sequenceDiagram
     Backend->>Frontend: Returns list
 
     Moderator->>Frontend: Reviews listing, clicks "Approve"
-    Frontend->>Backend: PATCH /listings/{id} {status: PUBLISHED, moderation_log: [...]}
+    Frontend->>Backend: PATCH /listings/{id} {status: ACTIVE, moderation_log: [...]}
     Backend->>Database: Updates status + log
     Backend->>Frontend: Returns success
 
@@ -284,7 +285,7 @@ sequenceDiagram
 ## API Contract References (see 03-architecture/api-contracts/listings-api.yaml)
 - `GET /listings/new` (get creation form data: species, breeds, cities, organizations [if user affiliated])
 - `POST /listings` (create listing with optional organization_id/branch_id)
-- `GET /listings/{id}` (get listing by ID – public if PUBLISHED, owner otherwise)
+- `GET /listings/{id}` (get listing by ID – public if ACTIVE, owner otherwise)
 - `PATCH /listings/{id}` (update listing; only in DRAFT/PENDING_MODERATION)
 - `POST /listings/{id}/submit-moderation` (change to PENDING_MODERATION)
 - `GET /listings` (search listings with filters: type, species, breed, price, location_radius, organization_id, branch_id, etc.)

@@ -68,8 +68,8 @@ Applies to all system components: backend APIs, frontend applications, databases
 ### Data Access Controls
 - Users can only access:
   - Their own profile and animals
-  - Listings they created (unless PUBLISHED, then public with restrictions)
-  - Public listings (PUBLISHED status only)
+  - Listings they created (unless ACTIVE, then public with restrictions)
+  - Public listings (ACTIVE status only)
   - Moderation queue and actions only if MODERATOR or ADMIN role
 - Object-level authorization: 
   - Before returning a resource, verify the requesting user has permission to access that specific instance

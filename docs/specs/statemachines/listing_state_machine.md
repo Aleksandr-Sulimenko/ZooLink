@@ -15,7 +15,7 @@ stateDiagram-v2
     PENDING_MODERATION --> DEACTIVATED: moderator rejects
     PENDING_MODERATION --> EXPIRED: moderation SLA timeout
     ACTIVE --> EXPIRED: listing duration elapsed
-    ACTIVE --> SOLD: payment CONFIRMED + buyer confirmed
+    ACTIVE --> SOLD: payment COMPLETED + buyer confirmed
     ACTIVE --> DEACTIVATED: owner withdraws / moderator removes
     SOLD --> DEACTIVATED: post-sale cleanup
     EXPIRED --> DRAFT: owner renews
@@ -49,7 +49,7 @@ stateDiagram-v2
 | PENDING_MODERATION | DEACTIVATED | Moderator rejects | Moderation decision = REJECT || policy violation found | Notify owner with reason; log rejection |
 | PENDING_MODERATION | EXPIRED | Moderation timeout elapsed | No moderator action within MODERATION_SLA_HOURS | Auto-reject; notify owner |
 | ACTIVE | EXPIRED | Listing duration elapsed | Time since publication > LISTING_DURATION_DAYS && not sold | Remove from search; notify owner |
-| ACTIVE | SOLD | Transaction completed | Payment status = CONFIRMED && buyer confirmed receipt | Record sale; initiate ownership transfer |
+| ACTIVE | SOLD | Transaction completed | `payment_transactions.status` = COMPLETED && buyer confirmed receipt | Record sale; initiate ownership transfer |
 | ACTIVE | DEACTIVATED | Owner withdraws listing | User is owner && listing active && not in transaction | Notify interested parties; log withdrawal |
 | ACTIVE | DEACTIVATED | Moderator removes | Moderation decision = REMOVE_ACTIVE || severe policy violation | Notify owner; log moderation action |
 | SOLD | DEACTIVATED | Post-sale cleanup | Transaction fully completed && ownership transferred | Archive listing data; retain for history |

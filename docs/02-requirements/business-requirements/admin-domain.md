@@ -38,7 +38,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
     - By reporter/user reputation (future)
 - **Moderator Actions per Listing**:
   - **APPROVE**: 
-    - Changes listing status to PUBLISHED
+    - Changes listing status to ACTIVE
     - Requires no additional input (though comment optional)
     - Listing becomes immediately visible in search
   - **REJECT**:
@@ -70,7 +70,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
   - Can create/edit own profile and animals
   - Can create/listings (goes to moderation)
   - Can search and view public listings
-  - Can show contacts on PUBLISHED listings
+  - Can show contacts on ACTIVE listings
   - Can deactivate/reactivate own animals/listings
   - Cannot moderate content or manage reference data
 - **MODERATOR**:
