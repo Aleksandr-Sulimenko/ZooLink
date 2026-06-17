@@ -65,8 +65,10 @@ PageMeta: { type: object, properties: { page: {type: integer}, limit: {type: int
   or the full `LocalizedString` object for editable resources. Document the header on read endpoints.
 
 ## 7. Money & currency
-Monetary fields are integer **minor units** named `*_minor`, `format: int64` (BIGINT). `currency` is ISO 4217:
-`{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }`. (Rename legacy `price_cents` → `price_minor`.)
+Monetary fields are integer **minor units** (kopecks), `format: int64` (BIGINT). Two synonymous suffixes are in
+use and both mean minor units: the existing listings field is **`price_cents`** (kept — no rename, to avoid churn),
+payment fields use **`amount_minor`**. New money fields should use the `*_minor` suffix. `currency` is ISO 4217:
+`{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` (enforced by DB CHECK `chk_listings_currency_iso`).
 
 ## 8. Rate limiting
 Sensitive endpoints (auth: login/register/refresh; payments; content-reports; contact reveal) return `429` with
@@ -82,5 +84,5 @@ per [ADR-0005](../../04-decisions/0005-no-chat-mvp.md)); mark them `deprecated: 
 - [ ] `x-required-roles` on every non-public op (matches rbac-matrix.md)
 - [ ] all error responses `$ref` `Problem`
 - [ ] list ops use `page`/`limit` + `PageMeta`
-- [ ] money fields `*_minor` int64; `currency` ISO-4217 pattern
+- [ ] money fields in minor units int64 (`price_cents`/`amount_minor`); `currency` ISO-4217 pattern
 - [ ] `429` + headers on sensitive ops

@@ -69,7 +69,7 @@ src/
 
 - **Источник истины схемы:** `database_schema.sql` (валидируется на живом PostgreSQL; 27 таблиц).
 - **ERD-канон:** `ZooLink_ERD.mmd` (рендерить `mmdc` при правке).
-- **Миграции:** `migrations/` — `20260617_0001_*` (ремедиация аудита), `20260617_0002_*` (digital_assets hooks).
+- **Миграции:** `migrations/` — `0001` ремедиация · `0002` digital_assets · `0003` search/pedigree индексы · `0004` бизнес-инварианты (ACTIVE⇒APPROVED, уникальность чипа, CHECK цены/валюты/языка) · `0005` contact exchange. Все идемпотентны, проверены на live PG (28 таблиц).
 - **Деньги:** BIGINT в минорных единицах (копейки), `currency CHAR(3)`. Никогда FLOAT/INTEGER.
 - **ID:** бизнес-сущности — UUID; справочники (species/breed/city) — INT.
 - **Локализация:** JSONB `*_localized` `{ "en": ..., "ru": ... }` + функции `get_localized()`/`has_translation()`.

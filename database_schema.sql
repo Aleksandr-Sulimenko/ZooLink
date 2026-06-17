@@ -845,3 +845,58 @@ COMMENT ON FUNCTION set_app_language(text) IS 'Установить текущи
 ALTER TABLE notification_templates
     ADD CONSTRAINT fk_notification_templates_language
     FOREIGN KEY (language) REFERENCES supported_languages(code) ON DELETE RESTRICT;
+
+-- ========== Business-logic invariants (audit round 3; mirrored in migration 0004) ==========
+-- Listing: ACTIVE requires moderation_status APPROVED (pre-moderation gate, ADR-0003)
+CREATE OR REPLACE FUNCTION enforce_listing_active_requires_approval() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status = 'ACTIVE' AND NEW.moderation_status IS DISTINCT FROM 'APPROVED' THEN
+        RAISE EXCEPTION 'Listing % cannot be ACTIVE unless moderation_status = APPROVED (got %)',
+            NEW.id, NEW.moderation_status;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_listing_active_requires_approval ON listings;
+CREATE TRIGGER trg_listing_active_requires_approval
+    BEFORE INSERT OR UPDATE ON listings
+    FOR EACH ROW EXECUTE FUNCTION enforce_listing_active_requires_approval();
+
+-- Animal: microchip / tattoo uniqueness (anti-fraud; replaces the non-unique indexes above)
+DROP INDEX IF EXISTS idx_animals_microchip;
+DROP INDEX IF EXISTS idx_animals_tattoo;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_animals_microchip ON animals(microchip_id) WHERE microchip_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_animals_tattoo    ON animals(tattoo_brand_id) WHERE tattoo_brand_id IS NOT NULL;
+
+-- Listing value checks
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_price_nonneg;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_price_nonneg CHECK (price_cents IS NULL OR price_cents >= 0);
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_quantity_pos;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_quantity_pos CHECK (quantity IS NULL OR quantity >= 1);
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_currency_iso;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_currency_iso CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$');
+
+-- Animal nickname must carry at least one non-empty language (en or ru)
+ALTER TABLE animals DROP CONSTRAINT IF EXISTS chk_animals_nickname_lang;
+ALTER TABLE animals ADD  CONSTRAINT chk_animals_nickname_lang CHECK (
+    coalesce(nullif(trim(nickname_localized ->> 'en'), ''), nullif(trim(nickname_localized ->> 'ru'), '')) IS NOT NULL
+);
+
+-- ========== Contact exchange (MVP, no chat — ADR-0005; mirrored in migration 0005) ==========
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_phone    VARCHAR(30);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_telegram VARCHAR(64);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_prefs    JSONB NOT NULL
+    DEFAULT '{"show_phone": true, "show_telegram": false}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS contact_reveals (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    listing_id  UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+    viewer_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    seller_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_reveals_viewer_time ON contact_reveals(viewer_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_contact_reveals_listing ON contact_reveals(listing_id);
+COMMENT ON TABLE contact_reveals IS 'Audit + rate-limit source for seller-contact reveals (ADR-0005, no-chat MVP).';
+COMMENT ON TABLE conversations IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
+COMMENT ON TABLE messages IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';

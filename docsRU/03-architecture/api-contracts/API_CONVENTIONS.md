@@ -64,8 +64,10 @@ PageMeta: { type: object, properties: { page: {type: integer}, limit: {type: int
   либо полный объект `LocalizedString` для редактируемых ресурсов. Документировать заголовок на read-эндпоинтах.
 
 ## 7. Деньги и валюта
-Денежные поля — целые **минорные единицы** с именем `*_minor`, `format: int64` (BIGINT). `currency` — ISO 4217:
-`{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }`. (Переименовать legacy `price_cents` → `price_minor`.)
+Денежные поля — целые **минорные единицы** (копейки), `format: int64` (BIGINT). Используются два синонимичных
+суффикса, оба означают минорные единицы: существующее поле listings — **`price_cents`** (оставлено, без переименования
+ради избежания churn), поля платежей — **`amount_minor`**. Новые денежные поля — с суффиксом `*_minor`. `currency` —
+ISO 4217: `{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` (enforced DB CHECK `chk_listings_currency_iso`).
 
 ## 8. Ограничение скорости
 Чувствительные эндпоинты (auth: login/register/refresh; платежи; жалобы; раскрытие контактов) возвращают `429` с
@@ -81,7 +83,7 @@ PageMeta: { type: object, properties: { page: {type: integer}, limit: {type: int
 - [ ] `x-required-roles` на каждой непубличной (соответствует rbac-matrix.md)
 - [ ] все ошибки `$ref` `Problem`
 - [ ] list-операции используют `page`/`limit` + `PageMeta`
-- [ ] денежные поля `*_minor` int64; `currency` ISO-4217 pattern
+- [ ] денежные поля в минорных единицах int64 (`price_cents`/`amount_minor`); `currency` ISO-4217 pattern
 - [ ] `429` + заголовки на чувствительных
 
 🌐 EN: [docs/03-architecture/api-contracts/API_CONVENTIONS.md](../../../docs/03-architecture/api-contracts/API_CONVENTIONS.md)

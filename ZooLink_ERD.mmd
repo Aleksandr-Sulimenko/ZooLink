@@ -327,6 +327,14 @@ erDiagram
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
+    contact_reveals {
+        UUID id PK
+        UUID listing_id FK
+        UUID viewer_id FK
+        UUID seller_id FK
+        TIMESTAMPTZ created_at
+        %% ADR-0005: MVP "contact the seller" (no chat); audit + rate-limit source
+    }
 
     %% Extensibility / System Tables
     feature_toggles {
@@ -373,6 +381,8 @@ erDiagram
     listings ||..o{ favorites : "favorited by"
     users ||..o{ saved_searches : "saves search"
     users ||..o{ content_reports : "files report"
+    users ||..o{ contact_reveals : "reveals/owns"
+    listings ||..o{ contact_reveals : "contact revealed for"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"
