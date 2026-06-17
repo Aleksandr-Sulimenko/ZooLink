@@ -3,6 +3,30 @@
 ## Overview
 Defines the lifecycle states and transitions for a listing (animal for sale/adoption) in the ZooLink system.
 
+## State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT: create listing
+    DRAFT --> DRAFT: owner edits
+    DRAFT --> PENDING_MODERATION: submit for review
+    DRAFT --> DEACTIVATED: abandon / DRAFT_TIMEOUT
+    PENDING_MODERATION --> ACTIVE: moderator approves
+    PENDING_MODERATION --> DEACTIVATED: moderator rejects
+    PENDING_MODERATION --> EXPIRED: moderation SLA timeout
+    ACTIVE --> EXPIRED: listing duration elapsed
+    ACTIVE --> SOLD: payment CONFIRMED + buyer confirmed
+    ACTIVE --> DEACTIVATED: owner withdraws / moderator removes
+    SOLD --> DEACTIVATED: post-sale cleanup
+    EXPIRED --> DRAFT: owner renews
+    EXPIRED --> DEACTIVATED: owner deletes
+    DEACTIVATED --> [*]
+    note right of DEACTIVATED
+        System mandate (legal, e.g. banned animal)
+        can force any state -> DEACTIVATED
+    end note
+```
+
 ## States
 
 | State | Description | Entry Actions | Exit Actions |

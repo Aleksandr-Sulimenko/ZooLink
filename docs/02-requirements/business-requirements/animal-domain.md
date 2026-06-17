@@ -147,50 +147,68 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 ## User Journey: Managing an Animal
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Frontend
-    participant Backend (NestJS Animal Module)
-    participant Database
+    participant U as User
+    participant FE as Frontend
+    participant BE as Backend
+    participant DB as Database
+    participant Dir as Directory Service
 
-    %% Create animal
-    User->>Frontend: Navigates to "My Animals" -> "Add New Animal"
-    Frontend->>Backend: GET /animals/new (returns directory species/breeds)
-    Backend->>Directory Service (Admin): Fetches species/breed lists
-    Directory Service-->>Backend: Returns lists
-    Backend->>Frontend: Returns species/breed lists
+    Note over U,DB: Register a new animal
+    U->>FE: Open "Add New Animal"
+    FE->>BE: GET /animals/new
+    BE->>Dir: Fetch species/breeds
+    Dir-->>BE: Lists
+    BE-->>FE: Species/breed lists
+    U->>FE: Fill species, breed or custom breed, DoB, nickname, sex
+    FE->>BE: POST /animals {species_id, breed_id|breed_text_localized, sex, date_of_birth, nickname_localized}
+    alt Valid (exactly one of breed_id / breed_text, required present)
+        BE->>DB: insert animal (owner_id = current user)
+        DB-->>BE: animal_id
+        BE-->>FE: 201 Created (animal_id)
+    else Both or neither breed_id and breed_text (chk_animals_breed_dep)
+        BE-->>FE: 422 Provide exactly one of breed or custom breed text
+    else Missing required field
+        BE-->>FE: 422 Validation error
+    end
 
-    User->>Frontend: Selects species=Dog, breed=Golden Retriever, enters DoB, nickname, etc.
-    Frontend->>Backend: POST /animals {species_id, breed_id, sex, date_of_birth, nickname, color_coat}
-    Backend->>Database: Validates, inserts new animal record
-    Backend->>Frontend: Returns animal ID + confirmation
+    Note over U,DB: Add a health record
+    U->>FE: Add vaccination
+    FE->>BE: PATCH /animals/{id} {health_records}
+    alt User owns the animal
+        BE->>DB: update health_records JSONB
+        BE-->>FE: 200 Success
+    else Not owner
+        BE-->>FE: 403 Forbidden
+    end
 
-    %% Update animal (add health record)
-    User->>Frontend: Opens animal profile -> "Add Vaccination"
-    Frontend->>Backend: PATCH /animals/{id} {health_records: [... existing + new]}
-    Backend->>Database: Updates health_records JSONB
-    Backend->>Frontend: Returns success
+    Note over U,DB: Edit immutable field (blocked in MVP)
+    U->>FE: Try to change species/DoB/sex/owner
+    FE->>BE: PATCH /animals/{id} {species_id}
+    BE->>DB: UPDATE animals (trigger trg_animals_immutable_and_owner)
+    alt Immutable field changed
+        DB-->>BE: ERROR immutable field
+        BE-->>FE: 409 Cannot change immutable field after creation
+    else Allowed field
+        DB-->>BE: updated
+        BE-->>FE: 200 Success
+    end
 
-    %% Deactivate animal
-    User->>Frontend: Selects animal -> "Deactivate"
-    Frontend->>Backend: PATCH /animals/{id} {is_active: false}
-    Backend->>Database: Updates flag
-    Backend->>Frontend: Returns success
-
-    %% Use animal in a listing
-    User->>Frontend: Creates new listing, selects animal from "My Animals" list
-    Frontend->>Backend: GET /animals?owner_id=me&is_active=true (for dropdown)
-    Backend->>Database: Returns active animals for user
-    Backend->>Frontend: Returns list
-    User->>Frontend: Chooses animal ID, fills listing details
-    Frontend->>Backend: POST /listings {animal_id, ...}
-    Backend->>Database: Creates listing, links to animal_id
-    Backend->>Frontend: Returns listing ID
-
-    %% Search for animals via listings (cross-domain)
-    User->>Frontend: Searches listings with filters: species=Dog, breed=Labrador, sex=Female
-    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&sex=Female
-    Backend->>Database: Joins listings with animals, filters on animal attributes
-    Backend->>Frontend: Returns listings with animal summary (species, breed, age, photo)
+    Note over U,DB: List animal on the marketplace
+    U->>FE: Create listing, pick from "My Animals"
+    FE->>BE: GET /animals?owner_id=me&is_active=true
+    BE->>DB: active animals for user
+    DB-->>BE: list
+    BE-->>FE: list
+    U->>FE: Choose animal, fill listing
+    FE->>BE: POST /listings {animal_id}
+    alt Owned, active, no active listing of same type
+        BE->>DB: insert listing (status=DRAFT)
+        BE-->>FE: 201 Created (listing_id)
+    else Duplicate active listing of same type (uq_active_listing_per_type)
+        BE-->>FE: 409 Animal already has an active listing of this type
+    else Animal not owned or inactive
+        BE-->>FE: 403 Forbidden
+    end
 ```
 
 ## User Stories

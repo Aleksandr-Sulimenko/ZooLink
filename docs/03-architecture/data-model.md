@@ -309,38 +309,16 @@ Used for:
 
 ## ERD Diagram
 
-A textual representation of the core relationships:
+The **canonical, machine-renderable ERD** is maintained as a single mermaid source of truth:
+[`ZooLink_ERD.mmd`](../../ZooLink_ERD.mmd) (root of the repository).
 
-```
-users 1 ○───────○ many organization_users
-        │                     │
-        │                     ○───────○ many ────┐
-        │                                          │
-        │                     ┌───────○ organizations 1 ○───────○ many branches
-        │                     │                     │           │
-        │                     │                     │           ○───────○ many organization_users
-        │                     │                     │
-species 1 ○───────○ many breeds ○...................○ animals ◄─────┘
-        │                     │                     │
-        │                     │                     ○───────○ many listings
-        │                     │                     │           │
-        │                     │                     │           ○───────○ many listing_photos
-        │                     │                     │
-        │                     │                     ○───────○ many conversations
-        │                     │                     │                     │
-        │                     │                     │                     ○───────○ many messages
-        │                     │                     │
-        │                     ○───────○ cities ◄────┘
-        │
-        ○───────○ many listings (seller_id)
-```
+It covers all current entities — including the operational domains (Moderation, Payment,
+Notification, Ownership Transfer) and MVP additions (Favorites, Saved Searches, Content Reports) —
+with attributes, types, foreign keys and relationship cardinalities, kept in sync with
+`database_schema.sql`.
 
-Where:
-- 1 = one
-- many = many
-- ○ = optional relationship
-- ● = mandatory relationship
-- .................. = relationship through other tables or a complex condition
+> The previous ASCII diagram was removed: it only covered the MVP core and drifted out of sync.
+> Render `ZooLink_ERD.mmd` (e.g. with `mmdc` or any mermaid viewer) for the complete, current ERD.
 
 ## Maintenance Instructions
 

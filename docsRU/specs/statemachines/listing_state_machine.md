@@ -3,6 +3,30 @@
 ## Обзор
 Определяет состояния жизненного цикла и переходы для объявления (животное на продажу/удочерение) в системе ZooLink.
 
+## Диаграмма состояний
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT: создать объявление
+    DRAFT --> DRAFT: владелец редактирует
+    DRAFT --> PENDING_MODERATION: отправить на проверку
+    DRAFT --> DEACTIVATED: отказ / DRAFT_TIMEOUT
+    PENDING_MODERATION --> ACTIVE: модератор одобряет
+    PENDING_MODERATION --> DEACTIVATED: модератор отклоняет
+    PENDING_MODERATION --> EXPIRED: таймаут SLA модерации
+    ACTIVE --> EXPIRED: истёк срок объявления
+    ACTIVE --> SOLD: платёж CONFIRMED + покупатель подтвердил
+    ACTIVE --> DEACTIVATED: владелец снимает / модератор удаляет
+    SOLD --> DEACTIVATED: пост-продажная очистка
+    EXPIRED --> DRAFT: владелец продлевает
+    EXPIRED --> DEACTIVATED: владелец удаляет
+    DEACTIVATED --> [*]
+    note right of DEACTIVATED
+        Системное предписание (юр., напр. запрещённое
+        животное) может перевести любое состояние -> DEACTIVATED
+    end note
+```
+
 ## Состояния
 
 | Состояние | Описание | Действия при входе | Действия при выходе |

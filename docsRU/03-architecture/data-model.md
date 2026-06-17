@@ -309,38 +309,15 @@ CREATE TABLE users (
 
 ## Диаграмма ERD
 
-Текстовое представление основных связей:
+**Каноническая, машинно-рендерящаяся ERD** поддерживается единым mermaid-источником истины:
+[`ZooLink_ERD.mmd`](../../ZooLink_ERD.mmd) (в корне репозитория).
 
-```
-users 1 ○───────○ many organization_users
-        │                     │
-        │                     ○───────○ many ────┐
-        │                                          │
-        │                     ┌───────○ organizations 1 ○───────○ many branches
-        │                     │                     │           │
-        │                     │                     │           ○───────○ many organization_users
-        │                     │                     │
-species 1 ○───────○ many breeds ○...................○ animals ◄─────┘
-        │                     │                     │
-        │                     │                     ○───────○ many listings
-        │                     │                     │           │
-        │                     │                     │           ○───────○ many listing_photos
-        │                     │                     │
-        │                     │                     ○───────○ many conversations
-        │                     │                     │                     │
-        │                     │                     │                     ○───────○ many messages
-        │                     │                     │
-        │                     ○───────○ cities ◄────┘
-        │
-        ○───────○ many listings (seller_id)
-```
+Она покрывает все актуальные сущности — включая операционные домены (Moderation, Payment,
+Notification, Ownership Transfer) и MVP-добавления (Favorites, Saved Searches, Content Reports) —
+с атрибутами, типами, внешними ключами и кардинальностями связей, синхронно с `database_schema.sql`.
 
-Где:
-- 1 = один
-- many = многие
-- ○ = необязательная связь
-- ● = обязательная связь
-- .................. = связь через другие таблицы или сложное условие
+> Прежняя ASCII-диаграмма удалена: она покрывала только MVP-ядро и разошлась с реальностью.
+> Отрендерьте `ZooLink_ERD.mmd` (напр. через `mmdc` или любой mermaid-просмотрщик) для полной актуальной ERD.
 
 ## Инструкции по поддержке
 

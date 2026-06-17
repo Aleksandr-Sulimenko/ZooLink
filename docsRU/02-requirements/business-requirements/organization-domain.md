@@ -111,7 +111,7 @@
 |-----------|------|----------|-------------|
 | `id` | UUID | Да | Первичный ключ |
 | `organization_id` | UUID | Да | ВНЕШНИЙ КЛЮЧ к organizations.id |
-| `city_id` | UUID | Да | ВНЕШНИЙ КЛЮЧ к городам.id |
+| `city_id` | INTEGER | Да | ВНЕШНИЙ КЛЮЧ к городам.id |
 | `address` | TEXT | Да | Подробный адрес |
 | `phone` | VARCHAR(30) | Нет | Телефон филиала |
 | `email` | VARCHAR(255) | Нет | Email филиала |
@@ -152,49 +152,58 @@
 ## Пользовательский путь: Управление организацией
 ```mermaid
 sequenceDiagram
-    participant User as Founder
-    participant Frontend
-    participant Backend (NestJS Organization Module)
-    participant Database
+    participant F as Основатель
+    participant FE as Фронтенд
+    participant BE as Бэкенд
+    participant DB as База данных
 
-    %% Создание организации
-    Founder->>Frontend: Перейти в "Организации" -> "Создать организацию"
-    Frontend->>Backend: GET /organizations/new (возвращает пустую форму)
-    Backend->>Frontend: Возвращает поля формы
-    Founder->>Frontend: Заполняет адрес, опциональные локализованные названия, ИНН и т.д.
-    Frontend->>Backend: POST /organizations {address, name_localized, description_localized, inn, kpp, phone, email, logo_url, metadata, is_active}
-    Backend->>Database: Валидация, вставка записи организации
-    Backend->>Frontend: Возвращает ID организации + подтверждение
+    Note over F,DB: Создание организации
+    F->>FE: Открыть "Создать организацию"
+    FE->>BE: POST /organizations {name_localized, address, inn?, kpp?}
+    alt Валидно (INN уникален если задан, обязательные есть)
+        BE->>DB: insert organization + organization_users (основатель, OWNER)
+        BE-->>FE: 201 Created (organization_id)
+    else INN уже зарегистрирован
+        BE-->>FE: 409 Организация с таким INN существует
+    else Неверный формат INN/KPP
+        BE-->>FE: 422 Validation error
+    end
 
-    %% Добавление филиала
-    Founder->>Frontend: Перейти в деталь организации -> "Добавить филиал"
-    Frontend->>Backend: GET /branches/new?organization_id=ORG_ID (форма с предзаполненной организацией)
-    Founder->>Frontend: Выбирает город, вводит адрес филиала, телефон
-    Frontend->>Backend: POST /branches {organization_id, city_id, address, phone, email}
-    Backend->>Database: Валидация, вставка записи филиала
-    Backend->>Frontend: Возвращает ID филиала
+    Note over F,DB: Добавление филиала
+    F->>FE: Добавить филиал
+    FE->>BE: POST /branches {organization_id, city_id, address}
+    alt Основатель OWNER/ADMIN и city существует
+        BE->>DB: insert branch
+        BE-->>FE: 201 Created (branch_id)
+    else Не OWNER/ADMIN
+        BE-->>FE: 403 Forbidden
+    else city_id не найден
+        BE-->>FE: 404 City not found
+    end
 
-    %% Приглашение сотрудника
-    Founder->>Frontend: Перейти в деталь организации -> "Пригласить сотрудника"
-    Frontend->>Backend: GET /organization-users/new?organization_id=ORG_ID (возвращает форму)
-    Founder->>Frontend: Выбирает существующего пользователя (по email/телефону), выбирает роль СОТРУДНИК
-    Frontend->>Backend: POST /organization-users {organization_id, user_id, role_in_org: STAFF, joined_at: сегодня}
-    Backend->>Database: Валидация, вставка записи принадлежности
-    Backend->>Frontend: Возвращает успех
+    Note over F,DB: Приглашение персонала (M:N связь)
+    F->>FE: Пригласить существующего пользователя как STAFF
+    FE->>BE: POST /organization-users {organization_id, user_id, role_in_org: STAFF}
+    alt Пользователь существует и ещё не член
+        BE->>DB: insert organization_users
+        BE-->>FE: 200 Success
+    else Уже член (uq_organization_user)
+        BE-->>FE: 409 Пользователь уже в организации
+    else Пользователь не найден
+        BE-->>FE: 404 User not found
+    end
 
-    %% Создание объявления от имени организации
-    Founder->>Frontend: Перейти в "Мои животные" (или непосредственно "Создать объявление") и выбрать опцию "Разместить для организации"
-    Frontend->>Backend: GET /organizations?name=ORG_NAME (для проверки доступа)
-    Founder->>Frontend: Выбирает организацию, необязательно выбирает филиал
-    Frontend->>Backend: POST /listings {animal_id, title, ..., organization_id=ORG_ID, branch_id=BRANCH_ID}
-    Backend->>Database: Валидация, что пользователь связан с организацией, создаёт запись объявления с organization_id/branch_id
-    Backend->>Frontend: Возвращает ID объявления
-
-    %% Просмотр аналитики организации
-    Founder->>Frontend: Перейти в деталь организации -> "Аналитика"
-    Frontend->>Backend: GET /organizations/{id}/analytics
-    Backend->>Database: Агрегирует статистику просмотров/показов контактов для всех объявлений под организацией (и опционально по филиалу)
-    Backend->>Frontend: Возвращает панель аналитики
+    Note over F,DB: Создание листинга от организации
+    F->>FE: Создать листинг "От организации"
+    FE->>BE: POST /listings {animal_id, organization_id, branch_id?}
+    alt Аффилирован с org и животное принадлежит org
+        BE->>DB: insert listing с organization_id/branch_id
+        BE-->>FE: 201 Created (listing_id)
+    else Не аффилирован с org
+        BE-->>FE: 403 Forbidden
+    else branch не принадлежит организации
+        BE-->>FE: 422 Филиал не принадлежит организации
+    end
 ```
 
 ## Реестр GAP

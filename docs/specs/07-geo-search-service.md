@@ -81,6 +81,7 @@ This specification addresses the following Non-Functional Requirements:
   - Save search filters combined with location for one-click search
   - Synchronize saved locations across devices (future enhancement)
   - Import/export saved locations (future enhancement)
+  - **Scope:** saving/reusing searches and locations is **MVP** (persisted in the `saved_searches` table). Proactive **alerts** on new matching listings are **Phase 2** (see `01-discovery/future-features.md`).
 
 ## Task Breakdown
 1. **Backend (NestJS)**

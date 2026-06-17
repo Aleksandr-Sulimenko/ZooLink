@@ -154,14 +154,14 @@
 ## Пользовательский путь: Использование функций сопоставления
 ```mermaid
 sequenceDiagram
- участник Пользователь как Селекционер
- участник Пользователь как ВладелецПартнера
- участник Frontend
- участник Бэкенд (NestJS Matching Module)
- участник Бэкенд (NestJS Animal Module)
- участник Бэкенд (NestJS Listing Module)
- участник База данных
- участник Кэш (Redis)
+ participant Пользователь как Селекционер
+ participant Пользователь как ВладелецПартнера
+ participant Frontend
+ participant Бэкенд (NestJS Matching Module)
+ participant Бэкенд (NestJS Animal Module)
+ participant Бэкенд (NestJS Listing Module)
+ participant База данных
+ participant Кэш (Redis)
 
  %% Селекционер просматривает свое животное и хочет найти партнера
  Селекционер->>Frontend: Просматривает профиль животного (id=ANIMAL_A)

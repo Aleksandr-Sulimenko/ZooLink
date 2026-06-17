@@ -3,6 +3,26 @@
 ## Обзор
 Определяет состояния жизненного цикла и переходы для учетной записи пользователя в системе ZooLink.
 
+## Диаграмма состояний
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNVERIFIED: регистрация
+    UNVERIFIED --> PENDING_VERIFICATION: регистрация завершена (код отправлен)
+    PENDING_VERIFICATION --> VERIFIED: код верный (attempts < MAX_ATTEMPTS)
+    PENDING_VERIFICATION --> UNVERIFIED: неудача / отказ
+    VERIFIED --> ACTIVE: профиль заполнен / истёк grace-период
+    ACTIVE --> SUSPENDED: модерация (нарушение >= порога)
+    SUSPENDED --> ACTIVE: апелляция одобрена
+    SUSPENDED --> DEACTIVATED: апелляция отклонена / срок приостановки истёк
+    ACTIVE --> DEACTIVATED: запрос пользователя / действие админа
+    DEACTIVATED --> [*]
+    note right of DEACTIVATED
+        Системное предписание (юр., право на забвение)
+        может перевести любое состояние -> DEACTIVATED
+    end note
+```
+
 ## Состояния
 
 | Состояние | Описание | Действия при входе | Действия при выходе |

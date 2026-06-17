@@ -3,6 +3,26 @@
 ## Overview
 Defines the lifecycle states and transitions for a user account in the ZooLink system.
 
+## State Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNVERIFIED: registration
+    UNVERIFIED --> PENDING_VERIFICATION: registration completed (code sent)
+    PENDING_VERIFICATION --> VERIFIED: code valid (attempts < MAX_ATTEMPTS)
+    PENDING_VERIFICATION --> UNVERIFIED: failed / abandoned
+    VERIFIED --> ACTIVE: profile complete / grace elapsed
+    ACTIVE --> SUSPENDED: moderation (violation >= threshold)
+    SUSPENDED --> ACTIVE: appeal approved
+    SUSPENDED --> DEACTIVATED: appeal rejected / suspension expired
+    ACTIVE --> DEACTIVATED: user request / admin action
+    DEACTIVATED --> [*]
+    note right of DEACTIVATED
+        System mandate (legal, right-to-be-forgotten)
+        can force any state -> DEACTIVATED
+    end note
+```
+
 ## States
 
 | State | Description | Entry Actions | Exit Actions |
