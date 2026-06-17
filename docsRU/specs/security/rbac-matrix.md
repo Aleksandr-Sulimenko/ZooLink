@@ -16,7 +16,9 @@ status: "Approved"
 ## Роли
 `USER` (по умолчанию), `BREEDER`, `FARMER`, `MODERATOR`, `ADMIN`, `VETERINARIAN`, `GROOMER` (CHECK `users.role`).
 `principal_type` может быть `HUMAN` или `AGENT` ([ADR-0006](../../04-decisions/0006-ai-agents-operate-platform.md)) —
-AGENT держит операторскую роль (напр. MODERATOR) и подчиняется той же матрице.
+AGENT держит операторскую роль (напр. MODERATOR) и подчиняется той же матрице. **AGENT — Фаза 2+ и feature-gated**
+(`DEFAULT 'HUMAN'`); service-auth агента (scoped service-токены, не phone/OAuth) и неприменимость к AGENT
+human-only контролей (MFA, лимит сессий) отложены на эту фазу. MVP работает только с HUMAN.
 
 BREEDER/FARMER/VETERINARIAN/GROOMER = USER + доп. возможности (видимость для разведения, livestock-объявления и т.д.);
 наследуют все права USER. MODERATOR и ADMIN — операторские роли.

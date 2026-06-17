@@ -5,6 +5,7 @@ erDiagram
         VARCHAR_50 code UK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
+        VARCHAR_10 market
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -84,6 +85,7 @@ erDiagram
         JSONB health_test_results
         JSONB show_titles
         BOOLEAN is_visible_in_breeding_search
+        VARCHAR_20 reproductive_status
         JSONB description_localized
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at

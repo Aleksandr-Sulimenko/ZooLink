@@ -16,7 +16,9 @@ OpenAPI contracts (`docs/03-architecture/api-contracts/`).
 ## Roles
 `USER` (default), `BREEDER`, `FARMER`, `MODERATOR`, `ADMIN`, `VETERINARIAN`, `GROOMER` (DB `users.role` CHECK).
 `principal_type` may be `HUMAN` or `AGENT` ([ADR-0006](../../04-decisions/0006-ai-agents-operate-platform.md)) — an AGENT
-holds an operator role (e.g. MODERATOR) and is subject to the same matrix.
+holds an operator role (e.g. MODERATOR) and is subject to the same matrix. **AGENT is Фаза 2+ and feature-gated**
+(`DEFAULT 'HUMAN'`); agent **service-auth** (scoped service tokens, not phone/OAuth) and the human-only controls
+(MFA, concurrent-session limit) being non-applicable to AGENT are deferred to that phase. MVP runs HUMAN only.
 
 BREEDER/FARMER/VETERINARIAN/GROOMER are USER + extra capabilities (breeding visibility, livestock listings, etc.);
 they inherit all USER permissions. MODERATOR and ADMIN are operator roles.

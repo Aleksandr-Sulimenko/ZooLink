@@ -2,7 +2,7 @@
 version: "1.0"
 lastUpdated: "2026-06-15"
 author: "System Analyst"
-status: "Draft"
+status: "Approved"
 ---
 
 # Spec: Payment Domain

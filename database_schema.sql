@@ -900,3 +900,52 @@ CREATE INDEX IF NOT EXISTS idx_contact_reveals_listing ON contact_reveals(listin
 COMMENT ON TABLE contact_reveals IS 'Audit + rate-limit source for seller-contact reveals (ADR-0005, no-chat MVP).';
 COMMENT ON TABLE conversations IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
 COMMENT ON TABLE messages IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
+
+-- ========== Integrity & cascades (audit round 3, P1; mirrored in migration 0006) ==========
+-- Reproductive status for breeding eligibility (matching domain)
+ALTER TABLE animals ADD COLUMN IF NOT EXISTS reproductive_status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN'
+    CHECK (reproductive_status IN ('INTACT', 'NEUTERED', 'UNKNOWN'));
+
+-- breed must belong to the animal's species (composite FK; NULL breed_id allowed via MATCH SIMPLE)
+ALTER TABLE animals DROP CONSTRAINT IF EXISTS fk_animals_breed_species;
+ALTER TABLE breeds  DROP CONSTRAINT IF EXISTS uq_breeds_id_species;
+ALTER TABLE breeds  ADD  CONSTRAINT uq_breeds_id_species UNIQUE (id, species_id);
+ALTER TABLE animals ADD  CONSTRAINT fk_animals_breed_species
+    FOREIGN KEY (breed_id, species_id) REFERENCES breeds(id, species_id) ON DELETE RESTRICT;
+
+-- Content report dedup: one OPEN report per (reporter, entity)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_open_report_per_reporter_entity
+    ON content_reports(reporter_id, entity_type, entity_id) WHERE status = 'OPEN';
+
+-- Deactivation cascades to live listings
+CREATE OR REPLACE FUNCTION cascade_animal_deactivation() RETURNS trigger AS $$
+BEGIN
+    IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
+        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+         WHERE animal_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_cascade_animal_deactivation ON animals;
+CREATE TRIGGER trg_cascade_animal_deactivation AFTER UPDATE ON animals
+    FOR EACH ROW EXECUTE FUNCTION cascade_animal_deactivation();
+
+CREATE OR REPLACE FUNCTION cascade_user_deactivation() RETURNS trigger AS $$
+BEGIN
+    IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
+        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+         WHERE seller_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_cascade_user_deactivation ON users;
+CREATE TRIGGER trg_cascade_user_deactivation AFTER UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION cascade_user_deactivation();
+
+-- Pet/livestock hard split: a species belongs to exactly one market (ADR-0002; mirrored in migration 0007)
+ALTER TABLE species ADD COLUMN IF NOT EXISTS market VARCHAR(10) NOT NULL DEFAULT 'pet'
+    CHECK (market IN ('pet', 'livestock'));
+UPDATE species SET market = 'livestock'
+ WHERE code IN ('cattle', 'cow', 'bull', 'sheep', 'goat', 'pig', 'horse', 'poultry', 'chicken');
