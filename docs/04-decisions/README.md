@@ -10,6 +10,10 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0004: Animal as the aggregate root](0004-animal-as-aggregate.md)
 - [ADR-0005: No built-in chat in the MVP](0005-no-chat-mvp.md)
 - [ADR-0006: AI agents as platform operators (moderation, admin, and beyond)](0006-ai-agents-operate-platform.md)
+- [ADR-0007: ORM strategy — Prisma primary with a typed raw-SQL escape hatch](0007-orm-strategy.md)
+- [ADR-0008: RF-appropriate third-party provider matrix](0008-rf-provider-matrix.md)
+- [ADR-0009: MVP architecture is a modular monolith — defer microservices/K8s to Фаза 2+](0009-mvp-vs-target-architecture.md)
+- [ADR-0010: Digital-asset (NFT) readiness — schema hooks now, on-chain in Фаза 2+](0010-nft-digital-assets-hooks.md)
 
 ## Template
 

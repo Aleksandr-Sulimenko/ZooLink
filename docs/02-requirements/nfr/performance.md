@@ -91,7 +91,7 @@ Applies to all system components: backend APIs, frontend applications, database 
 ### Backend Optimizations
 - **Database**:
   - Proper indexing on query patterns (geo-search, listings by type/species/location)
-  - Use of connection pooling (HikariCP or similar via Prisma)
+  - Use of connection pooling appropriate to Node.js/Prisma (Prisma's built-in pool; PgBouncer in transaction mode for high connection counts). HikariCP is JVM-only and not used in this stack.
   - Query optimization: avoid SELECT *, use limits, optimize JOINs
   - Read replicas for read-heavy operations (geo-search, listing views)
   - Caching layer (Redis) for:

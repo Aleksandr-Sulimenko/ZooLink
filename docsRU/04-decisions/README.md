@@ -10,6 +10,10 @@
 - [ADR-0004: Животное как агрегатный корень](0004-animal-as-aggregate.md)
 - [ADR-0005: Нет встроенного чата в MVP](0005-no-chat-mvp.md)
 - [ADR-0006: ИИ-агенты как операторы площадки (модерация, админ и далее)](0006-ai-agents-operate-platform.md)
+- [ADR-0007: Стратегия ORM — Prisma как основной + типизированный raw-SQL escape hatch](0007-orm-strategy.md)
+- [ADR-0008: Матрица сторонних провайдеров под РФ](0008-rf-provider-matrix.md)
+- [ADR-0009: Архитектура MVP — модульный монолит; микросервисы/K8s — Фаза 2+](0009-mvp-vs-target-architecture.md)
+- [ADR-0010: Готовность к цифровым активам (NFT) — хуки в схеме сейчас, on-chain в Фазе 2+](0010-nft-digital-assets-hooks.md)
 
 ## Шаблон
 

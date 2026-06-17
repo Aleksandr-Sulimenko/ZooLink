@@ -137,7 +137,7 @@ CREATE TABLE listings (
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    price_cents INTEGER,
+    price_cents BIGINT, -- деньги в минорных единицах (копейках) как BIGINT, никогда FLOAT/INTEGER: INTEGER переполняется на сделках масштаба livestock
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     location_point GEOGRAPHY(POINT, 4326),
@@ -253,6 +253,7 @@ CREATE TABLE users (
 | `notification_templates` | `specs/13-notification-domain.md` | По языкам; FK на `supported_languages` |
 | `notification_logs` | `specs/13-notification-domain.md` | Журнал доставки (SENT/DELIVERED/FAILED/BOUNCED) |
 | `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Процессная сущность стейт-машины передачи (в отличие от `animal_ownership_history` — журнала свершившихся фактов). Смена владения заблокирована в MVP. |
+| `digital_assets` | `../04-decisions/0010-nft-digital-assets-hooks.md` | Хук готовности к NFT/токенизации (ADR-0010). Пустая в MVP; гейтится `feature_toggles('digital_assets')`. On-chain mint/indexer — Фаза 2+. |
 
 Колонки жизненного цикла/состояния, добавленные в существующие таблицы: `listings.status` +
 `listings.moderation_status` (см. `specs/statemachines/listing_state_machine.md`), `users.status`

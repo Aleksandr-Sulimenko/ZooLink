@@ -137,7 +137,7 @@ CREATE TABLE listings (
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    price_cents INTEGER,
+    price_cents BIGINT, -- money is stored in minor units (kopecks) as BIGINT, never FLOAT/INTEGER: INTEGER overflows on livestock-scale deals
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     location_point GEOGRAPHY(POINT, 4326),
@@ -253,6 +253,7 @@ contracts are specified in the linked specs. They were added per the schema audi
 | `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |
 | `notification_logs` | `specs/13-notification-domain.md` | Delivery log (SENT/DELIVERED/FAILED/BOUNCED) |
 | `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Process entity for transfer state machine (distinct from `animal_ownership_history`, the settled log). Animal ownership is locked during MVP. |
+| `digital_assets` | `../04-decisions/0010-nft-digital-assets-hooks.md` | NFT/tokenization readiness hook (ADR-0010). Empty in MVP; gated by `feature_toggles('digital_assets')`. On-chain mint/indexer is Фаза 2+. |
 
 Lifecycle/state columns added to existing tables: `listings.status` + `listings.moderation_status`
 (see `specs/statemachines/listing_state_machine.md`), `users.status` (see

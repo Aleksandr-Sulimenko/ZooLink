@@ -3,6 +3,22 @@
 ## Purpose
 Shows the physical deployment of artifacts on infrastructure nodes.
 
+> ⚠️ **MVP vs Target State.** This diagram depicts the **Target deployment (Фаза 2+)**: a multi-zone
+> Kubernetes cluster with HPA/VPA/Cluster Autoscaler. Per [ADR-0001](../04-decisions/0001-tech-stack.md)
+> and [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md), the **MVP does NOT use Kubernetes**.
+>
+> **MVP deployment topology (Фаза 1):**
+> - 1–2 VMs (or one managed host) running **Docker Compose**: `api` (NestJS monolith, 1–N replicas),
+>   `postgres`, `redis`, `minio` (S3-compatible), a background `worker` (outbox drain, jobs, cron).
+> - A **reverse proxy** (Nginx / Caddy / Traefik) terminating TLS and serving the static SPA build + CDN.
+> - **Network isolation via Docker networks:** only the reverse proxy is public; PostgreSQL/Redis/MinIO ports
+>   are **never** published to the internet (internal network only).
+> - **Providers are RF-appropriate** (see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)): object storage
+>   = Yandex Object Storage / VK Cloud / Selectel / self-hosted MinIO; CDN = Yandex/VK/Selectel; monitoring =
+>   Prometheus + Grafana.
+>
+> Kubernetes, HPA/VPA, multi-zone DR and read replicas below are **Фаза 2+ only**.
+
 ## Diagram Description
 ```mermaid
 graph TD

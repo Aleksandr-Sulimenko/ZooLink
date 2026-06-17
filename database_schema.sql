@@ -496,6 +496,29 @@ CREATE TABLE ownership_transfers (
 CREATE INDEX idx_owntransfer_animal ON ownership_transfers(animal_id);
 CREATE INDEX idx_owntransfer_status ON ownership_transfers(status);
 
+-- ========== Digital Assets / NFT readiness (ADR-0010) ==========
+-- Schema hook only: no minting/contracts/indexer in MVP. Behavior gated by feature_toggles ('digital_assets').
+-- PostgreSQL stays the source of truth; on-chain is a verifiable mirror. No owner PII in on-chain metadata.
+CREATE TABLE digital_assets (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    animal_id        UUID REFERENCES animals(id) ON DELETE RESTRICT,
+    asset_type       VARCHAR(30) NOT NULL CHECK (asset_type IN ('PEDIGREE', 'CERTIFICATE', 'OWNERSHIP')),
+    chain            VARCHAR(20) NOT NULL DEFAULT 'TON' CHECK (chain IN ('TON', 'POLYGON')),
+    contract_address VARCHAR(120),
+    token_id         VARCHAR(120),
+    ipfs_cid         VARCHAR(120),
+    metadata_uri     TEXT,
+    tx_hash          VARCHAR(120),
+    mint_status      VARCHAR(20) NOT NULL DEFAULT 'NONE'
+                     CHECK (mint_status IN ('NONE', 'PENDING', 'MINTED', 'TRANSFERRED', 'FAILED')),
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_digital_assets_animal ON digital_assets(animal_id);
+-- At most one live token per (animal, asset_type)
+CREATE UNIQUE INDEX uq_digital_asset_per_type ON digital_assets(animal_id, asset_type)
+    WHERE mint_status IN ('PENDING', 'MINTED', 'TRANSFERRED');
+
 -- ========== Extensibility / System Tables ==========
 CREATE TABLE feature_toggles (
     key VARCHAR(100) PRIMARY KEY,

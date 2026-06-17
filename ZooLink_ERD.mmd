@@ -112,6 +112,21 @@ erDiagram
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
+    digital_assets {
+        UUID id PK
+        UUID animal_id FK
+        VARCHAR_30 asset_type
+        VARCHAR_20 chain
+        VARCHAR_120 contract_address
+        VARCHAR_120 token_id
+        VARCHAR_120 ipfs_cid
+        TEXT metadata_uri
+        VARCHAR_120 tx_hash
+        VARCHAR_20 mint_status
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% ADR-0010: NFT readiness hook; gated by feature_toggles
+    }
 
     %% Organization Domain
     organizations {
@@ -348,6 +363,7 @@ erDiagram
     animals ||..o{ listings : "listed for"
     animals ||..o{ ownership_transfers : "transferred via"
     users ||..o{ ownership_transfers : "transfers (from/to)"
+    animals ||..o{ digital_assets : "tokenized as"
     animals }o..|| animals : "mother of"
     animals }o..|| animals : "father of"
     listings ||..o{ listing_photos : "has photos"
