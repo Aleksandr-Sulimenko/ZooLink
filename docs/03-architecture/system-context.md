@@ -7,26 +7,26 @@ Shows the ZooLink system as a single box, with its users and the external system
 ```mermaid
 flowchart LR
     %% External Entities
-    subgraph External Systems
+    subgraph "External Systems"
         direction TB
-        SMS[SMS Gateway<br/>(Twilio or similar)]
-        Email[Email Service<br/>(SendGrid or similar)]
-        Maps[Geocoding & Maps<br/>(Yandex.Maps API)]
-        Storage[Object Storage<br/>(S3-compatible)]
-        OAuth[OAuth Providers<br/>(Google, Apple, Telegram, VK)]
+        SMS["SMS Gateway<br/>(Twilio or similar)"]
+        Email["Email Service<br/>(SendGrid or similar)"]
+        Maps["Geocoding & Maps<br/>(Yandex.Maps API)"]
+        Storage["Object Storage<br/>(S3-compatible)"]
+        OAuth["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
     end
 
     %% System Boundary
-    subgraph ZooLink System[ZooLink Platform]
+    subgraph ZooLink_System[ZooLink Platform]
         direction TB
-        WebApp[Web Application<br/>(SPA/PWA)]
-        API[RESTful API<br/>(NestJS Backend)]
+        WebApp["Web Application<br/>(SPA/PWA)"]
+        API["RESTful API<br/>(NestJS Backend)"]
         DB[(PostgreSQL Database)]
         Cache[(Redis Cache)]
     end
 
     %% Users
-    User[Users<br/>(Pet Owners, Breeders, Farmers, Moderators, Admins)]
+    User["Users<br/>(Pet Owners, Breeders, Farmers, Moderators, Admins)"]
 
     %% Relationships
     User -- Uses --> WebApp

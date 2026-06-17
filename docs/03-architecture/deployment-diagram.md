@@ -9,26 +9,26 @@ graph TD
     %% User Devices
     subgraph User_Devices
         direction TB
-        Desktop[Desktop Browser<br/>(Chrome, Firefox, Safari)]
-        Mobile[Mobile Browser<br/>(iOS/Android)]
-        Tablet[Tablet Browser<br/>(iPad/Android)]
+        Desktop["Desktop Browser<br/>(Chrome, Firefox, Safari)"]
+        Mobile["Mobile Browser<br/>(iOS/Android)"]
+        Tablet["Tablet Browser<br/>(iPad/Android)"]
     end
 
     %% CDN Layer
     subgraph CDN_Layer[Content Delivery Network]
         direction TB
-        CDN_Edge[CDN Edge Nodes<br/>(CloudFront, Cloudflare)]
+        CDN_Edge["CDN Edge Nodes<br/>(CloudFront, Cloudflare)"]
     end
 
     %% Load Balancing
     subgraph Load_Balancers
         direction TB
-        ALB[Application Load Balancer<br/>(HTTPS termination)]
-        ILB[Internal Load Balancer<br/>(Service-to-service)]
+        ALB["Application Load Balancer<br/>(HTTPS termination)"]
+        ILB["Internal Load Balancer<br/>(Service-to-service)"]
     end
 
     %% Compute Layer (Kubernetes)
-    subgraph Kubernetes_Cluster[Kubernetes Cluster<br/>(Managed or Self-managed)]
+    subgraph Kubernetes_Cluster["Kubernetes Cluster<br/>(Managed or Self-managed)"]
         direction TB
         %% Control Plane
         subgraph Control_Plane
@@ -46,13 +46,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Container Runtime<br/>(containerd/cri-o)]
+                Container_Runtime["Container Runtime<br/>(containerd/cri-o)"]
                 %% Pods on Node 1
                 subgraph Pods_Node1
                     direction TB
-                    Web_Pod[Web Application Pod<br/>(SPA assets)]
-                    API_Pod[API Pod<br/>(NestJS Backend)]
-                    Worker_Pod[Background Worker Pod<br/>(Jobs, queues)]
+                    Web_Pod["Web Application Pod<br/>(SPA assets)"]
+                    API_Pod["API Pod<br/>(NestJS Backend)"]
+                    Worker_Pod["Background Worker Pod<br/>(Jobs, queues)"]
             end
             end
 
@@ -60,13 +60,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Container Runtime<br/>(containerd/cri-o)]
+                Container_Runtime["Container Runtime<br/>(containerd/cri-o)"]
                 %% Pods on Node 2
                 subgraph Pods_Node2
                     direction TB
-                    API_Pod[API Pod<br/>(NestJS Backend)]
-                    Cron_Pod[Cron Job Pod<br/>(Scheduled tasks)]
-                    Monitoring_Pod[Monitoring Pod<br/>(Prometheus, Grafana)]
+                    API_Pod["API Pod<br/>(NestJS Backend)"]
+                    Cron_Pod["Cron Job Pod<br/>(Scheduled tasks)"]
+                    Monitoring_Pod["Monitoring Pod<br/>(Prometheus, Grafana)"]
             end
             end
 
@@ -74,13 +74,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Container Runtime<br/>(containerd/cri-o)]
+                Container_Runtime["Container Runtime<br/>(containerd/cri-o)"]
                 %% Pods on Node 3
                 subgraph Pods_Node3
                     direction TB
-                    DB_Postgres[PostgreSQL Pod<br/>(Primary instance)]
-                    DB_Postgres_Replica[PostgreSQL Pod<br/>(Replica instance)]
-                    Redis_Pod[Redis Pod<br/>(Cache cluster)]
+                    DB_Postgres["PostgreSQL Pod<br/>(Primary instance)"]
+                    DB_Postgres_Replica["PostgreSQL Pod<br/>(Replica instance)"]
+                    Redis_Pod["Redis Pod<br/>(Cache cluster)"]
             end
             end
         end
@@ -89,21 +89,21 @@ graph TD
     %% Data Stores
     subgraph Data_Stores
         direction TB
-        PV_Postgres[Persistent Volume<br/>(PostgreSQL data)]
-        PV_Redis[Persistent Volume<br/>(Redis data)]
-        PV_Backups[Persistent Volume<br/>(Backup storage)]
-        Object_Storage[Object Storage Bucket<br/>(S3-compatible)]
-        Search_Index[Search Index<br/>(Elasticsearch/OpenSearch)]
+        PV_Postgres["Persistent Volume<br/>(PostgreSQL data)"]
+        PV_Redis["Persistent Volume<br/>(Redis data)"]
+        PV_Backups["Persistent Volume<br/>(Backup storage)"]
+        Object_Storage["Object Storage Bucket<br/>(S3-compatible)"]
+        Search_Index["Search Index<br/>(Elasticsearch/OpenSearch)"]
     end
 
     %% External Services
     subgraph External_Services
         direction TB
-        SMS_Gateway[SMS Provider<br/>(Twilio API)]
-        Email_Service[Email Provider<br/>(SendGrid API)]
-        Maps_Service[Maps Provider<br/>(Yandex.Maps API)]
-        OAuth_Providers[OAuth Providers<br/>(Google, Apple, etc.)]
-        Monitoring_Service[External Monitoring<br/>(Datadog, New Relic)]
+        SMS_Gateway["SMS Provider<br/>(Twilio API)"]
+        Email_Service["Email Provider<br/>(SendGrid API)"]
+        Maps_Service["Maps Provider<br/>(Yandex.Maps API)"]
+        OAuth_Providers["OAuth Providers<br/>(Google, Apple, etc.)"]
+        Monitoring_Service["External Monitoring<br/>(Datadog, New Relic)"]
     end
 
     %% Relationships

@@ -9,37 +9,37 @@ graph TD
     %% Внешние системы (из уровня 1)
     subgraph External_Systems
         direction TB
-        SMS[SMS-шлюз<br/>(Twilio или аналогичный)]
-        Email[Email-сервис<br/>(SendGrid или аналогичный)]
-        Maps[Геокодинг и карты<br/>(Yandex.Maps API)]
-        Storage[Объектное хранилище<br/>(S3-совместимое)]
-        OAuth[Провайдеры OAuth<br/>(Google, Apple, Telegram, VK)]
+        SMS["SMS-шлюз<br/>(Twilio или аналогичный)"]
+        Email["Email-сервис<br/>(SendGrid или аналогичный)"]
+        Maps["Геокодинг и карты<br/>(Yandex.Maps API)"]
+        Storage["Объектное хранилище<br/>(S3-совместимое)"]
+        OAuth["Провайдеры OAuth<br/>(Google, Apple, Telegram, VK)"]
     end
 
     %% Граница системы ZooLink
     subgraph ZooLink_System[Платформа ZooLink]
         direction TB
         %% Веб-приложение
-        subgraph WebApp[Веб-приложение<br/>(SPA/PWA)]
+        subgraph WebApp["Веб-приложение<br/>(SPA/PWA)"]
             direction TB
-            SPA[Одностраничное приложение<br/>(React/Vue/Angular)]
-            PWA_ServiceWorker[Служебный воркер PWA<br/>(Кеширование офлайн)]
+            SPA["Одностраничное приложение<br/>(React/Vue/Angular)"]
+            PWA_ServiceWorker["Служебный воркер PWA<br/>(Кеширование офлайн)"]
         end
 
         %% Слой API
-        subgraph API[RESTful API<br/>(Бэкенд на NestJS)]
+        subgraph API["RESTful API<br/>(Бэкенд на NestJS)"]
             direction TB
-            API_Gateway[Шлюз API<br/>(Ограничение скорости, аутентификация)]
-            Identity_Module[Модуль идентификации<br/>(Аутентификация, профили, OAuth)]
-            Animal_Module[Модуль животных<br/>(CRUD животных, право собственности)]
-            Listing_Module[Модуль объявлений<br/>(CRUD объявлений, поиск)]
-            Moderation_Module[Модуль модерации<br/>(Очередь, принятие решений)]
-            Matching_Module[Модуль подбора<br/>(Предложения для разведения)]
-            Organization_Module[Модуль организаций<br/>(Организации, филиалы)]
-            Admin_Module[Административный модуль<br/>(Справочные данные, конфигурация)]
-            Notification_Module[Модуль уведомлений<br/>(Email, SMS)]
-            GeoSearch_Module[Модуль гео-поиска<br/>(Пространственные запросы)]
-            Payment_Module[Модуль платежей<br/>(Будущее: транзакции)]
+            API_Gateway["Шлюз API<br/>(Ограничение скорости, аутентификация)"]
+            Identity_Module["Модуль идентификации<br/>(Аутентификация, профили, OAuth)"]
+            Animal_Module["Модуль животных<br/>(CRUD животных, право собственности)"]
+            Listing_Module["Модуль объявлений<br/>(CRUD объявлений, поиск)"]
+            Moderation_Module["Модуль модерации<br/>(Очередь, принятие решений)"]
+            Matching_Module["Модуль подбора<br/>(Предложения для разведения)"]
+            Organization_Module["Модуль организаций<br/>(Организации, филиалы)"]
+            Admin_Module["Административный модуль<br/>(Справочные данные, конфигурация)"]
+            Notification_Module["Модуль уведомлений<br/>(Email, SMS)"]
+            GeoSearch_Module["Модуль гео-поиска<br/>(Пространственные запросы)"]
+            Payment_Module["Модуль платежей<br/>(Будущее: транзакции)"]
         end
 
         %% Хранилища данных
@@ -53,7 +53,7 @@ graph TD
     end
 
     %% Пользователи
-    User[Пользователи<br/>(Владельцы домашних животных, разведчики, фермеры, модераторы, администраторы)]
+    User["Пользователи<br/>(Владельцы домашних животных, разведчики, фермеры, модераторы, администраторы)"]
 
     %% Отношения
     User -- Использует --> SPA

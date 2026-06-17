@@ -7,26 +7,26 @@
 ```mermaid
 flowchart LR
  %% Внешние сущности
- subgraph External Systems
+ subgraph "External Systems"
  direction TB
- SMS[SMS Шлюз<br/>(Twilio или аналогичный)]
- Email[Email Сервис<br/>(SendGrid или аналогичный)]
- Maps[Геокодирование и Карты<br/>(Yandex.Maps API)]
- Storage[Объектное Хранилище<br/>(S3-совместимое)]
- OAuth[OAuth Провайдеры<br/>(Google, Apple, Telegram, VK)]
+ SMS["SMS Шлюз<br/>(Twilio или аналогичный)"]
+ Email["Email Сервис<br/>(SendGrid или аналогичный)"]
+ Maps["Геокодирование и Карты<br/>(Yandex.Maps API)"]
+ Storage["Объектное Хранилище<br/>(S3-совместимое)"]
+ OAuth["OAuth Провайдеры<br/>(Google, Apple, Telegram, VK)"]
  end
 
  %% Граница системы
- subgraph ZooLink System[ZooLink Платформа]
+ subgraph ZooLink_System[ZooLink Платформа]
  direction TB
- WebApp[Веб Приложение<br/>(SPA/PWA)]
- API[RESTful API<br/>(NestJS Бэкенд)]
+ WebApp["Веб Приложение<br/>(SPA/PWA)"]
+ API["RESTful API<br/>(NestJS Бэкенд)"]
  DB[(PostgreSQL База данных)]
  Cache[(Redis Кэш)]
  end
 
  %% Пользователи
- User[Пользователи<br/>(Владельцы домашних животных, Заводчики, Фермеры, Модераторы, Администраторы)]
+ User["Пользователи<br/>(Владельцы домашних животных, Заводчики, Фермеры, Модераторы, Администраторы)"]
 
  %% Отношения
  User -- Uses --> WebApp

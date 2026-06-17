@@ -9,37 +9,37 @@ graph TD
     %% External Systems (from Level 1)
     subgraph External_Systems
         direction TB
-        SMS[SMS Gateway<br/>(Twilio or similar)]
-        Email[Email Service<br/>(SendGrid or similar)]
-        Maps[Geocoding & Maps<br/>(Yandex.Maps API)]
-        Storage[Object Storage<br/>(S3-compatible)]
-        OAuth[OAuth Providers<br/>(Google, Apple, Telegram, VK)]
+        SMS["SMS Gateway<br/>(Twilio or similar)"]
+        Email["Email Service<br/>(SendGrid or similar)"]
+        Maps["Geocoding & Maps<br/>(Yandex.Maps API)"]
+        Storage["Object Storage<br/>(S3-compatible)"]
+        OAuth["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
     end
 
     %% ZooLink System Boundary
     subgraph ZooLink_System[ZooLink Platform]
         direction TB
         %% Web Application
-        subgraph WebApp[Web Application<br/>(SPA/PWA)]
+        subgraph WebApp["Web Application<br/>(SPA/PWA)"]
             direction TB
-            SPA[Single Page Application<br/>(React/Vue/Angular)]
-            PWA_ServiceWorker[PWA Service Worker<br/>(Offline caching)]
+            SPA["Single Page Application<br/>(React/Vue/Angular)"]
+            PWA_ServiceWorker["PWA Service Worker<br/>(Offline caching)"]
         end
 
         %% API Layer
-        subgraph API[RESTful API<br/>(NestJS Backend)]
+        subgraph API["RESTful API<br/>(NestJS Backend)"]
             direction TB
-            API_Gateway[API Gateway<br/>(Rate limiting, auth)]
-            Identity_Module[Identity Module<br/>(Auth, profiles, OAuth)]
-            Animal_Module[Animal Module<br/>(Animal CRUD, ownership)]
-            Listing_Module[Listing Module<br/>(Listing CRUD, search)]
-            Moderation_Module[Moderation Module<br/>(Queue, decisions)]
-            Matching_Module[Matching Module<br/>(Breeding suggestions)]
-            Organization_Module[Organization Module<br/>(Orgs, branches)]
-            Admin_Module[Admin Module<br/>(Reference data, config)]
-            Notification_Module[Notification Module<br/>(Email, SMS)]
-            GeoSearch_Module[GeoSearch Module<br/>(Spatial queries)]
-            Payment_Module[Payment Module<br/>(Future: transactions)]
+            API_Gateway["API Gateway<br/>(Rate limiting, auth)"]
+            Identity_Module["Identity Module<br/>(Auth, profiles, OAuth)"]
+            Animal_Module["Animal Module<br/>(Animal CRUD, ownership)"]
+            Listing_Module["Listing Module<br/>(Listing CRUD, search)"]
+            Moderation_Module["Moderation Module<br/>(Queue, decisions)"]
+            Matching_Module["Matching Module<br/>(Breeding suggestions)"]
+            Organization_Module["Organization Module<br/>(Orgs, branches)"]
+            Admin_Module["Admin Module<br/>(Reference data, config)"]
+            Notification_Module["Notification Module<br/>(Email, SMS)"]
+            GeoSearch_Module["GeoSearch Module<br/>(Spatial queries)"]
+            Payment_Module["Payment Module<br/>(Future: transactions)"]
         end
 
         %% Data Stores
@@ -53,7 +53,7 @@ graph TD
     end
 
     %% Users
-    User[Users<br/>(Pet Owners, Breeders, Farmers, Moderators, Admins)]
+    User["Users<br/>(Pet Owners, Breeders, Farmers, Moderators, Admins)"]
 
     %% Relationships
     User -- Uses --> SPA

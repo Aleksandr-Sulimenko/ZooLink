@@ -9,26 +9,26 @@ graph TD
     %% User Devices
     subgraph User_Devices
         direction TB
-        Desktop[Десктопный браузер<br/>(Chrome, Firefox, Safari)]
-        Mobile[Мобильный браузер<br/>(iOS/Android)]
-        Tablet[Планшетный браузер<br/>(iPad/Android)]
+        Desktop["Десктопный браузер<br/>(Chrome, Firefox, Safari)"]
+        Mobile["Мобильный браузер<br/>(iOS/Android)"]
+        Tablet["Планшетный браузер<br/>(iPad/Android)"]
     end
 
     %% CDN Layer
     subgraph CDN_Layer[Сеть доставки контента]
         direction TB
-        CDN_Edge[Крайние узлы CDN<br/>(CloudFront, Cloudflare)]
+        CDN_Edge["Крайние узлы CDN<br/>(CloudFront, Cloudflare)"]
     end
 
     %% Load Balancing
     subgraph Load_Balancers
         direction TB
-        ALB[Балансировщик нагрузки приложений<br/>(Завершение HTTPS)]
-        ILB[Внутренний балансировщик нагрузки<br/>*(Service-to-service)*]
+        ALB["Балансировщик нагрузки приложений<br/>(Завершение HTTPS)"]
+        ILB["Внутренний балансировщик нагрузки<br/>*(Service-to-service)*"]
     end
 
     %% Compute Layer (Kubernetes)
-    subgraph Kubernetes_Cluster[Кластер Kubernetes<br/>(Управляемый или самодостаточный)]
+    subgraph Kubernetes_Cluster["Кластер Kubernetes<br/>(Управляемый или самодостаточный)"]
         direction TB
         %% Control Plane
         subgraph Control_Plane
@@ -46,13 +46,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Контейнерная среда выполнения<br/>(containerd/cri-o)]
+                Container_Runtime["Контейнерная среда выполнения<br/>(containerd/cri-o)"]
                 %% Pods on Node 1
                 subgraph Pods_Node1
                     direction TB
-                    Web_Pod[Под веб-приложения<br/>(активы SPA)]
-                    API_Pod[Под API<br/>(NestJS бэкенд)]
-                    Worker_Pod[Под фоновых worker'ов<br/>(Задания, очереди)]
+                    Web_Pod["Под веб-приложения<br/>(активы SPA)"]
+                    API_Pod["Под API<br/>(NestJS бэкенд)"]
+                    Worker_Pod["Под фоновых worker'ов<br/>(Задания, очереди)"]
                 end
             end
 
@@ -60,13 +60,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Контейнерная среда выполнения<br/>(containerd/cri-o)]
+                Container_Runtime["Контейнерная среда выполнения<br/>(containerd/cri-o)"]
                 %% Pods on Node 2
                 subgraph Pods_Node2
                     direction TB
-                    API_Pod[Под API<br/>(NestJS бэкенд)]
-                    Cron_Pod[Под cron-заданий<br/>(Запланированные задачи)]
-                    Monitoring_Pod[Под мониторинга<br/>(Prometheus, Grafana)]
+                    API_Pod["Под API<br/>(NestJS бэкенд)"]
+                    Cron_Pod["Под cron-заданий<br/>(Запланированные задачи)"]
+                    Monitoring_Pod["Под мониторинга<br/>(Prometheus, Grafana)"]
                 end
             end
 
@@ -74,13 +74,13 @@ graph TD
                 direction TB
                 Kubelet[Kubelet]
                 Kube_Proxy[kube-proxy]
-                Container_Runtime[Контейнерная среда выполнения<br/>(containerd/cri-o)]
+                Container_Runtime["Контейнерная среда выполнения<br/>(containerd/cri-o)"]
                 %% Pods on Node 3
                 subgraph Pods_Node3
                     direction TB
-                    DB_Postgres[Под PostgreSQL<br/>(Основной экземпляр)]
-                    DB_Postgres_Replica[Под PostgreSQL<br/>(Экземпляр-реплика)]
-                    Redis_Pod[Под Redis<br/>(Кластер кеша)]
+                    DB_Postgres["Под PostgreSQL<br/>(Основной экземпляр)"]
+                    DB_Postgres_Replica["Под PostgreSQL<br/>(Экземпляр-реплика)"]
+                    Redis_Pod["Под Redis<br/>(Кластер кеша)"]
                 end
             end
         end
@@ -89,21 +89,21 @@ graph TD
     %% Data Stores
     subgraph Data_Stores
         direction TB
-        PV_Postgres[Постоянный том<br/>(Данные PostgreSQL)]
-        PV_Redis[Постоянный том<br/>(Данные Redis)]
-        PV_Backups[Постоянный том<br/>(Хранилище бэкапов)]
-        Object_Storage[Корзина объектного хранилища<br/>*(S3-совместимое)*]
-        Search_Index[Индекс поиска<br/>(Elasticsearch/OpenSearch)]
+        PV_Postgres["Постоянный том<br/>(Данные PostgreSQL)"]
+        PV_Redis["Постоянный том<br/>(Данные Redis)"]
+        PV_Backups["Постоянный том<br/>(Хранилище бэкапов)"]
+        Object_Storage["Корзина объектного хранилища<br/>*(S3-совместимое)*"]
+        Search_Index["Индекс поиска<br/>(Elasticsearch/OpenSearch)"]
     end
 
     %% External Services
     subgraph External_Services
         direction TB
-        SMS_Gateway[Провайдер SMS<br/>*(API Twilio)*]
-        Email_Service[Провайдер email<br/>*(API SendGrid)*]
-        Maps_Service[Провайдер карт<br/>*(API Yandex.Maps)*]
-        OAuth_Providers[Провайдеры OAuth<br/>*(Google, Apple и др.)*]
-        Monitoring_Service[Внешний мониторинг<br/>*(Datadog, New Relic)*]
+        SMS_Gateway["Провайдер SMS<br/>*(API Twilio)*"]
+        Email_Service["Провайдер email<br/>*(API SendGrid)*"]
+        Maps_Service["Провайдер карт<br/>*(API Yandex.Maps)*"]
+        OAuth_Providers["Провайдеры OAuth<br/>*(Google, Apple и др.)*"]
+        Monitoring_Service["Внешний мониторинг<br/>*(Datadog, New Relic)*"]
     end
 
     %% Relationships
