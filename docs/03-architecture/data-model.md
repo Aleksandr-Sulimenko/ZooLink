@@ -282,10 +282,12 @@ Used for:
 ## Patterns for Handling Special Data
 
 ### Geospatial Data
-- Primary: a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS)
-- Fallback option: separate latitude/longitude columns (not included in the current schema, but can be added via ALTER TABLE)
+> Note: the SQL snippets in this doc are illustrative; `database_schema.sql` is the source of truth and already
+> includes `lat`/`lng`, `status`/`moderation_status` and the other audited columns.
+- **MVP primary:** `lat`/`lng` DOUBLE columns + Haversine + bounding-box prefilter (in the schema; ADR-0009).
+- **Фаза 2+ option:** a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS; already reserved in the schema).
 - Search radius: a `search_radius_m` column in meters
-- Indexes: a GIST index for efficient Distance Within operations and KNN search
+- Indexes: B-tree on lat/lng (MVP); a GiST index on `location_point` when PostGIS is enabled
 - Units: Meters for distances, SRID 4326 (WGS84) for coordinates
 
 ### Multilingualism

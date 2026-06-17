@@ -1,7 +1,9 @@
 # ADR 0001: Technology Stack Selection
 
 ## Status
-Accepted
+Accepted — **Amended by** [ADR-0007](0007-orm-strategy.md) (ORM: Prisma + Kysely/raw-SQL), [ADR-0008](0008-rf-provider-matrix.md) (RF provider matrix — supersedes the SMS/Email/Payment/CDN/monitoring provider defaults named below), [ADR-0009](0009-mvp-vs-target-architecture.md) (MVP = modular monolith; K8s deferred), [ADR-0010](0010-nft-digital-assets-hooks.md) (NFT readiness hooks).
+
+> ⚠️ The third-party providers named below (Twilio, SendGrid, AWS S3, etc.) are **RF-blocked** and were replaced by [ADR-0008](0008-rf-provider-matrix.md). Read that matrix for the binding defaults. The abstraction-layer principle in this ADR still holds.
 
 ## Context
 We need to select a technology stack for the ZooLink MVP that supports:

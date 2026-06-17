@@ -109,7 +109,7 @@ This specification addresses the following Non-Functional Requirements:
 ## Prior Decisions
 - **Backend Testing:** 
   - Framework: Jest with supertest for API testing
-  - Mocking: Jest mocks for external services (Twilio, Redis, etc.)
+  - Mocking: Jest mocks for external services (SMS.RU, Unisender, Redis, etc.)
   - Database: Use SQLite in-memory or transactional rollbacks for tests
   - Coverage Tool: Jest built-in coverage or nyc
   

@@ -71,7 +71,7 @@ Applies to all system components: backend APIs, frontend applications, database 
 
 ### Measurement & Profiling
 - **Monitoring Tools**:
-  - Application Performance Monitoring (APM): Datadog, New Relic, or similar
+  - Application Performance Monitoring (APM): **Prometheus + Grafana / VictoriaMetrics** (RF default, self-hostable; ADR-0008); Datadog/New Relic only where billing is accessible
   - Real User Monitoring (RUM): For frontend performance metrics
   - Infrastructure Monitoring: CPU, memory, disk, network utilization
   - Database Monitoring: Query performance, connection pooling, replication lag

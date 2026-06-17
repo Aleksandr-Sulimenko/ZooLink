@@ -10,6 +10,8 @@ status: "Approved"
 ## Outcome
 Provide efficient geographic search capabilities for finding animals and listings within a specified radius (1-100 km) from a user's location. Support accurate distance calculations and filtering to enable location-based discovery across all marketplace domains (Pet, Livestock, Matching).
 
+> ⚠️ **MVP decision (resolved):** the MVP uses `lat`/`lng` columns + **Haversine formula with a bounding-box prefilter** (no extension), per [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md) and `storage.md`. **PostGIS** (and the `earthdistance`/`ll_to_earth` alternative) is **Фаза 2+**, not a MVP open question. Mentions of PostGIS below are the Target option.
+
 ## Scope & Boundaries
 **In Scope:**
 - Distance calculation using Haversine formula or PostGIS extension
@@ -39,7 +41,7 @@ Provide efficient geographic search capabilities for finding animals and listing
 
 ## Prior Decisions
 - Store location as separate latitude and longitude floating-point columns in Listing and optionally Animal tables.
-- Use PostgreSQL with earthdistance cube extension or PostGIS for geo-indexing (to be decided based on performance testing).
+- **MVP (resolved):** PostgreSQL `lat`/`lng` + Haversine + bounding-box prefilter, B-tree indexes on lat/lng. PostGIS/earthdistance is Фаза 2+ (ADR-0009).
 - For MVP, implement geo-search using Haversine formula optimized with bounding box pre-filter to reduce computational load.
 - External geocoding (address to coordinates) will be handled by Yandex.Maps API via frontend/backend abstraction.
 - Maximum search radius enforced at 100km to prevent abusive queries.

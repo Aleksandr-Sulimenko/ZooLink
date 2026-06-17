@@ -3,14 +3,18 @@
 ## Цель
 Показывает систему ZooLink как единый блок, с её пользователями и внешними системами, с которыми она прямо взаимодействует.
 
+> ⚠️ **Провайдеры — РФ-набор.** Показанные ниже внешние провайдеры (Twilio/SendGrid) — иллюстративные устаревшие
+> подписи; действующие РФ-дефолты: SMS.RU (SMS), Unisender (email), Yandex (карты/хранилище/CDN), ЮKassa+СБП (платежи) —
+> см. [ADR-0008](../04-decisions/0008-rf-provider-matrix.md).
+
 ## Описание диаграммы
 ```mermaid
 flowchart LR
  %% Внешние сущности
  subgraph "External Systems"
  direction TB
- SMS["SMS Шлюз<br/>(Twilio или аналогичный)"]
- Email["Email Сервис<br/>(SendGrid или аналогичный)"]
+ SMS["SMS Шлюз<br/>(SMS.RU — ADR-0008)"]
+ Email["Email Сервис<br/>(Unisender — ADR-0008)"]
  Maps["Геокодирование и Карты<br/>(Yandex.Maps API)"]
  Storage["Объектное Хранилище<br/>(S3-совместимое)"]
  OAuth["OAuth Провайдеры<br/>(Google, Apple, Telegram, VK)"]
@@ -67,8 +71,8 @@ flowchart LR
 - **ВебПриложение ↔ API**: REST/JSON через HTTPS.
 - **API ↔ База данных**: SQL запросы через Prisma ORM (протокол PostgreSQL).
 - **API ↔ Кэш**: Протокол Redis (TCP).
-- **API ↔ SMS Шлюз**: HTTPS API (Twilio REST или аналогичный).
-- **API ↔ Email Сервис**: HTTPS API (SendGrid v3 или аналогичный).
+- **API ↔ SMS Шлюз**: HTTPS API (SMS.RU; за портом `SmsProvider` — ADR-0008).
+- **API ↔ Email Сервис**: HTTPS API (Unisender; за портом `EmailProvider` — ADR-0008).
 - **API ↔ Геокодирование/Карты**: HTTPS API (Yandex.Maps Геокодер и Поиск).
 - **API ↔ Объектное Хранилище**: S3-совместимый REST API (через предварительно подписанные URL или прямой SDK).
 - **API ↔ OAuth Провайдеры**: OAuth 2.0 потоки (authorization code grant с PKCE где применимо).

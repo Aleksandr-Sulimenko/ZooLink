@@ -33,7 +33,7 @@ graph TD
     %% CDN Layer
     subgraph CDN_Layer[Content Delivery Network]
         direction TB
-        CDN_Edge["CDN Edge Nodes<br/>(CloudFront, Cloudflare)"]
+        CDN_Edge["CDN Edge Nodes<br/>(Yandex/VK/Selectel CDN — ADR-0008)"]
     end
 
     %% Load Balancing
@@ -115,11 +115,11 @@ graph TD
     %% External Services
     subgraph External_Services
         direction TB
-        SMS_Gateway["SMS Provider<br/>(Twilio API)"]
-        Email_Service["Email Provider<br/>(SendGrid API)"]
+        SMS_Gateway["SMS Provider<br/>(SMS.RU — ADR-0008)"]
+        Email_Service["Email Provider<br/>(Unisender — ADR-0008)"]
         Maps_Service["Maps Provider<br/>(Yandex.Maps API)"]
-        OAuth_Providers["OAuth Providers<br/>(Google, Apple, etc.)"]
-        Monitoring_Service["External Monitoring<br/>(Datadog, New Relic)"]
+        OAuth_Providers["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
+        Monitoring_Service["Monitoring<br/>(Prometheus+Grafana / Sentry — ADR-0008)"]
     end
 
     %% Relationships

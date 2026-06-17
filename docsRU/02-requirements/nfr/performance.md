@@ -71,7 +71,7 @@
 
 ### Измерение и профилирование
 - **Инструменты мониторинга**:
- - Application Performance Monitoring (APM): Datadog, New Relic или аналогичные
+ - Application Performance Monitoring (APM): **Prometheus + Grafana / VictoriaMetrics** (РФ по умолчанию, self-hostable; ADR-0008); Datadog/New Relic только где доступна оплата
  - Real User Monitoring (RUM): Для метрик производительности frontend
  - Инфраструктурный мониторинг: использование CPU, памяти, диска, сети
  - Мониторинг базы данных: производительность запросов, пул соединений, задержка репликации

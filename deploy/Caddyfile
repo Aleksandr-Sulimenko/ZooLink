@@ -1,0 +1,32 @@
+# ZooLink MVP reverse proxy (Caddy). Terminates TLS (automatic Let's Encrypt), proxies the API,
+# serves the SPA build, sets security headers. Only this service is public (ADR-0009).
+
+{$PUBLIC_DOMAIN} {
+	encode gzip zstd
+
+	# Security headers (security_specification.md: HSTS, etc.)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# API
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	# Health passthrough (for external uptime checks)
+	handle /health/* {
+		reverse_proxy api:3000
+	}
+
+	# SPA static build (mounted/served separately); SPA fallback to index.html
+	handle {
+		root * /srv/www
+		try_files {path} /index.html
+		file_server
+	}
+}

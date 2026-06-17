@@ -102,7 +102,7 @@ flowchart TD
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `moderation` module with NestJS CLI
-   - [ ] Define ModerationDecision entity (TypeORM) with fields: id, moderatorId (User reference), entityType (Listing/Animal), entityId, decision (APPROVED/REJECTED/CHANGES_REQUESTED), reason (enum), notes (optional), createdAt
+   - [ ] Define ModerationDecision model (Prisma) with fields: id, moderatorId (User reference), entityType (Listing/Animal), entityId, decision (APPROVED/REJECTED/CHANGES_REQUESTED), reason (enum), notes (optional), createdAt
    - [ ] Add moderationStatus field to Listing and Animal entities (or create association table)
    - [ ] Implement ModerationController (get queue, get item details, submit decision)
    - [ ] Implement ModerationService (business logic for queue retrieval, decision processing, notification triggering)

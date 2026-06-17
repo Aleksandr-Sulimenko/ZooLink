@@ -50,9 +50,9 @@ ZooLink maintains four distinct environments to support development, testing, st
 - **Configuration**:
   - Database: PostgreSQL Primary-Replica setup with automated failover
   - Cache: Redis Cluster with persistence
-  - Storage: AWS S3 (production) or equivalent S3-compatible
+  - Storage: Yandex Object Storage / VK / Selectel (S3-compatible), or self-hosted MinIO — ADR-0008 (AWS S3 is RF-blocked)
   - External services: Production API keys with monitoring
-  - CDN: CloudFront or equivalent for static assets
+  - CDN: Yandex Cloud CDN / VK / Selectel / Ngenix — ADR-0008 (CloudFront/Cloudflare are RF-blocked)
 - **Deployment**: Automated via GitOps or manual approval gates
 - **Access**: Publicly accessible at app.zoolink.com
 

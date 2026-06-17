@@ -10,6 +10,8 @@ status: "Draft"
 ## Outcome
 Provide a secure, high-performance entry point for all client requests to the ZooLink platform. Handle cross-cutting concerns such as authentication, rate limiting, request/response transformation, routing, and load balancing while ensuring observability, security, and resilience.
 
+> ⚠️ **MVP vs Target State.** Per [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md), the MVP "API Gateway" is **not** a separate service or Kubernetes ingress. In the MVP modular monolith it is realized by **NestJS global guards/interceptors/filters** (auth, RBAC, rate-limiting via `@nestjs/throttler`+Redis, validation, error envelope) behind a **reverse proxy (Nginx/Caddy)** that terminates TLS. Kubernetes/HPA, ELK, Jaeger, circuit-breakers and the 10k RPS target in this spec are **Target State (Фаза 2+)**; MVP load targets are in `performance_specification.md` (50 RPS avg / 200 peak).
+
 ## Scope & Boundaries
 **In Scope:**
 - Request routing to appropriate backend services (modules) based on path and method

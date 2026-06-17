@@ -102,7 +102,7 @@ flowchart TD
 ## Разбивка на задачи
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `moderation` с помощью CLI NestJS
-   - [ ] Определить сущность ModerationDecision (TypeORM) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
+   - [ ] Определить модель ModerationDecision (Prisma) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
    - [ ] Добавить поле moderationStatus в сущности Listing и Animal (или создать таблицу ассоциаций)
    - [ ] Реализовать ModerationController (получение очереди, получение деталей элемента, отправка решения)
    - [ ] Реализовать ModerationService (бизнес-логика получения очереди, обработки решения, запуска уведомлений)

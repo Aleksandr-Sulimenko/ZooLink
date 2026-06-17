@@ -53,8 +53,8 @@ This specification addresses the following Non-Functional Requirements:
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `identity` module with NestJS CLI
-   - [ ] Define User entity (TypeORM/Prasmic) with fields: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
-   - [ ] Implement phone verification service (SMS sending via Twilio abstraction)
+   - [ ] Define User model (Prisma, per [ADR-0007](../04-decisions/0007-orm-strategy.md)) with fields: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
+   - [ ] Implement phone verification service (SMS via `SmsProvider` port — SMS.RU default, [ADR-0008](../04-decisions/0008-rf-provider-matrix.md))
    - [ ] Implement OAuth verification strategies (Google, Apple, Telegram, VK)
    - [ ] Create AuthController (register, login, refresh, profile)
    - [ ] Create AuthService (validate credentials, generate JWT/refresh tokens)
@@ -77,7 +77,7 @@ This specification addresses the following Non-Functional Requirements:
 
 3. **Infrastructure**
    - [ ] Configure Redis for refresh token storage (or use JWT with database refresh tokens)
-   - [ ] Set up SMS provider credentials (Twilio) in environment
+   - [ ] Set up SMS provider credentials (SMS.RU api_id) in environment
    - [ ] Configure OAuth provider credentials (Google, Apple, etc.)
    - [ ] Add security headers (helmet) and CORS configuration
    - [ ] Implement logging for auth events (success/failure)

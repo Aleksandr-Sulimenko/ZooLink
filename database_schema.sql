@@ -4,6 +4,8 @@
 -- UPDATED: Added requested roles (veterinarian, groomer) for Priority 1 completion
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- pg_trgm: fuzzy/partial text search (typo tolerance) for the MVP search (ADR-0009, storage.md). Russian FTS uses the built-in 'russian' config.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- Uncomment if PostGIS is available for geography type
 -- CREATE EXTENSION IF NOT EXISTS postgis;
 
@@ -200,6 +202,9 @@ CREATE INDEX idx_animals_active ON animals(is_active) WHERE is_active = true;
 CREATE INDEX idx_animals_owned_since ON animals(owned_since);
 -- For breeding search visibility (Matching Domain)
 CREATE INDEX idx_animals_breeding_visible ON animals(is_visible_in_breeding_search) WHERE is_visible_in_breeding_search = true;
+-- Pedigree traversal (recursive CTE over parents) and ON DELETE SET NULL need these FK indexes
+CREATE INDEX idx_animals_mother ON animals(mother_id) WHERE mother_id IS NOT NULL;
+CREATE INDEX idx_animals_father ON animals(father_id) WHERE father_id IS NOT NULL;
 
 -- ========== Ownership History (For traceability, regulatory) ==========
 CREATE TABLE animal_ownership_history (
@@ -603,6 +608,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) VALUES
 ('premium_profiles', 'Включить премиум‑профили с расширенной галереей и аналитикой', false, 0),
 ('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0),
+('digital_assets', 'NFT / токенизация цифровых активов (ADR-0010). Выключено до Фазы 2+.', false, 0),
 ('boosted_listings', 'Платное продвижение объявлений в поиске', false, 0),
 ('vet_leadgen', 'Генерация лидов для ветеринарных клиник', false, 0),
 ('service_marketplace', 'Рынок услуг (ветеринары, тренеры, перевозчики)', false, 0),
@@ -807,6 +813,21 @@ CREATE INDEX IF NOT EXISTS idx_listings_description_localized_en
 ON listings USING GIN ((description_localized -> 'en'));
 CREATE INDEX IF NOT EXISTS idx_listings_description_localized_ru
 ON listings USING GIN ((description_localized -> 'ru'));
+
+-- ========== MVP full-text & fuzzy search (ADR-0009, storage.md) ==========
+-- Russian-morphology FTS on listing titles/descriptions (ru + en). The GIN indexes above match a JSONB key;
+-- these support actual word search via to_tsvector. pg_trgm indexes add typo/partial tolerance.
+CREATE INDEX IF NOT EXISTS idx_listings_fts_title_ru
+ON listings USING GIN (to_tsvector('russian', coalesce(title_localized ->> 'ru', '')));
+CREATE INDEX IF NOT EXISTS idx_listings_fts_desc_ru
+ON listings USING GIN (to_tsvector('russian', coalesce(description_localized ->> 'ru', '')));
+CREATE INDEX IF NOT EXISTS idx_listings_fts_title_en
+ON listings USING GIN (to_tsvector('english', coalesce(title_localized ->> 'en', '')));
+-- Trigram (fuzzy) on the most-searched text: listing title (ru) and animal nickname (ru)
+CREATE INDEX IF NOT EXISTS idx_listings_trgm_title_ru
+ON listings USING GIN ((coalesce(title_localized ->> 'ru', '')) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_animals_trgm_nickname_ru
+ON animals USING GIN ((coalesce(nickname_localized ->> 'ru', '')) gin_trgm_ops);
 
 COMMENT ON TABLE supported_languages IS 'Таблица поддерживаемых языков для локализации интерфейса и контента';
 COMMENT ON COLUMN supported_languages.code IS 'Код языка по ISO 639-1 (например, ru, en, fr)';

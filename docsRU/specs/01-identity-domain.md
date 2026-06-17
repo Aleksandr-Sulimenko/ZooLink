@@ -53,8 +53,8 @@ status: "Approved"
 ## Разбивка задач
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `identity` с помощью NestJS CLI
-   - [ ] Определить сущность User (TypeORM/Prasmic) с полями: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
-   - [ ] Реализовать сервис проверки телефона (отправка SMS через abstraction Twilio)
+   - [ ] Определить модель User (Prisma, по [ADR-0007](../04-decisions/0007-orm-strategy.md)) с полями: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
+   - [ ] Реализовать сервис проверки телефона (SMS через порт `SmsProvider` — SMS.RU по умолчанию, [ADR-0008](../04-decisions/0008-rf-provider-matrix.md))
    - [ ] Реализовать стратегии проверки OAuth (Google, Apple, Telegram, VK)
    - [ ] Создать AuthController (регистрация, вход, обновление токена, профиль)
    - [ ] Создать AuthService (валидация учетных данных, генерация JWT/токенов обновления)
@@ -77,7 +77,7 @@ status: "Approved"
 
 3. **Инфраструктура**
    - [ ] Настроить Redis для хранения токенов обновления (или использовать JWT с токенами обновления в базе данных)
-   - [ ] Настроить учетные данные поставщика SMS (Twilio) в окружении
+   - [ ] Настроить учетные данные поставщика SMS (api_id SMS.RU) в окружении
    - [ ] Настроить учетные данные провайдеров OAuth (Google, Apple, и т.д.)
    - [ ] Добавить заголовки безопасности (helmet) и конфигурацию CORS
    - [ ] Внедрить логирование событий аутентификации (успех/неудача)
