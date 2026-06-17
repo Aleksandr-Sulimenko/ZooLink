@@ -9,6 +9,7 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0003: Pre-moderation workflow for listings](0003-pre-moderation-workflow.md)
 - [ADR-0004: Animal as the aggregate root](0004-animal-as-aggregate.md)
 - [ADR-0005: No built-in chat in the MVP](0005-no-chat-mvp.md)
+- [ADR-0006: AI agents as platform operators (moderation, admin, and beyond)](0006-ai-agents-operate-platform.md)
 
 ## Template
 

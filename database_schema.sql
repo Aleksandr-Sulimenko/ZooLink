@@ -105,6 +105,9 @@ CREATE TABLE users (
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60), -- bcrypt hash if using phone auth (nullable if OAuth-only)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
+    -- Principal type: HUMAN or AGENT (ADR-0006). Operator roles (MODERATOR/ADMIN) may be held by an AI agent.
+    -- Defaults to HUMAN; agents are inactive until explicitly enabled (feature-flagged).
+    principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (principal_type IN ('HUMAN', 'AGENT')),
     -- Lifecycle state machine (spec docs/specs/statemachines/user_state_machine.md)
     status VARCHAR(25) NOT NULL DEFAULT 'UNVERIFIED'
         CHECK (status IN ('UNVERIFIED', 'PENDING_VERIFICATION', 'VERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED')),
@@ -129,6 +132,7 @@ CREATE INDEX idx_users_email ON users(email) WHERE email IS NOT NULL;
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_city ON users(city_id);
 CREATE INDEX idx_users_status ON users(status);
+CREATE INDEX idx_users_agents ON users(principal_type) WHERE principal_type = 'AGENT';
 
 -- Deferred FK: organization_users.user_id -> users(id) (users defined after Organization Domain block)
 ALTER TABLE organization_users

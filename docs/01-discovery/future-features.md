@@ -132,6 +132,16 @@ Documents features and enhancements planned for post-MVP phases (Facза 2+). Th
 - Autonomous vehicles for livestock transport
 - Blockchain for pedigree and health records (if mature technology)
 
+## AI-Operated Platform (long-term vision — see ADR-0006)
+
+A strategic direction (ADR-0006): operator roles — first **Moderator**, in perspective **Admin** — can be performed by specially-trained **AI agents**, building toward a mechanism that **runs and maintains the platform as a business largely via AI agents**, with humans in governance/accountability roles.
+
+- **Phase 2 entry point**: AI-assisted moderation (human-in-the-loop) — an agent proposes APPROVE/REJECT/CHANGES_REQUESTED with a confidence score; a human confirms. (Aligns with the "automated moderation (Phase 2)" item in the Moderation domain.)
+- **Progressive autonomy**: assisted → supervised (autonomous above a confidence threshold, low-confidence escalates to humans) → operational agents for admin/reference-data/ops → AI-run business operations.
+- **Baked into the data model now**: `users.principal_type` (`HUMAN`/`AGENT`) lets operator roles be held by an agent; all agent actions are recorded in the immutable `moderation_decisions` audit; agents are inactive until feature-flagged.
+- **Non-negotiables**: a responsible human/legal entity stays accountable (152-ФЗ, prohibited content); least-privilege agent credentials; reversibility and human override.
+- **Knowledge**: agents may use RAG/RLM over the documentation (see `RLM_RAG_HANDOFF.md`).
+
 ## How to Use This Document
 - Review during backlog grooming and sprint planning
 - Features promote to MVP scope only via formal Change Request

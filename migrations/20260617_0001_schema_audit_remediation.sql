@@ -40,6 +40,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_attempts INTEGER NOT NUL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"email": true, "sms": true, "promo": false}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 
+-- ADR-0006: principal type (HUMAN/AGENT) so operator roles can be held by AI agents
+ALTER TABLE users ADD COLUMN IF NOT EXISTS principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'
+    CHECK (principal_type IN ('HUMAN', 'AGENT'));
+CREATE INDEX IF NOT EXISTS idx_users_agents ON users(principal_type) WHERE principal_type = 'AGENT';
+
 ALTER TABLE listings ALTER COLUMN price_cents TYPE BIGINT;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
     CHECK (status IN ('DRAFT','PENDING_MODERATION','ACTIVE','EXPIRED','SOLD','DEACTIVATED'));
