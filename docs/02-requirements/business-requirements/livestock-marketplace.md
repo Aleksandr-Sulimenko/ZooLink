@@ -61,15 +61,16 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
   - **Duplicate Detection**: Warns if nearly identical listing exists from same user recently.
   - **Regulatory Flags**: For certain species (cattle, pigs), moderator notes if listing appears to involve movement requiring documentation (for user awareness; actual Меркурий integration in Фаза 3).
 - Moderator actions:
-  - `APPROVE`: Listing becomes `PUBLISHED` and visible in search.
+  - `APPROVE`: Listing becomes `ACTIVE` and visible in search.
   - `REJECT`: Returns to `DRAFT` state with required edit comments; user can resubmit.
 - Time to moderate: Target <6 hours during business hours (9AM-9PM local) due to potentially more complex review.
 
 ### 3. Listing Lifecycle States
+> **Canonical mapping** (see `specs/statemachines/listing_state_machine.md`): persisted `status` = DRAFT/PENDING_MODERATION/ACTIVE/EXPIRED/SOLD/DEACTIVATED; moderation outcome is the separate `moderation_status`. User-facing: `COMPLETED`→`SOLD`, `ARCHIVED`→`DEACTIVATED`, `CONTACTED` = a logged contact-request event (not a persisted status).
 - Same states as pet marketplace:
   - `DRAFT`: User-editable, not submitted.
   - `PENDING_MODERATION`: Awaiting review.
-  - `PUBLISHED`: Active in search; can receive views/contact requests.
+  - `ACTIVE`: Active in search; can receive views/contact requests.
   - `CONTACTED`: System-tracked state when contacts are shown.
   - `COMPLETED`: User marks as successful transaction.
   - `ARCHIVED`: User hides listing (retains history; can be reactivated).
@@ -114,7 +115,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
   - "Show Contacts" button (visible only after moderation approval)
 
 ### 5. Post-Moderation Interaction
-- When a user clicks "Show Contacts" on a PUBLISHED listing:
+- When a user clicks "Show Contacts" on a ACTIVE listing:
   - System logs the event (listing_id, viewer_user_id, timestamp).
   - Reveals:
     - Phone number (if owner provided during registration and opted to share)
@@ -179,8 +180,8 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 | `location_precision` | ENUM('city', 'district', 'exact') | No | Default: city |
 | `created_at` | TIMESTAMP | Yes |  |
 | `updated_at` | TIMESTAMP | Yes |  |
-| `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'PUBLISHED', 'CONTACTED', 'COMPLETED', 'ARCHIVED', 'EXPIRED') | Yes | Default: DRAFT |
-| `moderation_log` | JSONB | No | [{action: 'APPROVE'/REJECT, moderator_id: UUID, timestamp, comment}] |
+| `status` | ENUM('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED') — canonical, see `specs/statemachines/listing_state_machine.md`. Moderation outcome is the separate field `moderation_status`. Mapping of earlier user-facing terms: "completed"→`SOLD`, "archived"→`DEACTIVATED`; "contacted" is a logged event (contact request), not a status. | Yes | Default: DRAFT |
+| _(moderation history)_ | — | — | Recorded in the append-only `moderation_decisions` table (not a JSONB column on listings); the listing carries `moderation_status` only. |
 | `contact_shown_count` | INT | No | How many times contacts were revealed |
 | `view_count` | INT | No | Times listing appeared in search results |
 | `expires_at` | TIMESTAMP | No | Auto-set (default 90 days) |
@@ -232,7 +233,7 @@ sequenceDiagram
     Backend->>Frontend: Returns list
 
     Moderator->>Frontend: Reviews listing, clicks "Approve"
-    Frontend->>Backend: PATCH /listings/{id} {status: PUBLISHED, moderation_log: [...]}
+    Frontend->>Backend: POST /moderation/action {listing_id, action: APPROVE}
     Backend->>Database: Updates status + log
     Backend->>Frontend: Returns success
 
@@ -277,7 +278,7 @@ sequenceDiagram
 ## API Contract References (see 03-architecture/api-contracts/listings-api.yaml)
 - `GET /listings/new` (get creation form data: species, breeds, cities)
 - `POST /listings` (create listing)
-- `GET /listings/{id}` (get listing by ID – public if PUBLISHED, owner otherwise)
+- `GET /listings/{id}` (get listing by ID – public if ACTIVE, owner otherwise)
 - `PATCH /listings/{id}` (update listing; only in DRAFT/PENDING_MODERATION)
 - `POST /listings/{id}/submit-moderation` (change to PENDING_MODERATION)
 - `GET /listings` (search listings with filters: type, species, breed, price, location_radius, production_tags, etc.)

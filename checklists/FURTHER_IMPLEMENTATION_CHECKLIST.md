@@ -30,4 +30,4 @@
 - [x] Document owner signs off the checklist – add a completed‑date line at the bottom.
 - [x] Commit the checklist and all related files with a clear commit message.
 
-Completed: 2026-05-31
+Completed: 2026-06-15

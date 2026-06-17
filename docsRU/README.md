@@ -34,7 +34,7 @@ docs/
 │
 ├── 03-architecture/ # Фаза 3: Архитектура
 │ ├── system-context.md # C4 Уровень 1: Контекст системы
-│ ├── containers.md # C4 Уровень 2: Контейнеры
+│ ├── container-diagram.md # C4 Уровень 2: Контейнеры
 │ ├── domains-and-bc.md # Ограниченные контексты и их взаимодействия
 │ ├── data-model.md # Логическая модель данных (ERD)
 │ ├── api-contracts/ # Спецификации API (OpenAPI/YAML)

@@ -13,6 +13,8 @@ The following items have been marked as completed in the source checklists and a
 
 ---
 
+---
+
 ## 📋 Pending Documentation‑Only Tasks
 
 ### 1. Animal Domain – Health Records Note
@@ -167,18 +169,21 @@ The following items have been marked as completed in the source checklists and a
     - Diagrams (if added) are in `.svg` or `.mmd` format and are referenced from the relevant spec.  
 
 ### 📅 Review & Sign‑off
-- [x] Peer review: at least one other team member (or the system analyst) has reviewed the new/updated documentation and left comments or approval.  
-- [x] Document owner (you) signs off the checklist – add a completed‑date line at the bottom.  
+- [ ] Peer review: at least one other team member (or the system analyst) has reviewed the new/updated documentation and left comments or approval.  
+- [ ] Document owner (you) signs off the checklist – add a completed‑date line at the bottom.  
 
 ---
 
 ## 📅 Completed
+
 **Completed by:** AlexSulima  
-**Date:** 2026-06-06
+**Date:** 2026-06-15  
 
 *After completing the checklist, commit all changes to the `analytics` branch with a clear commit message, e.g.:*  
-`docs: update pending documentation checklist and capture new feature ideas for <topic>`.
+`docs: update pending documentation checklist and capture new feature ideas for <topic>`.  
 
 --- 
+
+---
 
 *Tip:* Keep this checklist lightweight – only tick items that are genuinely relevant to the current analysis effort. If a section does not apply, you may skip it but leave a brief comment why.

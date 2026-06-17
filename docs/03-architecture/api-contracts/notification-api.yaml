@@ -1,0 +1,279 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Notification API
+  version: 1.0.0
+  description: >-
+    Notification templates, delivery logs, user preferences, and provider
+    delivery webhooks (spec 13, notification_state_machine). Sending itself is
+    triggered internally by domain events; this API covers management, prefs,
+    and delivery-status callbacks.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /notifications/templates:
+    get:
+      summary: List notification templates (admin)
+      operationId: listNotificationTemplates
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [EMAIL, SMS]
+        - in: query
+          name: language
+          schema:
+            type: string
+            maxLength: 2
+      responses:
+        '200':
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NotificationTemplate'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a notification template (admin)
+      operationId: createNotificationTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationTemplateCreate'
+      responses:
+        '201':
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplate'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /notifications/logs:
+    get:
+      summary: List notification delivery logs (admin / own)
+      operationId: listNotificationLogs
+      parameters:
+        - in: query
+          name: user_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [SENT, DELIVERED, FAILED, BOUNCED]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Logs page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NotificationLog'
+                  page:
+                    type: integer
+                  total:
+                    type: integer
+  /me/notification-preferences:
+    get:
+      summary: Get the current user's notification preferences
+      operationId: getNotificationPreferences
+      responses:
+        '200':
+          description: Preferences (users.notification_prefs)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      summary: Update the current user's notification preferences
+      operationId: updateNotificationPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferences'
+      responses:
+        '200':
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /notifications/webhook:
+    post:
+      summary: Provider delivery webhook
+      operationId: notificationWebhook
+      description: >-
+        Idempotent delivery-status callbacks from the email/SMS provider.
+        delivered -> DELIVERED; hard bounce -> BOUNCED; transient error -> FAILED (retryable).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationWebhookEvent'
+      responses:
+        '200':
+          description: Event accepted (idempotent)
+        '400':
+          description: Invalid signature or unknown message id
+components:
+  schemas:
+    NotificationTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [EMAIL, SMS]
+        subject_template:
+          type: string
+          nullable: true
+        body_template:
+          type: string
+        language:
+          type: string
+          maxLength: 2
+          description: FK to supported_languages.code
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    NotificationTemplateCreate:
+      type: object
+      required: [name, type, body_template, language]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [EMAIL, SMS]
+        subject_template:
+          type: string
+          nullable: true
+        body_template:
+          type: string
+        language:
+          type: string
+          maxLength: 2
+        is_active:
+          type: boolean
+          default: true
+    NotificationLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+        type:
+          type: string
+          enum: [EMAIL, SMS]
+        template_id:
+          type: string
+          format: uuid
+          nullable: true
+        recipient:
+          type: string
+        status:
+          type: string
+          enum: [SENT, DELIVERED, FAILED, BOUNCED]
+        attempts:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    NotificationPreferences:
+      type: object
+      description: Mirror of users.notification_prefs JSONB
+      properties:
+        email:
+          type: boolean
+          default: true
+        sms:
+          type: boolean
+          default: true
+        promo:
+          type: boolean
+          default: false
+    NotificationWebhookEvent:
+      type: object
+      required: [status]
+      properties:
+        provider_message_id:
+          type: string
+        status:
+          type: string
+          enum: [DELIVERED, BOUNCED, FAILED]
+        signature:
+          type: string
+        data:
+          type: object
+          description: Raw provider payload
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Caller not permitted (admin required)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

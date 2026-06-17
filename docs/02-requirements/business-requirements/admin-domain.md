@@ -38,7 +38,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
     - By reporter/user reputation (future)
 - **Moderator Actions per Listing**:
   - **APPROVE**: 
-    - Changes listing status to PUBLISHED
+    - Changes listing status to ACTIVE
     - Requires no additional input (though comment optional)
     - Listing becomes immediately visible in search
   - **REJECT**:
@@ -70,7 +70,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
   - Can create/edit own profile and animals
   - Can create/listings (goes to moderation)
   - Can search and view public listings
-  - Can show contacts on PUBLISHED listings
+  - Can show contacts on ACTIVE listings
   - Can deactivate/reactivate own animals/listings
   - Cannot moderate content or manage reference data
 - **MODERATOR**:
@@ -213,62 +213,76 @@ Manages system configuration, reference data, moderation workflows, and user rol
 ## User Journey: Moderating a Listing
 ```mermaid
 sequenceDiagram
-    participant Moderator
-    participant Frontend
-    participant Backend (NestJS Admin/Moderation Module)
-    participant Database
-    participant Listing (in Pet/Livestock Domain)
+    participant Mod as Moderator
+    participant FE as Frontend
+    participant BE as Backend
+    participant DB as Database
 
-    %% Moderator logs in and views queue
-    Moderator->>Frontend: Opens moderation page
-    Frontend->>Backend: GET /moderation/queue?type=pet&limit=20&offset=0
-    Backend->>Database: Returns pending listings with basic info
-    Backend->>Frontend: Returns queue items (title, species, age, time waiting)
+    Note over Mod,DB: Moderation queue review (pre-moderation, ADR-0003)
+    Mod->>FE: Open moderation page
+    FE->>BE: GET /moderation/queue?type=pet&limit=20
+    alt Authorized (MODERATOR or ADMIN)
+        BE->>DB: Query listings WHERE moderation_status=PENDING
+        DB-->>BE: Pending items
+        BE-->>FE: Queue items
+    else Not authorized
+        BE-->>FE: 403 Forbidden
+    end
 
-    Moderator->>Frontend: Selects listing #3 to review
-    Frontend->>Backend: GET /moderation/listing/{id} (gets full details)
-    Backend->>Database: Fetches listing + linked animal + photos
-    Backend->>Frontend: Returns full listing data for review
+    Mod->>FE: Select a listing to review
+    FE->>BE: GET /moderation/listing/{id}
+    BE->>DB: Fetch listing + animal + photos
+    DB-->>BE: Full listing data
+    BE-->>FE: Listing details
 
-    Moderator->>Frontend: Reviews listing, decides to approve
-    Frontend->>Backend: POST /moderation/action {listing_id: X, action: APPROVE}
-    Backend->>Database: 
-      1. Updates listing.status to PUBLISHED
-      2. Inserts moderation_log entry (APPROVE, moderator_id, timestamp)
-    Backend->>Frontend: Returns success
+    Note over Mod,DB: Decision: approve / reject / request changes
+    Mod->>FE: Submit decision
+    FE->>BE: POST /moderation/action {listing_id, action, reason?}
+    alt Listing still PENDING_MODERATION
+        alt action = APPROVE
+            BE->>DB: listing.status=ACTIVE, moderation_status=APPROVED
+            BE->>DB: append moderation_decisions (APPROVED)
+            BE-->>FE: 200 Success
+        else action = REJECT
+            BE->>DB: listing.status=DEACTIVATED, moderation_status=REJECTED
+            BE->>DB: append moderation_decisions (REJECTED, reason)
+            BE-->>FE: 200 Success
+        else action = REQUEST_CHANGES
+            BE->>DB: listing.status=DRAFT, moderation_status=CHANGES_REQUESTED
+            BE->>DB: append moderation_decisions (CHANGES_REQUESTED, notes)
+            BE-->>FE: 200 Success
+        end
+        BE->>BE: enqueue notification to owner (async)
+    else Already actioned by another moderator
+        BE-->>FE: 409 Conflict (already moderated)
+    else Invalid reason_code
+        BE-->>FE: 422 Validation error
+    end
 
-    %% Alternative: Reject with reason
-    Moderator->>Frontend: Reviews listing, decides to reject (spam)
-    Frontend->>Backend: POST /moderation/action {listing_id: Y, action: REJECT, reason_code: SPAM, reason_text: "Stock photo used, not matching described animal"}
-    Backend->>Database: 
-      1. Updates listing.status to DRAFT
-      2. Sets moderation_log with REJECT reason
-      3. Notifies user via email/in-app (decoupled service)
-    Backend->>Frontend: Returns success
+    Note over Mod,DB: Reference data: add breed
+    Mod->>FE: Add new breed
+    FE->>BE: POST /reference-data/breeds {species_id, code, name}
+    alt code unique and species exists
+        BE->>DB: insert breed + audit log
+        BE-->>FE: 200 Success
+    else duplicate code
+        BE-->>FE: 422 Duplicate code
+    else species not found
+        BE-->>FE: 404 Species not found
+    end
 
-    %% Moderator manages reference data
-    Moderator->>Frontend: Navigates to Reference Data -> Breeds -> Add New
-    Frontend->>Backend: GET /reference-data/breeds/new (gets species list for dropdown)
-    Backend->>Reference Data Service: Returns active species
-    Backend->>Frontend: Returns species list
-
-    Moderator->>Frontend: Selects species=Dog, enters code="LABZ", name="Лabrador Retriever (Золотистый)", description="..."
-    Frontend->>Backend: POST /reference-data/breeds {species_id: X, code: "LABZ", name: {...}, description: "..."}
-    Backend->>Database: 
-      1. Validates code unique within breeds dataset
-      2. Inserts new reference entry
-      3. Logs action in audit trail (reference_data_create)
-    Backend->>Frontend: Returns success
-
-    %% Moderator bans user for abuse
-    Moderator->>Frontend: Views user profile from listing, sees spam pattern
-    Frontend->>Backend: POST /moderation/ban-user {user_id: Z, duration_days: 7, reason: "Repeated spam listings"}
-    Backend->>Database:
-      1. Sets user.banned_until = now + 7 days
-      2. Sets user.ban_reason = "Repeated spam listings"
-      3. Inserts audit log entry (user_ban)
-      4. Optionally: hides user's current listings from search
-    Backend->>Frontend: Returns success
+    Note over Mod,DB: Suspend an abusive user
+    Mod->>FE: Suspend user
+    FE->>BE: POST /moderation/suspend-user {user_id, reason}
+    alt User exists and not DEACTIVATED
+        BE->>DB: users.status=SUSPENDED, suspended_at=now
+        BE->>DB: append audit log (user_suspend)
+        BE-->>FE: 200 Success
+    else User not found
+        BE-->>FE: 404 Not found
+    else Already suspended or deactivated
+        BE-->>FE: 409 Conflict
+    end
 ```
 
 ## GAP Registry

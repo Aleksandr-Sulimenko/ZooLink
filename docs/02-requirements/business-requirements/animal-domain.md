@@ -115,10 +115,10 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 | `organization_id` | UUID (FK to Organizations.id) | No | Organization that owns the animal (nullable if `owner_id` set) |
 | `species_id` | INT (FK to species directory) | Yes | From reference data |
 | `breed_id` | INT (FK to breed directory) | No (nullable if "Other/custom") | From reference data; can be null if breed_text provided |
-| `breed_text` | VARCHAR(100) | No | Custom breed text if breed_id is null (for moderator review) |
+| `breed_text_localized` | JSONB | No | Localized custom breed text if breed_id is null (for moderator review) |
 | `sex` | ENUM('Male', 'Female') | Yes |  |
 | `date_of_birth` | DATE | Yes | Estimated or actual DoB |
-| `nickname` | VARCHAR(50) | No | Display name |
+| `nickname_localized` | JSONB | No | Localized display name |
 | `color_coat` | VARCHAR(100) | No | Free text description |
 | `microchip_id` | VARCHAR(50) | No | If provided |
 | `tattoo_brand_id` | VARCHAR(50) | No | For livestock |
@@ -134,7 +134,7 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 
 ## Validation Rules (Examples)
 - Species must exist in `species` directory.
-- If `breed_id` is null, `breed_text` must be provided (and vice versa, ideally).
+- If `breed_id` is null, `breed_text_localized` must be provided (and vice versa, ideally).
 - Date of birth ≤ today and ≥ today - 30 years (adjustable per species in future).
 - Nickname, if provided, cannot be empty string.
 - Microchip ID, if provided, must be at least 8 characters.
@@ -147,51 +147,118 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
 ## User Journey: Managing an Animal
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Frontend
-    participant Backend (NestJS Animal Module)
-    participant Database
+    participant U as User
+    participant FE as Frontend
+    participant BE as Backend
+    participant DB as Database
+    participant Dir as Directory Service
 
-    %% Create animal
-    User->>Frontend: Navigates to "My Animals" -> "Add New Animal"
-    Frontend->>Backend: GET /animals/new (returns directory species/breeds)
-    Backend->>Directory Service (Admin): Fetches species/breed lists
-    Directory Service-->>Backend: Returns lists
-    Backend->>Frontend: Returns species/breed lists
+    Note over U,DB: Register a new animal
+    U->>FE: Open "Add New Animal"
+    FE->>BE: GET /animals/new
+    BE->>Dir: Fetch species/breeds
+    Dir-->>BE: Lists
+    BE-->>FE: Species/breed lists
+    U->>FE: Fill species, breed or custom breed, DoB, nickname, sex
+    FE->>BE: POST /animals {species_id, breed_id|breed_text_localized, sex, date_of_birth, nickname_localized}
+    alt Valid (exactly one of breed_id / breed_text, required present)
+        BE->>DB: insert animal (owner_id = current user)
+        DB-->>BE: animal_id
+        BE-->>FE: 201 Created (animal_id)
+    else Both or neither breed_id and breed_text (chk_animals_breed_dep)
+        BE-->>FE: 422 Provide exactly one of breed or custom breed text
+    else Missing required field
+        BE-->>FE: 422 Validation error
+    end
 
-    User->>Frontend: Selects species=Dog, breed=Golden Retriever, enters DoB, nickname, etc.
-    Frontend->>Backend: POST /animals {species_id, breed_id, sex, date_of_birth, nickname, color_coat}
-    Backend->>Database: Validates, inserts new animal record
-    Backend->>Frontend: Returns animal ID + confirmation
+    Note over U,DB: Add a health record
+    U->>FE: Add vaccination
+    FE->>BE: PATCH /animals/{id} {health_records}
+    alt User owns the animal
+        BE->>DB: update health_records JSONB
+        BE-->>FE: 200 Success
+    else Not owner
+        BE-->>FE: 403 Forbidden
+    end
 
-    %% Update animal (add health record)
-    User->>Frontend: Opens animal profile -> "Add Vaccination"
-    Frontend->>Backend: PATCH /animals/{id} {health_records: [... existing + new]}
-    Backend->>Database: Updates health_records JSONB
-    Backend->>Frontend: Returns success
+    Note over U,DB: Edit immutable field (blocked in MVP)
+    U->>FE: Try to change species/DoB/sex/owner
+    FE->>BE: PATCH /animals/{id} {species_id}
+    BE->>DB: UPDATE animals (trigger trg_animals_immutable_and_owner)
+    alt Immutable field changed
+        DB-->>BE: ERROR immutable field
+        BE-->>FE: 409 Cannot change immutable field after creation
+    else Allowed field
+        DB-->>BE: updated
+        BE-->>FE: 200 Success
+    end
 
-    %% Deactivate animal
-    User->>Frontend: Selects animal -> "Deactivate"
-    Frontend->>Backend: PATCH /animals/{id} {is_active: false}
-    Backend->>Database: Updates flag
-    Backend->>Frontend: Returns success
-
-    %% Use animal in a listing
-    User->>Frontend: Creates new listing, selects animal from "My Animals" list
-    Frontend->>Backend: GET /animals?owner_id=me&is_active=true (for dropdown)
-    Backend->>Database: Returns active animals for user
-    Backend->>Frontend: Returns list
-    User->>Frontend: Chooses animal ID, fills listing details
-    Frontend->>Backend: POST /listings {animal_id, ...}
-    Backend->>Database: Creates listing, links to animal_id
-    Backend->>Frontend: Returns listing ID
-
-    %% Search for animals via listings (cross-domain)
-    User->>Frontend: Searches listings with filters: species=Dog, breed=Labrador, sex=Female
-    Frontend->>Backend: GET /listings?species=Dog&breed=Labrador&sex=Female
-    Backend->>Database: Joins listings with animals, filters on animal attributes
-    Backend->>Frontend: Returns listings with animal summary (species, breed, age, photo)
+    Note over U,DB: List animal on the marketplace
+    U->>FE: Create listing, pick from "My Animals"
+    FE->>BE: GET /animals?owner_id=me&is_active=true
+    BE->>DB: active animals for user
+    DB-->>BE: list
+    BE-->>FE: list
+    U->>FE: Choose animal, fill listing
+    FE->>BE: POST /listings {animal_id}
+    alt Owned, active, no active listing of same type
+        BE->>DB: insert listing (status=DRAFT)
+        BE-->>FE: 201 Created (listing_id)
+    else Duplicate active listing of same type (uq_active_listing_per_type)
+        BE-->>FE: 409 Animal already has an active listing of this type
+    else Animal not owned or inactive
+        BE-->>FE: 403 Forbidden
+    end
 ```
+
+## User Stories
+
+### Animal Management
+**UC-AN-01:** As a pet owner, I want to easily create and manage my animal profiles so that I can showcase my pets for adoption, sale, or breeding purposes.
+- Acceptance Criteria:
+  - Animal creation form loads in <2s
+  - Species and breed selection uses searchable dropdowns
+  - Date of birth input accepts multiple formats (exact date, approximate age)
+  - Clear visual feedback when form is valid/invalid
+  - Success confirmation with animal ID shown immediately
+  - Ability to skip optional fields and return to them later
+
+**UC-AN-02:** As an animal owner, I want to update my animal's information effortlessly so that the profile stays current with life changes.
+- Acceptance Criteria:
+  - One-click editing for all editable fields
+  - Instant preview of changes (nickname, color, photos)
+  - Health records can be added with minimal input (type, date, optional details)
+  - Reproductive data entry guided by species-specific templates
+  - Changes saved automatically or with prominent save button
+  - Edit history visible for audit purposes (future enhancement)
+
+**UC-AN-03:** As a user concerned about privacy and control, I want to manage my animal's visibility and ownership status so that I can protect my pets and comply with personal preferences.
+- Acceptance Criteria:
+  - Clear toggle between active/deactivated states
+  - Visual indication when animal is deactivated (grayed out, label)
+  - Simple reactivation process with confirmation
+  - Ownership transfer workflow (planned for future phases)
+  - Clear explanation of what happens to listings when animal is deactivated
+  - Ability to add/remove microchip/tattoo information easily
+
+**UC-AN-04:** As a breeder or farmer, I want to track important health and reproductive information so that I can make informed decisions about my animals' care and breeding potential.
+- Acceptance Criteria:
+  - Structured input for vaccinations, tests, treatments
+  - Heat cycle tracking with calendar visualization (for applicable species)
+  - Mating records with partner information (when available)
+  - Vaccination expiration reminders (future enhancement)
+  - Health summary visible at a glance on animal profile
+  - Export capability for health records (future enhancement)
+
+### Search & Discovery
+**UC-AN-05:** As a potential buyer or mate seeker, I want to easily discover animals that match my criteria so that I can find suitable pets or breeding partners efficiently.
+- Acceptance Criteria:
+  - Animal attributes visible in listing cards (species, breed, age, sex, photos)
+  - Filtering options prominent and easy to apply
+  - Search results load quickly (<1s) with infinite scroll
+  - Clear indication of searchable attributes vs. private data
+  - Saved searches for frequently used criteria
+  - Sorting options (newest, distance, price relevance)
 
 ## GAP Registry
 | ID | Description | Criticality (High/Med/Low) | Owner | Expected Resolution | Status | Related Decisions |

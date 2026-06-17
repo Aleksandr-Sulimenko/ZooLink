@@ -51,6 +51,58 @@ This specification addresses the following Non-Functional Requirements:
 - **Security (NFR-SEC)**: Adheres to Russian breeding regulations; owner PII protected until after moderation (see docs/02-requirements/nfr/security.md)
 - **Accessibility (NFR-ACC)**: Matching interface follows WCAG 2.1 AA guidelines (see docs/02-requirements/nfr/accessibility.md)
 
+## User Stories
+
+### Breeding & Matching Management
+**UC-MT-01:** As a breeder or farmer, I want to easily find suitable breeding partners for my animals so that I can improve my breeding program and genetic diversity.
+- Acceptance Criteria:
+  - Matching search loads in <2s
+  - Search filters include species, breed, age, sex, health status, pedigree, location, and owner preferences
+  - Map-based search with radius selector (1-100 km)
+  - Search results display key breeding attributes (pedigree, health certifications, show titles)
+  - Clear indication of match quality/compatibility score
+  - Ability to save searches and set up alerts for new matches
+  - Direct contact reveal after moderation (phone, Telegram/VK links)
+  - Option to convert animal profile to breeding listing with one click
+
+**UC-MT-02:** As a user concerned about privacy and control, I want to manage my animal's visibility in breeding searches so that I can protect my information and comply with personal preferences.
+- Acceptance Criteria:
+  - Clear toggle to include/exclude animal from breeding search results
+  - Visual indication when animal is hidden from search
+  - Simple process to make animal visible again
+  - Control over what breeding information is visible (pedigree, health tests, titles)
+  - Ability to block specific users from seeing animal in search
+  - Audit trail of who viewed animal profile (future enhancement)
+
+**UC-MT-03:** As a moderator, I want to efficiently review breeding listings so that I can ensure quality, compliance, and safety in the breeding marketplace.
+- Acceptance Criteria:
+  - Moderation queue loads in <2s with clear status indicators
+  - Breeding listing details show all required attributes for review (pedigree, health certificates, titles)
+  - One-click approval/rejection with optional comments
+  - Bulk moderation options for similar listings
+  - Clear compliance checklist for Russian animal breeding regulations
+  - Notification system for users when listing status changes
+  - Audit trail of moderation actions for accountability
+  - Ability to request additional information from seller
+
+**UC-MT-04:** As a livestock trader or farmer, I want to track important health and pedigree information so that I can make informed decisions about my animals' breeding potential and value.
+- Acceptance Criteria:
+  - Structured input for health tests, vaccinations, treatments
+  - Pedigree tracking with mother/father references
+  - Health and pedigree summary visible at a glance on animal profile
+  - Integration with animal health records from Animal Domain
+  - Export capability for health and pedigree records (future enhancement)
+  - Reminders for upcoming health checks or treatments (future enhancement)
+
+**UC-MT-05:** As a user new to breeding, I want to access educational resources and guidance so that I can make informed decisions about animal breeding practices.
+- Acceptance Criteria:
+  - Access to breeding guidelines and best practices
+  - Information about Russian breeding regulations and requirements
+  - Health testing recommendations for different species
+  - Pedigree explanation and importance
+  - Links to veterinary resources and breeding associations
+  - FAQ section covering common breeding questions
+
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Enhance Animal entity with breeding-specific fields: pedigreeId, healthTestResults (JSONB), showTitles, breedingRestrictions, etc.
@@ -86,3 +138,15 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: adheres to Russian breeding regulations; owner PII protected until after moderation
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Matching API](../03-architecture/api-contracts/matching-api.yaml)
+- [Pet Marketplace](03-pet-marketplace-domain.md)
+- [Livestock Marketplace](04-livestock-marketplace-domain.md)
+- [Animal Domain](02-animal-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/matching-domain.md)
+- 🌐 RU mirror: [docsRU/specs/05-matching-domain.md](../../docsRU/specs/05-matching-domain.md)

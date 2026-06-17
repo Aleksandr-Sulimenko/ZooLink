@@ -26,7 +26,7 @@
  - **Типы объявлений**: sale, breeding, show, adoption, stud_service (расширяемый)
  - **Статусы животных**: ACTIVE, ARCHIVED, DECEASED (для будущего)
 - Справочные данные могут быть:
- - **Активированы/Деактивированы**: ללא удаления (для целостности исторических данных)
+ - **Активированы/Деактивированы**: без удаления (для целостности исторических данных)
  - **Версионированы**: Изменения отслеживаются через журнал аудита (кто что изменил и когда)
  - **Локализованы**: Поддержка нескольких языков в Фазе 2+ (RU основной на MVP)
 - Валидация: Записи справочных данных должны иметь уникальные коды/названия внутри своего набора.
@@ -41,7 +41,7 @@
  - По репутации/рейтингу пользователя (будущее)
 - **Действия модератора per объявление**:
  - **ОДОБРИТЬ**:
- - Меняет статус объявления на PUBLISHED
+ - Меняет статус объявления на ACTIVE
  - Не требует дополнительного ввода (хотя комментарий необязателен)
  - Объявление становится сразу видимым в поиске
  - **ОТКЛОНИТЬ**:
@@ -51,7 +51,7 @@
  - **ПОМЕТИТЬ НА ПЕРЕПРОВЕРКУ**:
  - Особое состояние для сложных случаев, требующих ввода старшего модератора
  - Не меняет состояние объявления, но добавляет индикатор
- - **ЗАБАНИТЬ ПОЛЬЗОВАТЕЛЯ** (изビュー модерации):
+ - **ЗАБАНИТЬ ПОЛЬЗОВАТЕЛЯ** (из интерфейса модерации):
  - Доступно, если модератор обнаруживает паттерн abuse/spam
  - Требует указания причины и длительности (временной/постоянной)
 - **Причины отклонения** (настраиваемые администратором):
@@ -216,62 +216,76 @@
 ## Пользовательский путь: Модерация объявления
 ```mermaid
 sequenceDiagram
- participant Moderator
- participant Frontend
- participant Backend (NestJS Admin/Moderation Module)
- participant Database
- participant Listing (в домене Pet/Livestock)
+    participant Mod as Модератор
+    participant FE as Фронтенд
+    participant BE as Бэкенд
+    participant DB as База данных
 
- %% Модератор логинится и просматривает очередь
- Moderator->>Frontend: Открывает страницу модерации
- Frontend->>Backend: GET /moderation/queue?type=pet&limit=20&offset=0
- Backend->>Database: Возвращает ожидающие объявления с основной информацией
- Backend->>Frontend: Возвращает элементы очереди (название, вид, возраст, время ожидания)
+    Note over Mod,DB: Просмотр очереди модерации (пре-модерация, ADR-0003)
+    Mod->>FE: Открыть страницу модерации
+    FE->>BE: GET /moderation/queue?type=pet&limit=20
+    alt Авторизован (MODERATOR или ADMIN)
+        BE->>DB: Запрос listings WHERE moderation_status=PENDING
+        DB-->>BE: Ожидающие элементы
+        BE-->>FE: Элементы очереди
+    else Не авторизован
+        BE-->>FE: 403 Forbidden
+    end
 
- Moderator->>Frontend: Выбирает объявление #3 для проверки
- Frontend->>Backend: GET /moderation/listing/{id} (получает полные детали)
- Backend->>Database: Извлекает объявление + связанное животное + фотографии
- Backend->>Frontend: Возвращает полные данные объявления для проверки
+    Mod->>FE: Выбрать листинг для проверки
+    FE->>BE: GET /moderation/listing/{id}
+    BE->>DB: Получить листинг + животное + фото
+    DB-->>BE: Полные данные листинга
+    BE-->>FE: Детали листинга
 
- Moderator->>Frontend: Проверяет объявление, решает одобрить
- Frontend->>Backend: POST /moderation/action {listing_id: X, action: APPROVE}
- Backend->>Database:
- 1. Обновляет статус объявления на PUBLISHED
- 2. Вставляет запись в журнал модерации (APPROVE, moderator_id, timestamp)
- Backend->>Frontend: Возвращает успех
+    Note over Mod,DB: Решение: одобрить / отклонить / запросить изменения
+    Mod->>FE: Отправить решение
+    FE->>BE: POST /moderation/action {listing_id, action, reason?}
+    alt Листинг ещё PENDING_MODERATION
+        alt action = APPROVE
+            BE->>DB: listing.status=ACTIVE, moderation_status=APPROVED
+            BE->>DB: дозапись moderation_decisions (APPROVED)
+            BE-->>FE: 200 Success
+        else action = REJECT
+            BE->>DB: listing.status=DEACTIVATED, moderation_status=REJECTED
+            BE->>DB: дозапись moderation_decisions (REJECTED, reason)
+            BE-->>FE: 200 Success
+        else action = REQUEST_CHANGES
+            BE->>DB: listing.status=DRAFT, moderation_status=CHANGES_REQUESTED
+            BE->>DB: дозапись moderation_decisions (CHANGES_REQUESTED, notes)
+            BE-->>FE: 200 Success
+        end
+        BE->>BE: поставить уведомление владельцу (async)
+    else Уже обработан другим модератором
+        BE-->>FE: 409 Conflict (уже промодерировано)
+    else Невалидный reason_code
+        BE-->>FE: 422 Validation error
+    end
 
- %% Альтернатива: Отклонить с причиной
- Moderator->>Frontend: Проверяет объявление, решает отклонить (spam)
- Frontend->>Backend: POST /moderation/action {listing_id: Y, action: REJECT, reason_code: SPAM, reason_text: "Использовано стоковое фото, не соответствующее описанному животному"}
- Backend->>Database:
- 1. Обновляет статус объявления на DRAFT
- 2. Устанавливает запись в журнале модерации с причиной REJECT
- 3. Уведомляет пользователя через email/in-app (отделенный сервис)
- Backend->>Frontend: Возвращает успех
+    Note over Mod,DB: Справочные данные: добавить породу
+    Mod->>FE: Добавить новую породу
+    FE->>BE: POST /reference-data/breeds {species_id, code, name}
+    alt code уникален и species существует
+        BE->>DB: insert breed + audit log
+        BE-->>FE: 200 Success
+    else дубликат code
+        BE-->>FE: 422 Duplicate code
+    else species не найден
+        BE-->>FE: 404 Species not found
+    end
 
- %% Модератор управляет справочными данными
- Moderator->>Frontend: Переходит к Справочные данные -> Породы -> Добавить новую
- Frontend->>Backend: GET /reference-data/breeds/new (получает список видов для выпадающего списка)
- Backend->>Reference Data Service: Возвращает активные виды
- Backend->>Frontend: Возвращает список видов
-
- Moderator->>Frontend: Выбирает вид=Dog, вводит код="LABZ", имя="Лабрадор-ретривер (Золотистый)", описание="..."
- Frontend->>Backend: POST /reference-data/breeds {species_id: X, code: "LABZ", name: {...}, description: "..."}
- Backend->>Database:
- 1. Проверяет уникальность кода внутри набора пород
- 2. Вставляет новую запись справочных данных
- 3. Логирует действие в журнале аудита (reference_data_create)
- Backend->>Frontend: Возвращает успех
-
- %% Модератор банит пользователя за abuse
- Moderator->>Frontend: Просматривает профиль пользователя из объявления, видит паттерн спама
- Frontend->>Backend: POST /moderation/ban-user {user_id: Z, duration_days: 7, reason: "Повторяющийся спам в объявлениях"}
- Backend->>Database:
- 1. Устанавливает user.banned_until = now + 7 days
- 2. Устанавливает user.ban_reason = "Повторяющийся спам в объявлениях"
- 3. Вставляет запись в журнал аудита (user_ban)
- 4. По желанию: скрывает текущие объявления пользователя из поиска
- Backend->>Frontend: Возвращает успех
+    Note over Mod,DB: Приостановка нарушителя
+    Mod->>FE: Приостановить пользователя
+    FE->>BE: POST /moderation/suspend-user {user_id, reason}
+    alt Пользователь существует и не DEACTIVATED
+        BE->>DB: users.status=SUSPENDED, suspended_at=now
+        BE->>DB: дозапись audit log (user_suspend)
+        BE-->>FE: 200 Success
+    else Пользователь не найден
+        BE-->>FE: 404 Not found
+    else Уже приостановлен или деактивирован
+        BE-->>FE: 409 Conflict
+    end
 ```
 
 ## Реестр GAP

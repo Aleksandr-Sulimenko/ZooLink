@@ -128,7 +128,7 @@
 ## Связанные документы
 - `00-project-brief.md` - ограничения и предположения
 - `03-architecture/system-context.md` - высокоуровневые границы системы
-- `03-architecture/containers.md` - техническая декомпозиция
+- `03-architecture/container-diagram.md` - техническая декомпозиция
 - `03-architecture/domains-and-bc.md` - сопоставление ограниченных контекстов с техническими модулями
 - `04-decisions/0002-hard-split-markets.md` - обоснование разделения рынков pet/livestock
 

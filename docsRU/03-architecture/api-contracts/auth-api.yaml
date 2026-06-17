@@ -1,0 +1,424 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Auth API
+  version: 1.0.0
+  description: API for user authentication, authorization, and profile management in ZooLink.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /auth/register/phone:
+    post:
+      summary: Register user via phone/SMS
+      operationId: registerPhone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterPhoneRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Bad request (validation error)
+        '409':
+          description: Conflict (phone already registered)
+        '429':
+          description: Too Many Requests (rate limit exceeded)
+  /auth/register/oauth/{provider}:
+    post:
+      summary: Register/Login user via OAuth provider
+      operationId: registerOAuth
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+            enum: [google, apple, telegram, vk]
+            description: OAuth provider name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OAuthRequest'
+      responses:
+        '200':
+          description: User logged in successfully (existing user)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '201':
+          description: User registered successfully (new user)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized (invalid OAuth code/token)
+        '429':
+          description: Too Many Requests (rate limit exceeded)
+  /auth/verify-phone:
+    post:
+      summary: Verify phone with SMS code
+      operationId: verifyPhone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyPhoneRequest'
+      responses:
+        '200':
+          description: Phone verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyPhoneResponse'
+        '400':
+          description: Bad request (invalid code or expired)
+        '429':
+          description: Too Many Requests (rate limit exceeded)
+  /auth/refresh:
+    post:
+      summary: Refresh access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Unauthorized (invalid or expired refresh token)
+        '403':
+          description: Forbidden (refresh token reused or revoked)
+  /auth/logout:
+    post:
+      summary: Logout user (invalidate tokens)
+      operationId: logout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: Logged out successfully
+        '401':
+          description: Unauthorized
+  /me:
+    get:
+      summary: Get current user profile
+      operationId: getMe
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Unauthorized
+    patch:
+      summary: Update current user profile
+      operationId: updateMe
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request (validation error)
+        '401':
+          description: Unauthorized
+    post:
+      summary: Deactivate current user account
+      operationId: deactivateMe
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Account deactivated successfully
+        '401':
+          description: Unauthorized
+  /me/reactivate:
+    post:
+      summary: Reactivate deactivated user account
+      operationId: reactivateMe
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Account reactivated successfully
+        '400':
+          description: Bad request (account not deactivated or other error)
+        '401':
+          description: Unauthorized
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterPhoneRequest:
+      type: object
+      required:
+        - phone
+        - fullName
+        - cityId
+      properties:
+        phone:
+          type: string
+          pattern: '^\\+?[1-9]\\d{1,14}$'
+          description: Phone number in E.164 format
+        fullName:
+          type: string
+          maxLength: 100
+          minLength: 2
+          description: User's full name for display
+        cityId:
+          type: string
+          format: uuid
+          description: Reference to city for geo-search
+        password:
+          type: string
+          minLength: 8
+          description: Password for phone auth (required if not using OAuth-only)
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: Email address for notifications (optional)
+        avatarUrl:
+          type: string
+          format: uri
+          maxLength: 500
+          description: URL to avatar image in object storage (optional)
+    OAuthRequest:
+      type: object
+      required:
+        - code
+        - fullName
+        - cityId
+      properties:
+        code:
+          type: string
+          description: Authorization code from OAuth provider
+        fullName:
+          type: string
+          maxLength: 100
+          minLength: 2
+          description: User's full name (can be overridden by provider data)
+        cityId:
+          type: string
+          format: uuid
+          description: Reference to city for geo-search
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: Email address from provider (optional)
+        avatarUrl:
+          type: string
+          format: uri
+          maxLength: 500
+          description: URL to avatar image from provider (optional)
+    VerifyPhoneRequest:
+      type: object
+      required:
+        - phone
+        - code
+      properties:
+        phone:
+          type: string
+          pattern: '^\\+?[1-9]\\d{1,14}$'
+          description: Phone number in E.164 format
+        code:
+          type: string
+          pattern: '^\\d{6}$'
+          description: 6-digit SMS verification code
+    VerifyPhoneResponse:
+      type: object
+      properties:
+        verified:
+          type: boolean
+          description: Whether phone verification was successful
+        userId:
+          type: string
+          format: uuid
+          description: User ID if phone is registered (null if new registration)
+        needsRegistration:
+          type: boolean
+          description: Whether user needs to complete registration after verification
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          description: Refresh token obtained during login/registration
+    LogoutRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: Refresh token to invalidate (optional, if not provided all tokens for user are invalidated)
+    AuthResponse:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+        - user
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token (expires in 24h)
+        refreshToken:
+          type: string
+          description: Refresh token for obtaining new access tokens
+        user:
+          $ref: '#/components/schemas/UserProfile'
+    UserProfile:
+      type: object
+      required:
+        - id
+        - fullName
+        - role
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+        phoneHash:
+          type: string
+          pattern: '^\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$'
+          nullable: true
+          description: Bcrypt hash of phone number (null if OAuth-only)
+        oauthGoogleId:
+          type: string
+          nullable: true
+          description: Unique ID from Google (null if not linked)
+        oauthAppleId:
+          type: string
+          nullable: true
+          description: Unique ID from Apple (null if not linked)
+        oauthTelegramId:
+          type: string
+          nullable: true
+          description: Unique ID from Telegram (null if not linked)
+        oauthVkId:
+          type: string
+          nullable: true
+          description: Unique ID from VK (null if not linked)
+        fullName:
+          type: string
+          maxLength: 100
+          description: Display name
+        cityId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to city for geo-search
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          maxLength: 500
+          description: URL to avatar in object storage
+        email:
+          type: string
+          format: email
+          nullable: true
+          maxLength: 255
+          description: Email address for notifications
+        emailVerified:
+          type: boolean
+          default: false
+          description: True if email confirmed via link
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN]
+          description: User role defining permissions
+        isActive:
+          type: boolean
+          description: True = can login; False = deactivated
+        createdAt:
+          type: string
+          format: date-time
+          description: Registration timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last profile update
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last login timestamp
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When user chose to deactivate (null if active)
+    UpdateProfileRequest:
+      type: object
+      properties:
+        fullName:
+          type: string
+          maxLength: 100
+          minLength: 2
+          description: User's full name for display
+        cityId:
+          type: string
+          format: uuid
+          description: Reference to city for geo-search
+        avatarUrl:
+          type: string
+          format: uri
+          maxLength: 500
+          description: URL to avatar image in object storage
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: Email address for notifications
+        password:
+          type: string
+          minLength: 8
+          description: New password (only for phone auth users)

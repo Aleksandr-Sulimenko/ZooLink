@@ -1,7 +1,7 @@
 erDiagram
     %% Reference Data Tables
     species {
-        UUID id PK
+        INTEGER id PK
         VARCHAR_50 code UK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
@@ -9,8 +9,8 @@ erDiagram
         TIMESTAMPTZ updated_at
     }
     breeds {
-        UUID id PK
-        UUID species_id FK
+        INTEGER id PK
+        INTEGER species_id FK
         VARCHAR_50 code
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
@@ -19,7 +19,7 @@ erDiagram
         %% UK (species_id, code)
     }
     cities {
-        UUID id PK
+        INTEGER id PK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
         TIMESTAMPTZ created_at
@@ -42,12 +42,17 @@ erDiagram
         VARCHAR_255 oauth_telegram_id
         VARCHAR_255 oauth_vk_id
         VARCHAR_100 full_name
-        UUID city_id FK
+        INTEGER city_id FK
         TEXT avatar_url
         VARCHAR_255 email
         BOOLEAN email_verified
         VARCHAR_60 password_hash
         VARCHAR_20 role
+        VARCHAR_10 principal_type
+        VARCHAR_25 status
+        TIMESTAMPTZ suspended_at
+        INTEGER verification_attempts
+        JSONB notification_prefs
         BOOLEAN is_active
         TIMESTAMPTZ last_login_at
         TIMESTAMPTZ deactivated_at
@@ -60,10 +65,10 @@ erDiagram
         UUID id PK
         UUID owner_id FK
         UUID organization_id FK
-        UUID species_id FK
-        UUID breed_id FK
+        INTEGER species_id FK
+        INTEGER breed_id FK
         JSONB breed_text_localized
-        JSONB nickname_localized
+        JSONB nickname_localized NOT NULL
         VARCHAR_10 sex
         DATE date_of_birth
         VARCHAR_100 color_coat
@@ -75,6 +80,10 @@ erDiagram
         DATE owned_since
         UUID mother_id FK
         UUID father_id FK
+        VARCHAR_100 pedigree_id
+        JSONB health_test_results
+        JSONB show_titles
+        BOOLEAN is_visible_in_breeding_search
         JSONB description_localized
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
@@ -88,6 +97,20 @@ erDiagram
         DATE end_date
         TEXT transfer_reason
         TIMESTAMPTZ created_at
+    }
+    ownership_transfers {
+        UUID id PK
+        UUID animal_id FK
+        UUID from_user_id FK
+        UUID to_user_id FK
+        VARCHAR_20 status
+        BOOLEAN from_confirmed
+        BOOLEAN to_confirmed
+        BOOLEAN payment_confirmed
+        TEXT failure_reason
+        TIMESTAMPTZ expires_at
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
     }
 
     %% Organization Domain
@@ -109,7 +132,7 @@ erDiagram
     branches {
         UUID id PK
         UUID organization_id FK
-        UUID city_id FK
+        INTEGER city_id FK
         TEXT address
         VARCHAR_30 phone
         VARCHAR_255 email
@@ -129,6 +152,7 @@ erDiagram
         DATE joined_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+        %% UK (organization_id, user_id)
     }
 
     %% Marketplace/Listings Domain
@@ -141,15 +165,23 @@ erDiagram
         VARCHAR_20 listing_type
         JSONB title_localized
         JSONB description_localized
-        INTEGER price_cents
+        BIGINT price_cents
         CHAR_3 currency
         INTEGER quantity
+        VARCHAR_20 status
+        VARCHAR_20 moderation_status
+        TIMESTAMPTZ published_at
+        TIMESTAMPTZ sold_at
+        UUID transaction_id FK
+        DOUBLE lat
+        DOUBLE lng
         GEOGRAPHY location_point
         INTEGER search_radius_m
         BOOLEAN is_active
         TIMESTAMPTZ expires_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+        %% UK (animal_id, listing_type) WHERE status='ACTIVE'
     }
     listing_photos {
         UUID id PK
@@ -175,6 +207,110 @@ erDiagram
         TIMESTAMPTZ sent_at
         TIMESTAMPTZ read_at
         TIMESTAMPTZ created_at
+    }
+
+    %% Moderation Domain
+    moderation_reasons {
+        VARCHAR_50 code PK
+        JSONB description_localized
+        VARCHAR_20 applies_to
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+    }
+    moderation_decisions {
+        UUID id PK
+        UUID moderator_id FK
+        VARCHAR_20 entity_type
+        UUID entity_id
+        VARCHAR_20 decision
+        VARCHAR_50 reason FK
+        TEXT notes
+        TIMESTAMPTZ created_at
+        %% append-only (immutable)
+    }
+
+    %% Payment Domain
+    payment_transactions {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_255 gateway_transaction_id
+        BIGINT amount_minor
+        CHAR_3 currency
+        VARCHAR_20 status
+        VARCHAR_40 purpose_type
+        UUID purpose_id
+        VARCHAR_255 idempotency_key UK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+    refunds {
+        UUID id PK
+        UUID payment_transaction_id FK
+        VARCHAR_255 gateway_refund_id
+        BIGINT amount_minor
+        TEXT reason
+        VARCHAR_20 status
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    %% Notification Domain
+    notification_templates {
+        UUID id PK
+        VARCHAR_100 name
+        VARCHAR_10 type
+        TEXT subject_template
+        TEXT body_template
+        CHAR_2 language FK
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% UK (name, type, language)
+    }
+    notification_logs {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_10 type
+        UUID template_id FK
+        VARCHAR_255 recipient
+        TEXT content
+        VARCHAR_20 status
+        JSONB provider_response
+        INTEGER attempts
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    %% Favorites & Saved Searches (MVP)
+    favorites {
+        UUID id PK
+        UUID user_id FK
+        UUID listing_id FK
+        TIMESTAMPTZ created_at
+        %% UK (user_id, listing_id)
+    }
+    saved_searches {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_100 name
+        JSONB filters
+        DOUBLE lat
+        DOUBLE lng
+        INTEGER radius_m
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+    content_reports {
+        UUID id PK
+        UUID reporter_id FK
+        VARCHAR_20 entity_type
+        UUID entity_id
+        VARCHAR_50 reason
+        TEXT notes
+        VARCHAR_20 status
+        UUID resolved_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
     }
 
     %% Extensibility / System Tables
@@ -210,18 +346,33 @@ erDiagram
     users ||..o{ messages : "receives"
     animals ||..o{ animal_ownership_history : "has history"
     animals ||..o{ listings : "listed for"
+    animals ||..o{ ownership_transfers : "transferred via"
+    users ||..o{ ownership_transfers : "transfers (from/to)"
     animals }o..|| animals : "mother of"
     animals }o..|| animals : "father of"
     listings ||..o{ listing_photos : "has photos"
     listings ||..o{ conversations : "has conversation"
     conversations ||..o{ messages : "contains"
+    users ||..o{ favorites : "saves"
+    listings ||..o{ favorites : "favorited by"
+    users ||..o{ saved_searches : "saves search"
+    users ||..o{ content_reports : "files report"
 
-    %% Organization Domain Relationships
-    organizations }o..o{ organization_users : "contains"
-    users }o..o{ organization_users : "belongs to"
-    organizations }o..o{ branches : "has"
+    %% Organization Domain Relationships (junction = M:N resolved)
+    organizations ||..o{ organization_users : "has members"
+    users ||..o{ organization_users : "member of"
+    organizations ||..o{ branches : "has"
     branches }o..|| cities : "located in"
     listings }o..|| organizations : "linked to (optional)"
     listings }o..|| branches : "linked to (optional)"
     animals }o..|| organizations : "owned by (optional)"
-    animals }o..|| branches : "kept at (optional)"
+
+    %% Moderation / Payment / Notification Relationships
+    users ||..o{ moderation_decisions : "decides"
+    moderation_reasons ||..o{ moderation_decisions : "categorizes"
+    users ||..o{ payment_transactions : "pays"
+    payment_transactions ||..o{ refunds : "refunded by"
+    payment_transactions |o..o{ listings : "settles (optional)"
+    supported_languages ||..o{ notification_templates : "language of"
+    notification_templates ||..o{ notification_logs : "rendered as"
+    users ||..o{ notification_logs : "notified via"

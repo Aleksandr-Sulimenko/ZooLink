@@ -34,7 +34,7 @@ docs/
 │
 ├── 03-architecture/          # Phase 3: Architecture
 │   ├── system-context.md     # C4 Level 1: System context
-│   ├── containers.md         # C4 Level 2: Containers
+│   ├── container-diagram.md         # C4 Level 2: Containers
 │   ├── domains-and-bc.md     # Bounded contexts and their interactions
 │   ├── data-model.md         # Logical data model (ERD)
 │   ├── api-contracts/        # API specifications (OpenAPI/YAML)

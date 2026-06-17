@@ -92,3 +92,15 @@ status: "Approved"
 - [ ] Соответствие: хранение данных соответствует 152-ФЗ (минимальные личные данные, согласие на обработку)
 - [ ] Документация: спецификация OpenAPI сгенерирована и доступна по адресу /api/docs
 - [ ] Трассируемость НФТ: проверить, что требования производительности, безопасности и доступности корректно учтены и документированы
+
+---
+
+## Связанные документы
+
+- [Глоссарий](glossary.md)
+- [Стейт-машина пользователя](statemachines/user_state_machine.md)
+- [Auth API](../03-architecture/api-contracts/auth-api.yaml)
+- [Домен организаций](11-organization-domain.md)
+- [Домен администрирования](06-admin-domain.md)
+- [Бизнес-требования](../02-requirements/business-requirements/identity-domain.md)
+- 🌐 EN-зеркало: [docs/specs/01-identity-domain.md](../../docs/specs/01-identity-domain.md)

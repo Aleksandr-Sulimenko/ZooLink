@@ -4,9 +4,9 @@
 Manages user authentication, authorization, and profile information. This domain is the gateway to the system and ensures secure access while minimizing collection of personal data in compliance with ФЗ-152.
 
 ## Core Concepts
-- **User**: A person who has registered in the system. Can be a private individual, breeder, farmer, or moderator.
+- **User**: A person who has registered in the system. Can be a private individual, breeder, farmer, moderator, veterinarian, or groomer.
 - **Authentication Method**: How the user proves identity (phone SMS, OAuth providers).
-- **User Role**: Defines permissions in the system (regular user, moderator, admin).
+- **User Role**: Defines permissions in the system (regular user, moderator, admin, veterinarian, groomer).
 - **Profile**: Public and private information associated with the user.
 
 ## Business Rules
@@ -34,7 +34,9 @@ Manages user authentication, authorization, and profile information. This domain
    - `USER`: Can create/edit own profile, create/listings, search, view public data, show contacts after moderation.
    - `MODERATOR`: All USER permissions + can moderate listings (approve/reject), manage reference data (breeds, species), ban users.
    - `ADMIN`: All MODERATOR permissions + can manage moderator/admin roles, view system analytics, change global settings.
-   - Roles are additive (ADMIN includes MODERATOR and USER permissions).
+   - `VETERINARIAN`: Can view animal health records, verify vaccination information, provide professional advice on animal health (specific permissions to be defined in future phases).
+   - `GROOMER`: Can view animal grooming-related information, provide grooming services information (specific permissions to be defined in future phases).
+   - Roles are additive (ADMIN includes MODERATOR and USER permissions; VETERINARIAN and GROOMER include USER permissions for basic functionality).
 
 4. **Profile Management**
    - Users can update their profile at any time:
@@ -92,7 +94,6 @@ sequenceDiagram
     Frontend->>OAuth Provider: Redirects to OAuth login
     User->>OAuth Provider: Enters credentials, consents to share profile
     OAuth Provider->>Frontend: Redirects back with auth code
-    Frontend->>Backend: POST /auth/oauth/google {code}
     Backend->>OAuth Provider: Validates code, gets user info
     alt No existing user with this OAuth ID
         Backend->>Database: Creates new user (OAuth ID, name from provider, city default/null)
@@ -107,6 +108,52 @@ sequenceDiagram
     Backend->>Database: Validates refresh token, checks for reuse/rotation
     Backend->>Frontend: Returns new JWT + new refresh token
 ```
+
+## User Stories
+
+### Authentication & Registration
+**UC-ID-01:** As a new user, I want to register quickly using my phone number or social media account so that I can start using the platform immediately without friction.
+- Acceptance Criteria:
+  - Registration form loads in <1s
+  - Phone verification completes within 30 seconds
+  - Social login (Google/Apple/Telegram/VK) requires no more than 2 clicks
+  - Clear progress indicators during verification
+  - Error messages are specific and actionable
+  - Success confirmation shown immediately after verification
+
+**UC-ID-02:** As a returning user, I want to log in seamlessly so that I can access my account with minimal effort.
+- Acceptance Criteria:
+  - Remember me option for trusted devices
+  - Biometric login where available (future enhancement)
+  - Password recovery via SMS/email within 2 minutes
+  - Session persistence across browser restarts (30 days)
+  - Clear indication of authentication status in UI
+
+**UC-ID-03:** As a privacy-conscious user, I want to control what personal information is visible so that I can use the platform comfortably while maintaining my privacy.
+- Acceptance Criteria:
+  - Only minimal required info shown in public profile (name, city, avatar)
+  - Phone number masked (showing last 4 digits only)
+  - Email never displayed publicly
+  - Easy toggle to show/hide social media links after moderation
+  - Clear explanation of what data is stored vs displayed
+
+### Profile Management
+**UC-ID-04:** As an active user, I want to easily update my profile information so that my information stays current and accurate.
+- Acceptance Criteria:
+  - Profile editing accessible from main navigation
+  - Real-time validation of inputs (phone format, name length, etc.)
+  - Instant preview of avatar changes
+  - One-click deactivation/reactivation option
+  - Confirmation dialogs for destructive actions
+  - Success notification after profile updates
+
+**UC-ID-05:** As a user concerned about account security, I want to monitor and control access to my account so that I can prevent unauthorized use.
+- Acceptance Criteria:
+  - Login history showing location/time/device
+  - Active sessions management (terminate specific sessions)
+  - Password change requires current password verification
+  - Security alerts for new device/login attempts
+  - Easy linkage/unlinking of OAuth providers
 
 ## Data Model (Conceptual)
 | Attribute | Type | Required | Description |
@@ -123,7 +170,7 @@ sequenceDiagram
 | `email` | VARCHAR(255) | No | For notifications (optional) |
 | `email_verified` | BOOLEAN | No | True if email confirmed via link |
 | `password_hash` | VARCHAR(60) | No (if OAuth only) | Bcrypt hash if using phone auth |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN') | Yes | Default: USER |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER |
 | `is_active` | BOOLEAN | Yes | True = can login; False = deactivated |
 | `created_at` | TIMESTAMP | Yes | Registration timestamp |
 | `updated_at` | TIMESTAMP | Yes | Last profile update |

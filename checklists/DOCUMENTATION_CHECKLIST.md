@@ -47,10 +47,10 @@
 - [ ] No separate Russian ERD files; the same files serve both locales.
 
 ### API Contracts (if we decide to document them)
-- [ ] 03-architecture/api-contracts/organization-api.yaml (new)
-- [ ] 03-architecture/api-contracts/branch-api.yaml (new)
-- [ ] Update existing listings-api.yaml to show optional organization_id/branch_id in request/response schemas.
-- [ ] Update animals-api.yaml similarly.
+- [x] 03-architecture/api-contracts/organization-api.yaml (new)
+- [x] 03-architecture/api-contracts/branch-api.yaml (new)
+- [x] Update existing listings-api.yaml to show optional organization_id/branch_id in request/response schemas.
+- [x] Update animals-api.yaml similarly.
 
 ### Tech Stack Decisions (if needed)
 - [ ] docs/04-decisions/0001-tech-stack.md

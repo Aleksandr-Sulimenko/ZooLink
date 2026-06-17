@@ -87,3 +87,17 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] Additional fields: Verify owned_since, mother_id, father_id, deactivated_at fields are properly implemented and tested
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Ownership Transfer State Machine](statemachines/ownership_transfer_state_machine.md)
+- [Species Validation Decision Table](business_logic/species_validation_decision_table.md)
+- [Animals API](../03-architecture/api-contracts/animals-api.yaml)
+- [Pet Marketplace](03-pet-marketplace-domain.md)
+- [Livestock Marketplace](04-livestock-marketplace-domain.md)
+- [Organization Domain](11-organization-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/animal-domain.md)
+- 🌐 RU mirror: [docsRU/specs/02-animal-domain.md](../../docsRU/specs/02-animal-domain.md)

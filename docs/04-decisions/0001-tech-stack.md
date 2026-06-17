@@ -130,7 +130,7 @@ We will use the following technology stack for the MVP:
 ## Related Documents
 - `00-project-brief.md` - constraints and assumptions
 - `03-architecture/system-context.md` - high-level system boundaries
-- `03-architecture/containers.md` - technical decomposition
+- `03-architecture/container-diagram.md` - technical decomposition
 - `03-architecture/domains-and-bc.md` - mapping of bounded contexts to technical modules
 - `04-decisions/0002-hard-split-markets.md` - rationale for pet/livestock separation
 

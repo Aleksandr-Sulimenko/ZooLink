@@ -1,0 +1,262 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Geo-Search API
+  version: 1.0.0
+  description: >-
+    Radius search over listings (Haversine + bounding box on lat/lng; spec 07),
+    address geocoding proxy (Yandex.Maps), and saved searches (UC-GS-03,
+    saved_searches table). Proactive alerts on saved searches are Phase 2.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /geo-search:
+    get:
+      summary: Radius search for listings near a point
+      operationId: geoSearchListings
+      description: >-
+        Returns ACTIVE listings within radius_m of (lat, lng), combinable with
+        standard listing filters. Results include distance from the point.
+      parameters:
+        - in: query
+          name: lat
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+        - in: query
+          name: lng
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+        - in: query
+          name: radius_m
+          required: true
+          schema:
+            type: integer
+            minimum: 1000
+            maximum: 100000
+          description: Radius in meters (1km..100km per spec 07)
+        - in: query
+          name: market
+          schema:
+            type: string
+            enum: [pet, livestock]
+        - in: query
+          name: species
+          schema:
+            type: string
+        - in: query
+          name: listing_type
+          schema:
+            type: string
+            enum: [sale, breeding, show, adoption, stud_service]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Listings with distance, paginated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GeoSearchResult'
+                  page:
+                    type: integer
+                  total:
+                    type: integer
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /geo/geocode:
+    get:
+      summary: Geocode an address to coordinates (Yandex.Maps proxy)
+      operationId: geocodeAddress
+      parameters:
+        - in: query
+          name: address
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Geocoding candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GeocodeResult'
+        '502':
+          description: Upstream geocoding provider error
+  /saved-searches:
+    get:
+      summary: List the current user's saved searches
+      operationId: listSavedSearches
+      responses:
+        '200':
+          description: Saved searches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SavedSearch'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Save a search (filters + location)
+      operationId: createSavedSearch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavedSearchCreate'
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedSearch'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /saved-searches/{id}:
+    delete:
+      summary: Delete a saved search
+      operationId: deleteSavedSearch
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  schemas:
+    GeoSearchResult:
+      type: object
+      properties:
+        listing_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        distance_m:
+          type: integer
+          description: Distance from the query point in meters
+    GeocodeResult:
+      type: object
+      properties:
+        label:
+          type: string
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+    SavedSearch:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          nullable: true
+        filters:
+          type: object
+          description: species/breed/price/listing_type/etc.
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        radius_m:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SavedSearchCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        filters:
+          type: object
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        radius_m:
+          type: integer
+          nullable: true
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

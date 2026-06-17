@@ -91,3 +91,17 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: listings do not expose personal data beyond what's allowed (phone/social media after moderation); adhere to Russian advertising laws
 - [ ] Documentation: OpenAPI spec generated and available
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [Listing State Machine](statemachines/listing_state_machine.md)
+- [Ownership Transfer State Machine](statemachines/ownership_transfer_state_machine.md)
+- [Listings API](../03-architecture/api-contracts/listings-api.yaml)
+- [Animal Domain](02-animal-domain.md)
+- [Matching Domain](05-matching-domain.md)
+- [Geo-Search Service](07-geo-search-service.md)
+- [Business Requirements](../02-requirements/business-requirements/pet-marketplace.md)
+- 🌐 RU mirror: [docsRU/specs/03-pet-marketplace-domain.md](../../docsRU/specs/03-pet-marketplace-domain.md)

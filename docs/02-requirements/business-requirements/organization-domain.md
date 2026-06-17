@@ -54,7 +54,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 
 ### 5. Animal Ownership by Organization
 - Animals can be owned either by a personal user (`owner_id`) or by an organization (`organization_id`).
-- At least one of `owner_id` or `organization_id` must be set (application-level validation).
+- Exactly one of `owner_id` or `organization_id` must be set — not both, not neither (enforced by DB CHECK `chk_animal_ownership`, XOR). A contact person for an organization-owned animal is a separate role (see `organization_users`), not `owner_id`.
 - This allows animals owned by breeding farms, shelters, or clinics to be represented accurately.
 
 ### 6. Search and Discovery
@@ -111,7 +111,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
 | `organization_id` | UUID | Yes | FK to organizations.id |
-| `city_id` | UUID | Yes | FK to cities.id |
+| `city_id` | INTEGER | Yes | FK to cities.id |
 | `address` | TEXT | Yes | Detailed address |
 | `phone` | VARCHAR(30) | No | Branch phone |
 | `email` | VARCHAR(255) | No | Branch email |
@@ -147,54 +147,63 @@ Handles the modeling of legal entities (organizations) and their physical locati
 - Organization name must be unique (case-insensitive) within the platform to avoid duplicates.
 - INN, if provided, must be unique (nullable allowed).
 - A user must have an active affiliation (`organization_users`) with an organization to create a listing on its behalf.
-- For animal ownership: at least one of `owner_id` (FK to users) or `organization_id` must be NOT NULL.
+- For animal ownership: exactly one of `owner_id` (FK to users) or `organization_id` must be NOT NULL (XOR; `chk_animal_ownership`).
 
 ## User Journey: Managing an Organization
 ```mermaid
 sequenceDiagram
-    participant User as Founder
-    participant Frontend
-    participant Backend (NestJS Organization Module)
-    participant Database
+    participant F as Founder
+    participant FE as Frontend
+    participant BE as Backend
+    participant DB as Database
 
-    %% Create organization
-    Founder->>Frontend: Navigates to "Organizations" -> "Create Organization"
-    Frontend->>Backend: GET /organizations/new (returns empty form)
-    Backend->>Frontend: Returns form fields
-    Founder->>Frontend: Fills address, optional localized names, INN, etc.
-    Frontend->>Backend: POST /organizations {address, name_localized, description_localized, inn, kpp, phone, email, logo_url, metadata, is_active}
-    Backend->>Database: Validates, inserts organization record
-    Backend->>Frontend: Returns organization ID + confirmation
+    Note over F,DB: Create organization
+    F->>FE: Open "Create Organization"
+    FE->>BE: POST /organizations {name_localized, address, inn?, kpp?}
+    alt Valid (INN unique if provided, required present)
+        BE->>DB: insert organization + organization_users (founder, OWNER)
+        BE-->>FE: 201 Created (organization_id)
+    else INN already registered
+        BE-->>FE: 409 Organization with this INN exists
+    else Invalid INN/KPP format
+        BE-->>FE: 422 Validation error
+    end
 
-    %% Add a branch
-    Founder->>Frontend: Navigates to organization detail -> "Add Branch"
-    Frontend->>Backend: GET /branches/new?organization_id=ORG_ID (returns form with org pre-filled)
-    Founder->>Frontend: Selects city, enters branch address, phone
-    Frontend->>Backend: POST /branches {organization_id, city_id, address, phone, email}
-    Backend->>Database: Validates, inserts branch record
-    Backend->>Frontend: Returns branch ID
+    Note over F,DB: Add a branch
+    F->>FE: Add branch
+    FE->>BE: POST /branches {organization_id, city_id, address}
+    alt Founder is OWNER/ADMIN and city exists
+        BE->>DB: insert branch
+        BE-->>FE: 201 Created (branch_id)
+    else Not OWNER/ADMIN
+        BE-->>FE: 403 Forbidden
+    else city_id not found
+        BE-->>FE: 404 City not found
+    end
 
-    %% Invite a staff member
-    Founder->>Frontend: Navigates to organization detail -> "Invite Staff"
-    Frontend->>Backend: GET /organization-users/new?organization_id=ORG_ID (returns form)
-    Founder->>Frontend: Selects existing user (by email/phone), chooses role STAFF
-    Frontend->>Backend: POST /organization-users {organization_id, user_id, role_in_org: STAFF, joined_at: today}
-    Backend->>Database: Validates, inserts affiliation record
-    Backend->>Frontend: Returns success
+    Note over F,DB: Invite staff (M:N affiliation)
+    F->>FE: Invite existing user as STAFF
+    FE->>BE: POST /organization-users {organization_id, user_id, role_in_org: STAFF}
+    alt User exists and not already a member
+        BE->>DB: insert organization_users
+        BE-->>FE: 200 Success
+    else Already a member (uq_organization_user)
+        BE-->>FE: 409 User already affiliated
+    else User not found
+        BE-->>FE: 404 User not found
+    end
 
-    %% Create a listing on behalf of the organization
-    Founder->>Frontend: Navigates to "My Animals" (or directly to "Create Listing") and selects option "List for Organization"
-    Frontend->>Backend: GET /organizations?name=ORG_NAME (to verify access)
-    Founder->>Frontend: Chooses organization, optionally selects a branch
-    Frontend->>Backend: POST /listings {animal_id, title, ..., organization_id=ORG_ID, branch_id=BRANCH_ID}
-    Backend->>Database: Validates that user is affiliated with org, creates listing with organization_id/branch_id
-    Backend->>Frontend: Returns listing ID
-
-    %% View organization analytics
-    Founder->>Frontend: Navigates to organization detail -> "Analytics"
-    Frontend->>Backend: GET /organizations/{id}/analytics
-    Backend->>Database: Aggregates view/contact stats for all listings under the org (and optionally per branch)
-    Backend->>Frontend: Returns analytics dashboard
+    Note over F,DB: Create an organization listing
+    F->>FE: Create listing "List for Organization"
+    FE->>BE: POST /listings {animal_id, organization_id, branch_id?}
+    alt Affiliated with org and animal owned by org
+        BE->>DB: insert listing with organization_id/branch_id
+        BE-->>FE: 201 Created (listing_id)
+    else Not affiliated with org
+        BE-->>FE: 403 Forbidden
+    else branch not under organization
+        BE-->>FE: 422 Branch does not belong to organization
+    end
 ```
 
 ## GAP Registry

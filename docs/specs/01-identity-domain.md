@@ -92,3 +92,15 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] Compliance: data storage adheres to 152-ФЗ (minimal personal data, consent for processing)
 - [ ] Documentation: OpenAPI spec generated and available at /api/docs
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
+
+---
+
+## Related Documents
+
+- [Glossary](glossary.md)
+- [User State Machine](statemachines/user_state_machine.md)
+- [Auth API](../03-architecture/api-contracts/auth-api.yaml)
+- [Organization Domain](11-organization-domain.md)
+- [Admin Domain](06-admin-domain.md)
+- [Business Requirements](../02-requirements/business-requirements/identity-domain.md)
+- 🌐 RU mirror: [docsRU/specs/01-identity-domain.md](../../docsRU/specs/01-identity-domain.md)
