@@ -383,13 +383,13 @@ components:
           description: Foreign key to breed (nullable if custom/other)
         breed_text_localized:
           type: object
-          description: Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})
+          description: 'Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})'
           additionalProperties:
             type: string
             maxLength: 100
         nickname_localized:
           type: object
-          description: Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})
+          description: 'Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})'
           additionalProperties:
             type: string
             maxLength: 50
@@ -403,7 +403,7 @@ components:
           description: Date of birth
         description_localized:
           type: object
-          description: Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})
+          description: 'Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})'
           additionalProperties:
             type: string
             maxLength: 100
@@ -513,13 +513,13 @@ components:
           description: Foreign key to breed (nullable if custom/other)
         breed_text_localized:
           type: object
-          description: Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})
+          description: 'Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})'
           additionalProperties:
             type: string
             maxLength: 100
         nickname_localized:
           type: object
-          description: Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})
+          description: 'Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})'
           additionalProperties:
             type: string
             maxLength: 50
@@ -533,7 +533,7 @@ components:
           description: Date of birth
         description_localized:
           type: object
-          description: Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})
+          description: 'Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})'
           additionalProperties:
             type: string
             maxLength: 100

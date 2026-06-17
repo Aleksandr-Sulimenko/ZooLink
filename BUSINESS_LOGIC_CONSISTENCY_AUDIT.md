@@ -14,7 +14,13 @@ status: "Final"
 > - **D3** — guard `ACTIVE→SOLD` исправлен: `payment_transactions.status = COMPLETED` (было несуществующее `CONFIRMED`).
 > - **D6+M4** — `listings-api.yaml` (EN+RU) догнан до схемы: добавлены `status`/`moderation_status`/`published_at`/`sold_at`/`transaction_id`/`lat`/`lng`; попутно починен предсуществующий YAML-парс-баг (незакавыченные описания с фигурными скобками) — теперь контракт валиден.
 >
-> Осталось: **P1** (D4 creator_id/seller_id, M1 недостающие OpenAPI, M2 traceability, D5 moderation_log), **P2** (M3 глоссарий, D7 VET/VETERINARIAN).
+> ## ✅ Статус устранения — P1 закрыт (2026-06-17)
+> - **D4** — задокументировано тождество `creator_id` (бизнес-термин) ≡ `listings.seller_id` (канон схемы).
+> - **D5** — `moderation_log` (JSONB) заменён ссылкой на append-only `moderation_decisions`; sequence-вызов → `POST /moderation/action`.
+> - **M2** — traceability matrix дополнена BR-011…017 (specs 11-15 + новые таблицы + principal_type).
+> - **M1** — написаны **4 недостающих OpenAPI-контракта** (Moderation, Payment, Notification, Geo-search), EN+RU = 8 файлов, **все валидны** (openapi-spec-validator).
+>
+> Осталось: **P2** (M3 глоссарий — principal/agent/статусы; D7 `VET`≡`VETERINARIAN`).
 
 > Структурная консистентность (EN↔RU, схема↔спека, полнота BPMN/ER) уже закрыта тремя аудитами этой сессии: `EN_RU_CONSISTENCY_AUDIT.md`, `DATABASE_SCHEMA_AUDIT.md`, `PREDEV_READINESS_AUDIT.md`. Настоящий отчёт ищет **логические/смысловые** расхождения между артефактами и фиксирует, что доработать **до начала кода**.
 

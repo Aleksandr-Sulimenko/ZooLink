@@ -1,0 +1,400 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Moderation API
+  version: 1.0.0
+  description: >-
+    Pre-moderation workflow (ADR-0003) and user content reports.
+    Moderators (or AI-agent principals per ADR-0006) review listings,
+    record append-only decisions, and triage user-submitted reports.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+paths:
+  /moderation/queue:
+    get:
+      summary: List listings awaiting moderation
+      operationId: getModerationQueue
+      description: Returns listings with status PENDING_MODERATION, paginated.
+      parameters:
+        - in: query
+          name: market
+          schema:
+            type: string
+            enum: [pet, livestock]
+          description: Filter queue by market
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated queue items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationQueuePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /moderation/listing/{id}:
+    get:
+      summary: Get a listing with linked details for review
+      operationId: getModerationListing
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Full listing data for review (listing + animal + photos)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Listing review payload (see listings-api.yaml Listing schema plus linked animal and photos)
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /moderation/action:
+    post:
+      summary: Submit a moderation decision for a listing
+      operationId: submitModerationAction
+      description: >-
+        Records an append-only moderation_decisions row and transitions the
+        listing. APPROVE -> status=ACTIVE/moderation_status=APPROVED;
+        REJECT -> status=DEACTIVATED/moderation_status=REJECTED;
+        REQUEST_CHANGES -> status=DRAFT/moderation_status=CHANGES_REQUESTED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModerationActionRequest'
+      responses:
+        '200':
+          description: Decision recorded; listing transitioned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationDecision'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Listing already moderated (concurrent decision) or not in PENDING_MODERATION
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /moderation/decisions:
+    get:
+      summary: List moderation decisions (append-only audit)
+      operationId: listModerationDecisions
+      parameters:
+        - in: query
+          name: entity_type
+          schema:
+            type: string
+            enum: [LISTING, ANIMAL]
+        - in: query
+          name: entity_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Decisions page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModerationDecision'
+                  page:
+                    type: integer
+                  total:
+                    type: integer
+  /moderation/reasons:
+    get:
+      summary: List configurable moderation reason codes
+      operationId: listModerationReasons
+      responses:
+        '200':
+          description: Active reason codes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModerationReason'
+  /content-reports:
+    post:
+      summary: Submit a user report/flag on content
+      operationId: createContentReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContentReportCreate'
+      responses:
+        '201':
+          description: Report created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      summary: List content reports (moderator/admin)
+      operationId: listContentReports
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
+        - in: query
+          name: entity_type
+          schema:
+            type: string
+            enum: [LISTING, ANIMAL, USER, MESSAGE]
+      responses:
+        '200':
+          description: Reports list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContentReport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /content-reports/{id}:
+    patch:
+      summary: Resolve a content report (moderator/admin)
+      operationId: resolveContentReport
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [REVIEWED, DISMISSED, ACTIONED]
+              required: [status]
+      responses:
+        '200':
+          description: Report updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentReport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  schemas:
+    ModerationQueueItem:
+      type: object
+      properties:
+        listing_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        market:
+          type: string
+          enum: [pet, livestock]
+        species:
+          type: string
+        submitted_at:
+          type: string
+          format: date-time
+        waiting_seconds:
+          type: integer
+          description: Time spent waiting in queue (for SLA)
+    ModerationQueuePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModerationQueueItem'
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+    ModerationActionRequest:
+      type: object
+      required: [listing_id, action]
+      properties:
+        listing_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum: [APPROVE, REJECT, REQUEST_CHANGES]
+        reason:
+          type: string
+          description: Reason code (FK to moderation_reasons.code); required for REJECT/REQUEST_CHANGES
+        notes:
+          type: string
+          nullable: true
+    ModerationDecision:
+      type: object
+      description: Append-only audit record (immutable; no update/delete)
+      properties:
+        id:
+          type: string
+          format: uuid
+        moderator_id:
+          type: string
+          format: uuid
+          description: Acting principal (users.id); may be a HUMAN or AGENT (ADR-0006)
+        entity_type:
+          type: string
+          enum: [LISTING, ANIMAL]
+        entity_id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED, CHANGES_REQUESTED]
+        reason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    ModerationReason:
+      type: object
+      properties:
+        code:
+          type: string
+        description_localized:
+          type: object
+          additionalProperties:
+            type: string
+        applies_to:
+          type: string
+          enum: [LISTING, ANIMAL, ANY]
+        is_active:
+          type: boolean
+    ContentReportCreate:
+      type: object
+      required: [entity_type, entity_id, reason]
+      properties:
+        entity_type:
+          type: string
+          enum: [LISTING, ANIMAL, USER, MESSAGE]
+        entity_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          description: e.g., SPAM, ABUSE, FRAUD, INAPPROPRIATE
+        notes:
+          type: string
+          nullable: true
+    ContentReport:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reporter_id:
+          type: string
+          format: uuid
+          nullable: true
+        entity_type:
+          type: string
+          enum: [LISTING, ANIMAL, USER, MESSAGE]
+        entity_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        notes:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
+        resolved_by:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Caller lacks MODERATOR/ADMIN privileges
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
