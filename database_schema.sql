@@ -550,8 +550,8 @@ CREATE TABLE outbox_events (
     dead_lettered_at TIMESTAMP WITH TIME ZONE                          -- set when attempts are exhausted (parked)
 );
 
-CREATE INDEX idx_outbox_unprocessed ON outbox_events(processed_at) WHERE processed_at IS NULL;
 -- Drives the relay claim: smallest next_attempt_at among deliverable (not done, not parked) rows.
+-- (Supersedes the old idx_outbox_unprocessed, dropped in migration 0014 — see that file.)
 CREATE INDEX idx_outbox_ready ON outbox_events(next_attempt_at)
     WHERE processed_at IS NULL AND dead_lettered_at IS NULL;
 
