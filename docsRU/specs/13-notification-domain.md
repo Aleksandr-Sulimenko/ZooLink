@@ -95,6 +95,26 @@ status: "Утверждено"
 
 ---
 
+## Механика доставки (раунд 5, нормативно)
+
+- **Шаблоны и переменные:** синтаксис Handlebars (`{{var}}`). Засеянный набор (миграция 0010), переменные по событиям:
+  `user_verify_code` → `{code, ttl_min}`; `listing_approved`/`listing_expired` → `{listing_title}`;
+  `listing_rejected`/`listing_changes_requested` → `{listing_title, reason}`; `report_resolved` → `{entity_type, decision}`.
+  Отсутствующая переменная → рендер падает (ловится, логируется), полу-собранное сообщение не отправляется.
+- **Язык:** `users.preferred_language` (миграция 0009, по умолч. `ru`); fallback `ru → en`. (`Accept-Language` для async бессмыслен.)
+- **Транзакционные vs промо:** транзакционные (код подтверждения, результаты модерации, истечение, разбор жалобы)
+  **всегда отправляются**, игнорируя `notification_prefs`. Промо требуют `notification_prefs.promo` И отсутствия строки
+  в `notification_suppressions` (38-ФЗ согласие). Канальные prefs (`email`/`sms`) применяются только к промо.
+- **Идемпотентность:** одно уведомление на (outbox `event_id`, получатель, шаблон) — `notification_logs.idempotency_key`
+  UNIQUE (миграция 0009); at-least-once повторы outbox не дублируют отправку.
+- **Retry/backoff:** `notification_state_machine.md` — макс 3 попытки, 1m/5m/30m; `FAILED` после исчерпания. Один провайдер
+  на канал в MVP (SMS.RU / Unisender); межпровайдерный failover — Фаза 2.
+- **Receipt'ы доставки:** webhook провайдера → `POST /notifications/webhook` (HMAC-проверка заголовка), маппинг через
+  `notification_logs.provider_message_id` (миграция 0009) → `DELIVERED`/`BOUNCED`.
+- **Suppression:** hard-bounce/жалоба/отписка пишут `notification_suppressions(recipient, channel)`; проверяется перед
+  каждой отправкой. Отписка = публичная ссылка с подписанным токеном, ставит `notification_prefs.promo=false` и suppression-строку.
+- **ПДн/retention:** `notification_logs.content`/`recipient` по `data-governance.md` (90 дней / маскирование).
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

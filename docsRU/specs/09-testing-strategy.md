@@ -198,6 +198,28 @@ status: "Approved"
 
 ---
 
+## Тестовые данные, стратегия БД и CI (раунд 5, нормативно)
+
+- **Тестовая БД — только PostgreSQL.** SQLite **непригоден** — схема опирается на PL/pgSQL-триггеры, JSONB,
+  `pg_trgm`, GIN/partial-индексы. Integration/E2E — на **PostgreSQL 16** через Testcontainers (или GH Actions
+  `services: postgres`), каждый тест в транзакции с rollback (или свежая ephemeral-БД на сьют).
+- **Seed / fixtures (нормативно):**
+  - Справочники + `moderation_reasons` + `notification_templates` — из **seed-миграций** (0010); продовые справочники
+    (species/breeds/cities РФ) — отдельная seed-миграция.
+  - Бизнес-сущности — **типизированные фабрики** (`@faker-js` с фиксированным seed для детерминизма): users, animals,
+    listings **во всех состояниях** (DRAFT/PENDING_MODERATION/ACTIVE/EXPIRED/SOLD/DEACTIVATED) и структуры org.
+  - **Генератор больших объёмов** (50k животных / 100k объявлений) для гео/perf-тестов.
+- **Матрица негативных тестов инвариантов (покрыть правила уровня БД):** триггер ACTIVE⇒APPROVED; цикл родословной/
+  само-родитель/пол-вид-DOB родителя; уникальность microchip/tattoo/inn/oauth/phone; один HQ на org; price≥0,
+  quantity≥1, currency ISO-4217, язык nickname; append-only audit_log/moderation_decisions; rate-limits (auth,
+  contact-reveal). Каждое — явный падающий тест-кейс.
+- **Contract testing:** OpenAPI-контракты против реализации (schemathesis или dredd); опц. consumer-driven (Pact) фронт↔бэк.
+- **Покрытие:** backend unit/integration ≥90%; критические E2E (register→verify→animal→listing→moderate→publish→
+  search→contact-reveal) зелёные; enforce через `coverageThreshold` в CI.
+- **CI-гейты (`.github/workflows`):** `ci.yml` (draft-шаблон) = lint + typecheck + проверка `prisma migrate deploy` +
+  unit/integration на PG-service + **security-гейты** (`npm audit`, Trivy, Semgrep SAST, OWASP ZAP baseline на staging).
+  `performance-tests.yml` — **draft** (k6), активируется после появления репо `./backend`; до этого не является рабочим гейтом.
+
 ## Связанные документы
 
 - [Спецификация производительности](performance_specification.md)

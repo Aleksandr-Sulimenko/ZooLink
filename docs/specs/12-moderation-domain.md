@@ -137,6 +137,30 @@ flowchart TD
 
 ---
 
+## Queue operations (round-5, normative)
+
+- **Queue & FIFO:** the queue = listings in `PENDING_MODERATION` ordered by `moderation_enqueued_at ASC` (set on
+  submit), index `idx_listings_modqueue`. Target <2 s / 100 items.
+- **Assignment / lock (no double moderation):** a moderator **claims** an item — `assigned_to`, `locked_at`,
+  `lock_expires_at` (migration 0009). A claim is exclusive for `MOD_LOCK_TTL` (default 15 min, auto-released on
+  expiry). Two moderators (or an AI agent + human) cannot act on the same item; second claim → `409`.
+- **Reason taxonomy:** `moderation_reasons` is seeded (migration 0010): `prohibited_species, incomplete_info,
+  poor_photos, suspected_fraud, price_violation, wrong_category, duplicate, animal_welfare, policy_violation`.
+  A **reason is mandatory** on REJECT and CHANGES_REQUESTED; its `description_localized` feeds the
+  `listing_rejected`/`listing_changes_requested` notification (`reason` variable).
+- **Re-moderation on edit:** editing an ACTIVE listing's **material fields** (title, description, photos, price,
+  species/breed, listing_type) returns it to `PENDING_MODERATION` (`moderation_status='PENDING'`); trivial edits
+  (e.g. toggling a saved flag) do not. Enforced at the service layer.
+- **SLA & escalation:** SLA clock starts at `moderation_enqueued_at`; on timeout the item is **escalated to ADMIN**
+  (event `Moderation.Escalated`) and stays `PENDING_MODERATION` — never auto-approved/rejected.
+- **Animal moderation:** in MVP animals are **not** independently pre-moderated; an animal is reviewed via its
+  listing. `entity_type='ANIMAL'` in `moderation_decisions`/`content_reports` is used only for **report-driven**
+  decisions (e.g. acting on a reported animal), not a standalone animal queue.
+- **Appeals:** **no appeal flow in MVP** — a hard REJECT is terminal (the seller may create a new corrected listing);
+  CHANGES_REQUESTED is the fixable path. (Appeals are Фаза 2; appeal-rate is not an MVP metric.)
+- **Audit:** every decision writes `moderation_decisions` (append-only) **and** an `audit_log` row.
+- **AI moderator (ADR-0006):** an AGENT uses the same claim/lock contract; gated by a feature toggle, off in MVP.
+
 ## Related Documents
 
 - [Glossary](glossary.md)

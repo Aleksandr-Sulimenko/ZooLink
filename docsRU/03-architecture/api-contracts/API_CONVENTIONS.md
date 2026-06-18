@@ -85,5 +85,43 @@ ISO 4217: `{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` 
 - [ ] list-операции используют `page`/`limit` + `PageMeta`
 - [ ] денежные поля в минорных единицах int64 (`price_cents`/`amount_minor`); `currency` ISO-4217 pattern
 - [ ] `429` + заголовки на чувствительных
+- [ ] mutating PATCH поддерживает `If-Match` (§10); небезопасный POST принимает `Idempotency-Key` (§11)
+- [ ] list-операции используют §12 sort/filter; публичные read шлют `ETag`/`Cache-Control` (§13)
+
+## 10. Оптимистичная конкуренция (mutating PATCH)
+Каждый ресурс отдаёт **`ETag`** (weak, из `updated_at`) на GET. `PATCH`/`PUT`, изменяющий существующий ресурс,
+**обязан** слать **`If-Match: <etag>`**:
+- совпало → применить, вернуть новый `ETag`;
+- не совпало → **`412 Precondition Failed`** (`code: STALE_RESOURCE`) — клиент перечитывает и повторяет;
+- нет `If-Match` на mutating PATCH → **`428 Precondition Required`**.
+Предотвращает тихий last-write-wins при параллельном редактировании listing/animal/org. (Эндпоинты переходов —
+moderation decide, payment confirm — сохраняют guard-based `409`.)
+
+## 11. Идемпотентность (небезопасный POST)
+Все неидемпотентные `POST` (создание объявления, фото, favorite, contact-reveal, content-report, payment) принимают
+заголовок **`Idempotency-Key`** (UUID клиента). Сервер хранит `key → (хэш запроса, ответ)` 24 ч: повтор с тем же
+ключом → сохранённый ответ; тот же ключ с другим телом → `422`. Это HTTP-дополнение к UNIQUE-ограничениям БД
+(`favorites`, OPEN-дедуп `content_reports`, `payment_transactions.idempotency_key`).
+
+## 12. Фильтрация и сортировка (списки)
+- **Sort:** `sort=<field>:<asc|desc>` (повторяемый), поля в **snake_case** как у ресурса (`sort=created_at:desc`).
+  camelCase-параметры запрещены (legacy `sortBy/sortOrder` admin заменён).
+- **Filter:** явные query-параметры на документированное поле (`species_id`, `listing_type`, `price_min`, `price_max`);
+  без общего filter-DSL в MVP.
+- Публичные списки/поиск (`GET /listings`, `GET /geo-search`) обязаны иметь дефолтную детерминированную сортировку.
+
+## 13. Кэширование и conditional-read
+Публичные read-эндпоинты (активные объявления, деталь, geo-search, справочники) шлют `ETag` + `Cache-Control` и
+обрабатывают `If-None-Match` → **`304 Not Modified`**. Сжатие gzip/brotli на прокси. Это делает CDN/perf-цели из
+`performance_specification.md` реализуемыми.
+
+## 14. Депрекация
+Устаревшие операции/схемы помечаются `deprecated: true`, сервер шлёт `Deprecation` + `Sunset`. Схемы чата
+(`Conversation`/сообщения) депрекированы в MVP (Фаза 2+, ADR-0005) и должны быть помечены.
+
+## Статус соответствия (раунд 5)
+Сейчас §2–§7 inline применяет только `favorites-api.yaml`; остальные 11 контрактов нужно привести к этому документу
+(глобальный `security` + public opt-out, `x-required-roles`, `Problem`, `PageMeta`, `*_minor`, §10–§14). Это
+механический проход, трекается как pre-implementation задача — `API_CONVENTIONS.md` — единый нормативный источник.
 
 🌐 EN: [docs/03-architecture/api-contracts/API_CONVENTIONS.md](../../../docs/03-architecture/api-contracts/API_CONVENTIONS.md)

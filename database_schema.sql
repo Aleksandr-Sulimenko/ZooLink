@@ -1087,3 +1087,55 @@ ALTER TABLE species ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE breeds  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE cities  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE feature_toggles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- ========== Round-5 operations (moderation queue / identity language / notification delivery; migration 0009) ==========
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_enqueued_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS assigned_to     UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS locked_at       TIMESTAMP WITH TIME ZONE;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS lock_expires_at TIMESTAMP WITH TIME ZONE;
+CREATE INDEX IF NOT EXISTS idx_listings_modqueue ON listings(moderation_enqueued_at) WHERE status = 'PENDING_MODERATION';
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_language CHAR(2) NOT NULL DEFAULT 'ru'
+    REFERENCES supported_languages(code) ON DELETE RESTRICT;
+
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS provider_message_id VARCHAR(255);
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS idempotency_key      VARCHAR(255);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_idempotency ON notification_logs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_provider_msg ON notification_logs(provider_message_id) WHERE provider_message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS notification_suppressions (
+    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    recipient  VARCHAR(255) NOT NULL,
+    channel    VARCHAR(10) NOT NULL CHECK (channel IN ('EMAIL', 'SMS')),
+    reason     VARCHAR(30) NOT NULL CHECK (reason IN ('HARD_BOUNCE', 'UNSUBSCRIBED', 'COMPLAINT')),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (recipient, channel)
+);
+
+-- ========== Round-5 seed: moderation reasons + notification templates (migration 0010) ==========
+INSERT INTO moderation_reasons (code, description_localized, applies_to, is_active) VALUES
+ ('prohibited_species', '{"ru":"Запрещённый к продаже вид","en":"Prohibited species"}',                 'LISTING', TRUE),
+ ('incomplete_info',    '{"ru":"Недостаточно информации","en":"Incomplete information"}',                 'LISTING', TRUE),
+ ('poor_photos',        '{"ru":"Некачественные или чужие фото","en":"Poor-quality or non-original photos"}','LISTING', TRUE),
+ ('suspected_fraud',    '{"ru":"Подозрение на мошенничество","en":"Suspected fraud"}',                    'LISTING', TRUE),
+ ('price_violation',    '{"ru":"Нарушение правил цены","en":"Pricing policy violation"}',                 'LISTING', TRUE),
+ ('wrong_category',     '{"ru":"Неверная категория/рынок","en":"Wrong category/market"}',                 'LISTING', TRUE),
+ ('duplicate',          '{"ru":"Дубликат объявления","en":"Duplicate listing"}',                          'LISTING', TRUE),
+ ('animal_welfare',     '{"ru":"Нарушение благополучия животных","en":"Animal-welfare violation"}',        'LISTING', TRUE),
+ ('policy_violation',   '{"ru":"Иное нарушение правил","en":"Other policy violation"}',                   'LISTING', TRUE)
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO notification_templates (name, type, subject_template, body_template, language, is_active) VALUES
+ ('user_verify_code', 'SMS', NULL, 'ZooLink: код подтверждения {{code}}. Действует {{ttl_min}} мин.', 'ru', TRUE),
+ ('user_verify_code', 'SMS', NULL, 'ZooLink: your verification code is {{code}}. Valid for {{ttl_min}} min.', 'en', TRUE),
+ ('listing_approved', 'EMAIL', 'Ваше объявление одобрено', 'Объявление «{{listing_title}}» одобрено и опубликовано.', 'ru', TRUE),
+ ('listing_approved', 'EMAIL', 'Your listing is approved', 'Your listing "{{listing_title}}" was approved and published.', 'en', TRUE),
+ ('listing_rejected', 'EMAIL', 'Объявление отклонено', 'Объявление «{{listing_title}}» отклонено. Причина: {{reason}}.', 'ru', TRUE),
+ ('listing_rejected', 'EMAIL', 'Your listing was rejected', 'Your listing "{{listing_title}}" was rejected. Reason: {{reason}}.', 'en', TRUE),
+ ('listing_changes_requested', 'EMAIL', 'Требуются изменения', 'По объявлению «{{listing_title}}» нужны правки: {{reason}}.', 'ru', TRUE),
+ ('listing_changes_requested', 'EMAIL', 'Changes requested', 'Your listing "{{listing_title}}" needs changes: {{reason}}.', 'en', TRUE),
+ ('listing_expired', 'EMAIL', 'Срок объявления истёк', 'Объявление «{{listing_title}}» истекло. Продлите его в личном кабинете.', 'ru', TRUE),
+ ('listing_expired', 'EMAIL', 'Your listing expired', 'Your listing "{{listing_title}}" has expired. Renew it in your account.', 'en', TRUE),
+ ('report_resolved', 'EMAIL', 'Ваша жалоба рассмотрена', 'Жалоба на {{entity_type}} рассмотрена. Решение: {{decision}}.', 'ru', TRUE),
+ ('report_resolved', 'EMAIL', 'Your report was reviewed', 'Your report on the {{entity_type}} was reviewed. Decision: {{decision}}.', 'en', TRUE)
+ON CONFLICT (name, type, language) DO NOTHING;

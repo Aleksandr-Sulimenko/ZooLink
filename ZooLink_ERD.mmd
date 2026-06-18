@@ -293,9 +293,19 @@ erDiagram
         TEXT content
         VARCHAR_20 status
         JSONB provider_response
+        VARCHAR_255 provider_message_id
+        VARCHAR_255 idempotency_key UK
         INTEGER attempts
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    notification_suppressions {
+        UUID id PK
+        VARCHAR_255 recipient
+        VARCHAR_10 channel
+        VARCHAR_30 reason
+        TIMESTAMPTZ created_at
+        %% (recipient, channel) UNIQUE — hard-bounce / unsubscribe
     }
 
     %% Favorites & Saved Searches (MVP)

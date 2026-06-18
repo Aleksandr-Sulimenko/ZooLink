@@ -86,3 +86,41 @@ per [ADR-0005](../../04-decisions/0005-no-chat-mvp.md)); mark them `deprecated: 
 - [ ] list ops use `page`/`limit` + `PageMeta`
 - [ ] money fields in minor units int64 (`price_cents`/`amount_minor`); `currency` ISO-4217 pattern
 - [ ] `429` + headers on sensitive ops
+- [ ] mutating PATCH supports `If-Match` (§10); unsafe POST accepts `Idempotency-Key` (§11)
+- [ ] list ops use the §12 `sort`/filter convention; public reads send `ETag`/`Cache-Control` (§13)
+
+## 10. Optimistic concurrency (mutating PATCH)
+Every resource exposes an **`ETag`** (weak, derived from `updated_at`) on GET. A `PATCH`/`PUT` that mutates an
+existing resource **must** send **`If-Match: <etag>`**. The server compares against the current row:
+- match → apply, return new `ETag`;
+- mismatch → **`412 Precondition Failed`** (`code: STALE_RESOURCE`) — the client must re-GET and retry;
+- missing `If-Match` on a mutating PATCH → **`428 Precondition Required`**.
+This prevents silent last-write-wins when two owners/moderators edit the same listing/animal/org concurrently.
+(State-transition endpoints — moderation decide, payment confirm — keep their guard-based `409` instead.)
+
+## 11. Idempotency (unsafe POST)
+All non-idempotent `POST`s (create listing, add photo, favorite, contact-reveal, content-report, payment) accept an
+**`Idempotency-Key`** request header (client-generated UUID). The server stores `key → (request-hash, response)` for
+24 h: a replay with the same key returns the stored response; the same key with a **different** body → `422`. This is
+the HTTP-layer complement to the DB unique constraints (`favorites`, `content_reports` OPEN-dedup, `payment_transactions.idempotency_key`).
+
+## 12. Filtering & sorting (list endpoints)
+- **Sort:** `sort=<field>:<asc|desc>` (repeatable), fields in **snake_case** matching the resource (e.g.
+  `sort=created_at:desc`). No camelCase params (admin's legacy `sortBy/sortOrder`/camelCase is superseded).
+- **Filter:** explicit query params per documented field (e.g. `species_id`, `listing_type`, `price_min`, `price_max`);
+  no generic filter DSL in MVP.
+- Public list/search endpoints (`GET /listings`, `GET /geo-search`) MUST offer a default deterministic sort.
+
+## 13. Caching & conditional reads
+Public read endpoints (active listings, listing detail, geo-search, reference data) send `ETag` + `Cache-Control`
+and honor `If-None-Match` → **`304 Not Modified`**. Responses are gzip/brotli-compressed at the proxy. This is what
+makes the CDN/perf targets in `performance_specification.md` realizable.
+
+## 14. Deprecation
+Deprecated operations/schemas carry `deprecated: true` and the server sends `Deprecation` + `Sunset` headers. The
+chat schemas (`Conversation`/message endpoints) are deprecated in MVP (Фаза 2+, ADR-0005) and must be marked so.
+
+## Conformance status (round-5)
+Only `favorites-api.yaml` currently applies §2–§7 inline; the other 11 contracts must be brought up to this document
+(global `security` + public opt-out, `x-required-roles`, `Problem`, `PageMeta`, `*_minor`, and §10–§14). This is a
+mechanical pass tracked as a pre-implementation task — `API_CONVENTIONS.md` is the single normative source.

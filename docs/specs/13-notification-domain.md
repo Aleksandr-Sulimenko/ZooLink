@@ -96,6 +96,28 @@ This specification addresses the following Non-Functional Requirements:
 
 ---
 
+## Delivery mechanics (round-5, normative)
+
+- **Templates & variables:** Handlebars syntax (`{{var}}`). Seeded set (migration 0010), per-event variables:
+  `user_verify_code` → `{code, ttl_min}`; `listing_approved`/`listing_expired` → `{listing_title}`;
+  `listing_rejected`/`listing_changes_requested` → `{listing_title, reason}`; `report_resolved` → `{entity_type, decision}`.
+  Missing variable → render fails (caught, logged), never sends a half-rendered message.
+- **Language:** uses `users.preferred_language` (migration 0009, default `ru`); fallback `ru → en`. (`Accept-Language`
+  is irrelevant for async sends.)
+- **Transactional vs promotional:** transactional notifications (verify code, moderation results, expiry,
+  report-resolved) are **always sent**, ignoring `notification_prefs`. Promotional sends require `notification_prefs.promo`
+  AND no `notification_suppressions` row (38-ФЗ consent). Channel prefs (`email`/`sms`) apply to promo only.
+- **Idempotency:** one notification per (outbox `event_id`, recipient, template) — `notification_logs.idempotency_key`
+  UNIQUE (migration 0009); at-least-once outbox replays do not double-send.
+- **Retry/backoff:** `notification_state_machine.md` — max 3 attempts, 1m/5m/30m; `FAILED` after exhaustion. Single
+  provider per channel in MVP (SMS.RU / Unisender); cross-provider failover is Фаза 2.
+- **Delivery receipts:** provider webhook → `POST /notifications/webhook` (HMAC-verified header), maps via
+  `notification_logs.provider_message_id` (migration 0009) to set `DELIVERED`/`BOUNCED`.
+- **Suppression:** hard-bounce/complaint/unsubscribe writes `notification_suppressions(recipient, channel)`; checked
+  before every send. Unsubscribe = a signed-token public link that sets `notification_prefs.promo=false` and a
+  suppression row.
+- **PII/retention:** `notification_logs.content`/`recipient` per `data-governance.md` (90-day retention / masking).
+
 ## Related Documents
 
 - [Glossary](glossary.md)
