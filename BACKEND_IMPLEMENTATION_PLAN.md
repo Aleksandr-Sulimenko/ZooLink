@@ -101,6 +101,12 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 - [ ] Ничего из Фазы 2+ не «протекло» в MVP.
 - [ ] Коммит/пуш — только по явной просьбе пользователя.
 
+## ⚠️ Security & Hardening backlog (round-6, 2026-06-18)
+Запущен режим «Исследование-доработка» backend-агента по Фазе 0. Устранены HIGH-CVE в прод-дереве (kysely→0.29, multer→2.2),
+добавлены порог покрытия и политика security-гейта CI, нормативная Kysely-заметка в ADR-0007. **Остаток (should-fix + defer-Phase-2) —
+в [`SECURITY_HARDENING_BACKLOG.md`](SECURITY_HARDENING_BACKLOG.md):** заменить заглушку Kysely `DB` на codegen-типы до гео/JSONB;
+ratchet покрытия ≥90%/домен; дожать прод-moderate CVE; SARIF/пороги для Semgrep/Trivy; гейт `/metrics`; CSP/CORS; audit_log+agent-as-principal при первом домене.
+
 ## Связанное
 [`IMPLEMENTATION_PLAYBOOK.md`](IMPLEMENTATION_PLAYBOOK.md) · [`BACKEND_MVP_BASELINE.md`](BACKEND_MVP_BASELINE.md) ·
 `docs/specs/*` · `docs/03-architecture/api-contracts/API_CONVENTIONS.md` · `database_schema.sql` · `migrations/`

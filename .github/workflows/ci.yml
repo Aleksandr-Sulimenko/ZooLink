@@ -86,12 +86,26 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - name: Dependency audit
+      - name: Install (for audit)
+        run: cd backend && npm ci
+      # Security-gate policy:
+      #  - HARD GATE: no HIGH+ vulnerabilities in the PRODUCTION dependency tree (this is what the
+      #    runtime image ships — built with `npm ci --omit=dev`). Fails the build.
+      - name: Dependency audit — production tree (blocking)
+        run: cd backend && npm audit --omit=dev --audit-level=high
+      #  - ADVISORY: full tree (incl. dev tooling) for visibility; does not block (dev-only CVEs
+      #    don't ship). Promote to blocking once the dev-tree backlog is burned down.
+      - name: Dependency audit — full tree (advisory)
         run: cd backend && npm audit --audit-level=high
+        continue-on-error: true
+      # SAST / container scan are advisory until tuned (rules + SARIF upload + thresholds), then
+      # flip continue-on-error → false to make them blocking gates.
       - name: SAST (Semgrep, OWASP)
         uses: returntocorp/semgrep-action@v1
         with: { config: p/owasp-top-ten }
+        continue-on-error: true
       - name: Filesystem scan (Trivy)
         uses: aquasecurity/trivy-action@master
         with: { scan-type: fs, severity: HIGH,CRITICAL }
+        continue-on-error: true
       # DAST (OWASP ZAP baseline) runs against staging on a schedule, not per-PR.

@@ -82,6 +82,14 @@ Adopt **Option 1**. **Prisma remains the primary ORM** (schema, migrations, CRUD
   query Prisma cannot express efficiently.
 - **Geo:** model `location_point` as `Unsupported("geography")` in Prisma; never queried via Prisma directly.
 - **Safety:** all raw SQL parameterized; add an ESLint/CI check against raw string concatenation in queries.
+- **Kysely injection hardening (round-6, normative).** Kysely `<= 0.28.16` carried HIGH SQL-injection advisories
+  (JSON-path key/`.at()` traversal; `sql.lit` literal injection; injection amplified when compilation errors are
+  silenced or `Kysely<any>` is used — GHSA-pv5w-4p9q-p3v2, GHSA-wmrf-hv6w-mr66, GHSA-8cpq-38p9-67gx). Therefore:
+  (a) **pin Kysely to `>= 0.29`** (the patched line); (b) the Kysely instance MUST be typed with a concrete `DB`
+  schema — **never `Kysely<any>`** (replace the placeholder `DB` interface with codegen types before geo/JSONB
+  queries ship); (c) **never pass untrusted input** to `sql.lit()` or to JSON-path legs (`.key()`/`.at()`) — bind it
+  as a parameter; (d) do not silence Kysely compilation errors. This is the standing mitigation that keeps the
+  ADR-0007 escape hatch safe as geo/JSONB queries land.
 - **Connection pooling:** Prisma's pool in MVP; PgBouncer (transaction mode) in front of PostgreSQL when
   connection counts grow (see `specs/performance_specification.md`).
 
