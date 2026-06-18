@@ -9,8 +9,12 @@ servers:
 paths:
   /auth/register/phone:
     post:
-      summary: Register user via phone/SMS
+      summary: Register user via phone/SMS — sends an OTP (passwordless, OTP-first)
       operationId: registerPhone
+      description: >-
+        (round-4/Phase-2, normative) Creates the account in PENDING_VERIFICATION and sends a
+        6-digit SMS OTP. No tokens are issued here — the session is minted by /auth/verify-phone
+        after the code is confirmed.
       requestBody:
         required: true
         content:
@@ -18,18 +22,18 @@ paths:
             schema:
               $ref: '#/components/schemas/RegisterPhoneRequest'
       responses:
-        '201':
-          description: User registered successfully
+        '202':
+          description: OTP sent; phone verification required
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthResponse'
+                $ref: '#/components/schemas/RegisterPhoneResponse'
         '400':
           description: Bad request (validation error)
         '409':
           description: Conflict (phone already registered)
         '429':
-          description: Too Many Requests (rate limit exceeded)
+          description: Too Many Requests (rate limit / resend cooldown)
   /auth/register/oauth/{provider}:
     post:
       summary: Register/Login user via OAuth provider
@@ -69,8 +73,11 @@ paths:
           description: Too Many Requests (rate limit exceeded)
   /auth/verify-phone:
     post:
-      summary: Verify phone with SMS code
+      summary: Verify phone with SMS code — activates the account and issues a session
       operationId: verifyPhone
+      description: >-
+        (round-4/Phase-2, normative) Validates the OTP, transitions the user to ACTIVE and returns
+        the session (access + refresh) plus the profile. 5 failed attempts → 15-min lockout.
       requestBody:
         required: true
         content:
@@ -79,15 +86,15 @@ paths:
               $ref: '#/components/schemas/VerifyPhoneRequest'
       responses:
         '200':
-          description: Phone verified successfully
+          description: Phone verified; session issued
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VerifyPhoneResponse'
+                $ref: '#/components/schemas/AuthResponse'
         '400':
-          description: Bad request (invalid code or expired)
+          description: Bad request (invalid or expired code)
         '429':
-          description: Too Many Requests (rate limit exceeded)
+          description: Too Many Requests (too many attempts / locked out)
   /auth/refresh:
     post:
       summary: Refresh access token using refresh token
@@ -195,10 +202,12 @@ components:
   schemas:
     RegisterPhoneRequest:
       type: object
+      # (Phase-2/round-7, normative) Aligned with spec 01 round-4: end-user auth is PASSWORDLESS
+      # (phone OTP) — `password` removed (password_hash is operator-only). `cityId` is an INTEGER
+      # lookup (id-type convention: lookups=INT) and optional (set later via PATCH /me).
       required:
         - phone
         - fullName
-        - cityId
       properties:
         phone:
           type: string
@@ -210,13 +219,8 @@ components:
           minLength: 2
           description: User's full name for display
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
-        password:
-          type: string
-          minLength: 8
-          description: Password for phone auth (required if not using OAuth-only)
+          type: integer
+          description: Reference to city (cities.id) for geo-search (optional)
         email:
           type: string
           format: email
@@ -227,12 +231,15 @@ components:
           format: uri
           maxLength: 500
           description: URL to avatar image in object storage (optional)
+        preferredLanguage:
+          type: string
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code); defaults to ru
     OAuthRequest:
       type: object
       required:
         - code
         - fullName
-        - cityId
       properties:
         code:
           type: string
@@ -243,9 +250,8 @@ components:
           minLength: 2
           description: User's full name (can be overridden by provider data)
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
+          type: integer
+          description: Reference to city (cities.id) for geo-search (optional)
         email:
           type: string
           format: email
@@ -270,19 +276,19 @@ components:
           type: string
           pattern: '^\\d{6}$'
           description: 6-digit SMS verification code
-    VerifyPhoneResponse:
+    RegisterPhoneResponse:
       type: object
+      required:
+        - status
+        - expiresInSeconds
       properties:
-        verified:
-          type: boolean
-          description: Whether phone verification was successful
-        userId:
+        status:
           type: string
-          format: uuid
-          description: User ID if phone is registered (null if new registration)
-        needsRegistration:
-          type: boolean
-          description: Whether user needs to complete registration after verification
+          enum: [VERIFICATION_REQUIRED]
+          description: Always VERIFICATION_REQUIRED — confirm via /auth/verify-phone
+        expiresInSeconds:
+          type: integer
+          description: OTP validity window in seconds (e.g. 300)
     RefreshTokenRequest:
       type: object
       required:
@@ -325,11 +331,8 @@ components:
           type: string
           format: uuid
           description: Unique identifier
-        phoneHash:
-          type: string
-          pattern: '^\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$'
-          nullable: true
-          description: Bcrypt hash of phone number (null if OAuth-only)
+        # (Phase-2/round-7, normative) phone_hash is a credential-derived secret and is NEVER
+        # returned in profile responses — removed from this schema.
         oauthGoogleId:
           type: string
           nullable: true
@@ -351,10 +354,9 @@ components:
           maxLength: 100
           description: Display name
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Reference to city (cities.id) for geo-search
         avatarUrl:
           type: string
           format: uri
@@ -373,11 +375,19 @@ components:
           description: True if email confirmed via link
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
-          description: User role defining permissions
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: User role defining permissions (canonical 7-role set, spec 01 round-4)
+        status:
+          type: string
+          enum: [UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED]
+          description: Lifecycle state (single source of truth; isActive is derived)
+        preferredLanguage:
+          type: string
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code)
         isActive:
           type: boolean
-          description: True = can login; False = deactivated
+          description: Derived from status (true unless SUSPENDED/DEACTIVATED)
         createdAt:
           type: string
           format: date-time

@@ -95,7 +95,7 @@ CREATE INDEX idx_organization_users_role ON organization_users(role_in_org);
 -- ========== Identity Domain ==========
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    phone_hash VARCHAR(60), -- bcrypt hash of phone number (nullable if OAuth-only)
+    phone_hash VARCHAR(60), -- deterministic HMAC-SHA256(phone, server_pepper) for unique lookup (spec 01 round-4); NOT bcrypt; nullable if OAuth-only
     oauth_google_id VARCHAR(255),
     oauth_apple_id VARCHAR(255),
     oauth_telegram_id VARCHAR(255),
@@ -105,7 +105,7 @@ CREATE TABLE users (
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
-    password_hash VARCHAR(60), -- bcrypt hash if using phone auth (nullable if OAuth-only)
+    password_hash VARCHAR(60), -- bcrypt; OPERATOR-only (ADMIN/MODERATOR) per spec 01 round-4 — end users are passwordless (phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     -- Principal type: HUMAN or AGENT (ADR-0006). Operator roles (MODERATOR/ADMIN) may be held by an AI agent.
     -- Defaults to HUMAN; agents are inactive until explicitly enabled (feature-flagged).
