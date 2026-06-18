@@ -28,12 +28,21 @@ export const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().min(1).default('15m'),
   JWT_REFRESH_TTL: z.string().min(1).default('7d'),
 
-  // Providers (ADR-0008). Empty in dev → adapters run in stub mode.
+  // Providers (ADR-0008). Empty credential → that adapter runs in stub mode.
   SMS_PROVIDER: z.string().default('smsru'),
   SMSRU_API_ID: z.string().optional().default(''),
+  SMS_FROM: z.string().optional().default(''), // approved SMS.RU sender name (optional)
   EMAIL_PROVIDER: z.string().default('unisender'),
   UNISENDER_API_KEY: z.string().optional().default(''),
+  UNISENDER_LIST_ID: z.string().optional().default(''), // Unisender list for unsubscribe footer
+  EMAIL_FROM: z.string().optional().default(''), // verified sender address
+  EMAIL_FROM_NAME: z.string().optional().default('ZooLink'),
   YANDEX_MAPS_API_KEY: z.string().optional().default(''),
+
+  // Payments — Фаза 2+, gated by feature_toggles.payments (ADR-0008). Interface defined now; stub in MVP.
+  PAYMENT_PROVIDER: z.string().default('yookassa'),
+  YOOKASSA_SHOP_ID: z.string().optional().default(''),
+  YOOKASSA_SECRET_KEY: z.string().optional().default(''),
 
   // Observability.
   SENTRY_DSN: z.string().optional().default(''),
