@@ -24,6 +24,9 @@ export class SmsRuAdapter implements SmsProvider {
   ) {}
 
   async sendSms(msg: SmsMessage): Promise<SmsSendResult> {
+    // SECURITY: SMS.RU authenticates via api_id in the query string (vendor-mandated). The
+    // request URL therefore contains a secret — never log the URL (fetchJson logs only the
+    // response body on failure, and ProviderError carries no URL).
     const params = new URLSearchParams({
       api_id: this.apiId,
       to: msg.to,

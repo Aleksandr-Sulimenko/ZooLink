@@ -13,6 +13,7 @@ import {
   type ProblemDetails,
   type ProblemFieldError,
 } from './problem.types';
+import { ProviderError } from '../providers/provider-error';
 import { Sentry } from '../observability/sentry';
 
 /**
@@ -32,7 +33,9 @@ export class ProblemExceptionFilter implements ExceptionFilter {
     const status =
       exception instanceof HttpException
         ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+        : exception instanceof ProviderError
+          ? HttpStatus.SERVICE_UNAVAILABLE
+          : HttpStatus.INTERNAL_SERVER_ERROR;
 
     const requestId = (res.getHeader('x-request-id') as string | undefined) ?? undefined;
     const problem: ProblemDetails = {
@@ -47,6 +50,13 @@ export class ProblemExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const response = exception.getResponse();
       this.applyHttpExceptionBody(problem, response);
+    } else if (exception instanceof ProviderError) {
+      // External provider failed. Log the (possibly sensitive) detail server-side only and
+      // return a generic 503 UPSTREAM_UNAVAILABLE — never echo the upstream message/body.
+      this.logger.error(
+        `Provider error [${exception.provider}/${exception.kind}] on ${req.method} ${req.originalUrl}: ${exception.message}`,
+      );
+      problem.detail = 'An upstream service is temporarily unavailable. Please retry shortly.';
     } else {
       // Unexpected error: log full detail, report to Sentry, expose nothing.
       this.logger.error(

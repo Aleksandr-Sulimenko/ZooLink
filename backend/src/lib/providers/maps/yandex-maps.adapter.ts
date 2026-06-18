@@ -26,6 +26,7 @@ export class YandexMapsAdapter implements MapsProvider {
   constructor(private readonly apiKey: string) {}
 
   async geocode(query: string): Promise<GeocodeResult | null> {
+    // SECURITY: apikey travels in the query string (vendor-mandated) — never log the request URL.
     const params = new URLSearchParams({
       apikey: this.apiKey,
       geocode: query,

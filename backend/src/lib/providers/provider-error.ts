@@ -1,7 +1,8 @@
 /**
  * Uniform failure type for every external-provider adapter. Domain code catches this
- * instead of vendor-specific shapes, and the global RFC7807 filter maps it to a 502/503
- * `Problem`. `kind` lets callers branch on whether a retry/fallback is sensible.
+ * instead of vendor-specific shapes, and the global RFC7807 filter (ProblemExceptionFilter)
+ * maps it to a 503 `UPSTREAM_UNAVAILABLE` Problem with a generic detail (the real message is
+ * logged server-side only). `kind` lets callers branch on whether a retry/fallback is sensible.
  */
 export type ProviderErrorKind =
   | 'network' // transport/timeout failure — typically retryable
