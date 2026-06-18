@@ -70,7 +70,9 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
   - LOW: снят избыточный `idx_outbox_unprocessed` (миграция 0014); добавлены комментарии-гарды «секрет в URL — не логировать» в SMS.RU/Yandex адаптеры.
 
 ## Фаза 2 — Домены (порядок = MVP happy-path и зависимости)
-1. [ ] **Identity** (`auth-api`, спека 01): регистрация (SMS OTP), OAuth (G/Apple/TG/VK), сессии/recovery, роли, `erase_user`. Уникальность phone_hash(HMAC)/oauth.
+1. [~] **Identity** (`auth-api`, спека 01): регистрация (SMS OTP), OAuth (G/Apple/TG/VK), сессии/recovery, роли, `erase_user`. Уникальность phone_hash(HMAC)/oauth.
+   - [x] **Slice 1 — passwordless phone OTP:** `register/phone` (202, OTP via SmsProvider) + `verify-phone` (200, ACTIVE + session); phone_hash=HMAC-SHA256+pepper (base64url), OTP в Redis (TTL 5м/cooldown 60с/lockout 5×→15м); контракт `auth-api` приведён к round-4 (passwordless, INT cityId, no phoneHash leak, 7 ролей) EN+RU; unit+e2e. Сессии (refresh/logout) — из Фазы 1.
+   - [ ] Slice 2 — OAuth (Google/Apple/Telegram/VK); Slice 3 — профиль `/me` (GET/PATCH/deactivate/reactivate); Slice 4 — recovery + `erase_user` (ФЗ-152); role-elevation (admin-granted).
 2. [ ] **Admin / reference-data** (`admin-api`, спека 06): species/breeds/cities/supported_languages/toggles CRUD (ADMIN), `audit_log` GET, seeding.
 3. [ ] **Animal** (`animals-api`, спека 02): CRUD, иммутабельность, **pedigree-целостность**, JSONB-контракты, soft-delete + каскад на листинги.
 4. [ ] **Media** (спека 17): `POST /uploads` (pre-signed), attach к листингу/аватару, валидация, варианты, **EXIF-strip**, orphan-cleanup (worker).
