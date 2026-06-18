@@ -4,6 +4,9 @@ import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { AppConfigModule } from '../../config/config.module';
 import { AppConfigService } from '../../config/app-config.service';
 import { JwtAuthGuard } from '../../lib/auth/jwt-auth.guard';
+import { RolesGuard } from '../../lib/auth/roles.guard';
+import { PoliciesGuard } from '../../lib/auth/policies.guard';
+import { AbilityFactory } from '../../lib/auth/ability.factory';
 import { TokenService } from './token.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthService } from './auth.service';
@@ -33,8 +36,13 @@ import { AuthController } from './auth.controller';
     TokenService,
     RefreshTokenService,
     AuthService,
+    AbilityFactory,
+    // Global guard chain (registration order = execution order): authenticate, then coarse role
+    // gate, then CASL policy gate. Each is metadata-gated (no decorator → pass).
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PoliciesGuard },
   ],
-  exports: [TokenService, AuthService, RefreshTokenService],
+  exports: [TokenService, AuthService, RefreshTokenService, AbilityFactory],
 })
 export class AuthModule {}

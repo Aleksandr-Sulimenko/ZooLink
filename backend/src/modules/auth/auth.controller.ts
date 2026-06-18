@@ -9,6 +9,8 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../lib/auth/public.decorator';
 import { CurrentUser } from '../../lib/auth/current-user.decorator';
+import { Roles } from '../../lib/auth/roles.decorator';
+import { CheckPolicies } from '../../lib/auth/policies.guard';
 import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principal';
 import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../lib/db/prisma.service';
@@ -43,6 +45,14 @@ export class AuthController {
   @ApiOperation({ summary: 'Return the authenticated principal (verifies the guard end-to-end)' })
   whoami(@CurrentUser() user: AuthPrincipal): AuthPrincipal {
     return user;
+  }
+
+  @Get('operator-check')
+  @Roles('MODERATOR')
+  @CheckPolicies((ability) => ability.can('read', 'ModerationQueue'))
+  @ApiOperation({ summary: '[test] Requires an operator role + policy (verifies AuthZ end-to-end)' })
+  operatorCheck(@CurrentUser() user: AuthPrincipal): { ok: true; role: AuthPrincipal['role'] } {
+    return { ok: true, role: user.role };
   }
 
   /**
