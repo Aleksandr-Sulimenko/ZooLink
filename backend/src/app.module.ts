@@ -10,6 +10,7 @@ import { AuditModule } from './lib/audit/audit.module';
 import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module';
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { IdentityModule } from './modules/identity/identity.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -31,6 +32,7 @@ import { HealthModule } from './health/health.module';
     FeatureToggleModule,
     OutboxModule,
     AuthModule,
+    IdentityModule,
     HealthModule,
   ],
 })

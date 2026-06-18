@@ -28,6 +28,10 @@ export const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().min(1).default('15m'),
   JWT_REFRESH_TTL: z.string().min(1).default('7d'),
 
+  // Identity: server pepper for the deterministic phone_hash = HMAC-SHA256(phone, pepper)
+  // (spec 01 round-4). Must be long/secret; rotating it invalidates phone-based lookups.
+  PHONE_HASH_PEPPER: z.string().min(32),
+
   // Providers (ADR-0008). Empty credential → that adapter runs in stub mode.
   SMS_PROVIDER: z.string().default('smsru'),
   SMSRU_API_ID: z.string().optional().default(''),
