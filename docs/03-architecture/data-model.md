@@ -299,9 +299,9 @@ Used for:
 ### Change History and Audit
 - Soft deletion: `deactivated_at` fields in key tables
 - Animal ownership history: a dedicated `animal_ownership_history` table
-- Outbox events: an `outbox_events` table for reliable integration
-- Timestamps: `created_at` and `updated_at` on all tables via triggers
-- Planned extension: a dedicated audit table for critical operations
+- Outbox events: an `outbox_events` table for reliable integration, with relay delivery state (`attempts`, `last_error`, `next_attempt_at`, `dead_lettered_at`) for at-least-once delivery with exponential backoff and dead-lettering (migration 0012)
+- Timestamps: `created_at` everywhere; `updated_at` maintained by trigger on mutable entity tables (append/log tables such as `outbox_events` and `audit_log` have no `updated_at`)
+- Audit: an append-only `audit_log` table (DB-enforced immutability) for privileged operations
 
 ## Related Decisions
 

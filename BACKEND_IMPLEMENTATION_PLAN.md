@@ -57,12 +57,12 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 - **DoD Фазы 0 ✅:** `docker compose up` → зелёный `/health/ready`; Prisma client типизирован из канон-схемы; CI-гейт активен (drift-check сторожит док↔код); seed идемпотентен. Testcontainers-тесты возможны (Docker установлен).
 
 ## Фаза 1 — Кросс-каттинг / платформа
-- [ ] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
-- [ ] **AuthZ:** `RolesGuard` читает `x-required-roles`; `PoliciesGuard` (CASL) + object-level ownership по `rbac-matrix.md`.
-- [ ] **Провайдеры (порты+адаптеры):** `SmsProvider`(SMS.RU), `EmailProvider`(Unisender), `MapsProvider`(Yandex), `ObjectStorage`(S3/MinIO), `PaymentProvider`(stub, за `feature_toggles.payments`), `Metrics`. Выбор вендора через env.
-- [ ] **Feature-toggle сервис:** чтение `feature_toggles`, **детерминированный rollout** (`hash(key+user_id)%100`), флип только ADMIN + запись в `audit_log`.
-- [ ] **Outbox-инфра:** транзакционный writer в `outbox_events`; relay в worker (poll/`pg_notify`, at-least-once, идемпотентные консьюмеры, backoff, parking); типы событий из `event-catalog.md`.
-- [ ] **Audit-log сервис:** запись привилегированных действий (append-only).
+- [x] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
+- [x] **AuthZ:** `RolesGuard` читает `x-required-roles`; `PoliciesGuard` (CASL) + object-level ownership по `rbac-matrix.md`.
+- [x] **Провайдеры (порты+адаптеры):** `SmsProvider`(SMS.RU), `EmailProvider`(Unisender), `MapsProvider`(Yandex), `ObjectStorage`(S3/MinIO), `PaymentProvider`(stub, за `feature_toggles.payments`), `Metrics`(существующий `MetricsService`). Выбор вендора через env; пустой креденшл → адаптер уходит в stub-режим (комм-каналы), S3 всегда live (env-обязателен), payments всегда stub в MVP. `lib/providers/*` (порты+фабрики `@Global`), собственный SigV4-presigner для S3 (без AWS SDK) — **проверен round-trip PUT/GET на живом MinIO**. Новые env: `SMS_FROM`, `UNISENDER_LIST_ID`/`EMAIL_FROM`/`EMAIL_FROM_NAME`, `PAYMENT_PROVIDER`/`YOOKASSA_*` (синхронно в `env.validation.ts` + `.env.example`).
+- [x] **Feature-toggle сервис:** `FeatureToggleService` (`lib/feature-toggle/`) — read-through кэш (TTL 30с), **детерминированный rollout** (`sha256(key:subject)%100`, монотонный); `flip` только ADMIN, атомарно в транзакции с записью в `audit_log`; partial-rollout не течёт на анонимов. `@Global` модуль.
+- [x] **Outbox-инфра:** `OutboxService.publish(tx, event)` — транзакционный writer (`lib/outbox/`, `@Global`); `OutboxRelay` (worker-only, `OutboxRelayModule`) — polling-relay с **claim-with-lease** (atomic `UPDATE … FOR UPDATE SKIP LOCKED RETURNING`, обработка вне блокировки строки), at-least-once, идемпотентные консьюмеры (`OUTBOX_CONSUMERS`, регистрируются доменами Фазы 2), экспоненциальный **backoff** (10·2ⁿ, cap 1ч) + **parking**/dead-letter после 8 попыток. БД: миграция `0012` (+attempts/last_error/next_attempt_at/dead_lettered_at, `idx_outbox_ready`), **+bugfix**: снят ошибочный `updated_at`-триггер на `outbox_events` (ломал любой UPDATE relay). Claim/lease/process проверены на живом PG.
+- [x] **Audit-log сервис:** `AuditLogService` (`lib/audit/`, `@Global`) — append-only INSERT, опц. tx-клиент для атомарности; ADR-0006 agent-as-principal (actor_id может быть AGENT-юзер). Инвариант append-only + rollout-CHECK проверены на живом PG (UPDATE/DELETE → `audit_log is append-only`; rollout=101 → reject).
 - **DoD Фазы 1:** аутентификация/авторизация работают end-to-end на тест-эндпоинте; outbox-событие доходит до тест-консьюмера идемпотентно; провайдеры мокаются в тестах.
 
 ## Фаза 2 — Домены (порядок = MVP happy-path и зависимости)

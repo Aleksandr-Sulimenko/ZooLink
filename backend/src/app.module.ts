@@ -5,13 +5,18 @@ import { DbModule } from './lib/db/db.module';
 import { RedisModule } from './lib/redis/redis.module';
 import { RateLimitModule } from './lib/rate-limit/rate-limit.module';
 import { MetricsModule } from './lib/metrics/metrics.module';
+import { ProvidersModule } from './lib/providers/providers.module';
+import { AuditModule } from './lib/audit/audit.module';
+import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module';
+import { OutboxModule } from './lib/outbox/outbox.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './health/health.module';
 
 /**
- * Root module. Phase 0 wires the platform foundation only:
- * config, logging, data-access (Prisma+Kysely), Redis, rate limiting, metrics, and health.
- * Auth, outbox, and domain modules arrive in later phases.
+ * Root module. Wires the platform foundation: config, logging, data-access (Prisma+Kysely),
+ * Redis, rate limiting, metrics, external providers (ADR-0008), audit log, feature toggles,
+ * the outbox writer, and health — plus auth. The outbox relay runs in the worker; domain
+ * modules arrive in later phases.
  */
 @Module({
   imports: [
@@ -21,6 +26,10 @@ import { HealthModule } from './health/health.module';
     RedisModule,
     RateLimitModule,
     MetricsModule,
+    ProvidersModule,
+    AuditModule,
+    FeatureToggleModule,
+    OutboxModule,
     AuthModule,
     HealthModule,
   ],

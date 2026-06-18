@@ -456,13 +456,17 @@ model organizations {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model outbox_events {
-  id             String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  aggregate_type String    @db.VarChar(50)
-  aggregate_id   String    @db.Uuid
-  event_type     String    @db.VarChar(100)
-  payload        Json
-  processed_at   DateTime? @db.Timestamptz(6)
-  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  aggregate_type   String    @db.VarChar(50)
+  aggregate_id     String    @db.Uuid
+  event_type       String    @db.VarChar(100)
+  payload          Json
+  processed_at     DateTime? @db.Timestamptz(6)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  attempts         Int       @default(0)
+  last_error       String?
+  next_attempt_at  DateTime  @default(now()) @db.Timestamptz(6)
+  dead_lettered_at DateTime? @db.Timestamptz(6)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

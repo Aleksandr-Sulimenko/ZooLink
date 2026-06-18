@@ -392,6 +392,10 @@ erDiagram
         JSONB payload
         TIMESTAMPTZ processed_at
         TIMESTAMPTZ created_at
+        INTEGER attempts
+        TEXT last_error
+        TIMESTAMPTZ next_attempt_at
+        TIMESTAMPTZ dead_lettered_at
     }
 
     %% Relationships

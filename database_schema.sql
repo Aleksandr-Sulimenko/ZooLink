@@ -541,10 +541,19 @@ CREATE TABLE outbox_events (
     event_type VARCHAR(100) NOT NULL, -- e.g., 'Animal.Created', 'Listing.Updated'
     payload JSONB NOT NULL,
     processed_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- Relay delivery state (Phase-1 outbox relay; migration 0012): claim-with-lease,
+    -- exponential backoff, and dead-lettering after exhausted attempts.
+    attempts         INTEGER NOT NULL DEFAULT 0,                       -- delivery attempts so far
+    last_error       TEXT,                                            -- last failure message (truncated)
+    next_attempt_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- earliest (re)try / lease horizon
+    dead_lettered_at TIMESTAMP WITH TIME ZONE                          -- set when attempts are exhausted (parked)
 );
 
 CREATE INDEX idx_outbox_unprocessed ON outbox_events(processed_at) WHERE processed_at IS NULL;
+-- Drives the relay claim: smallest next_attempt_at among deliverable (not done, not parked) rows.
+CREATE INDEX idx_outbox_ready ON outbox_events(next_attempt_at)
+    WHERE processed_at IS NULL AND dead_lettered_at IS NULL;
 
 -- ========== Triggers for updated_at ==========
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -564,7 +573,10 @@ BEGIN
         WHERE schemaname = 'public'
           AND tablename IN ('users', 'species', 'breeds', 'cities', 'organizations', 'branches', 'organization_users',
                             'animals', 'animal_ownership_history', 'listings', 'conversations',
-                            'messages', 'feature_toggles', 'outbox_events',
+                            'messages', 'feature_toggles',
+                            -- NOTE: outbox_events intentionally excluded — it has no updated_at
+                            -- column (append + processed_at/next_attempt_at lifecycle), and the
+                            -- trigger would raise on every relay UPDATE. Removed in migration 0012.
                             'payment_transactions', 'refunds', 'notification_templates',
                             'notification_logs', 'ownership_transfers',
                             'saved_searches', 'content_reports')
