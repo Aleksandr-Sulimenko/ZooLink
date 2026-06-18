@@ -77,6 +77,20 @@ jobs:
           npm run seed
           npm run seed
 
+      # Integration/e2e against the real PG + Redis services (outbox round-trip; auth/authz over
+      # HTTP). The canonical schema was applied above, so the DB is at its final shape. App boot
+      # requires the full env contract — provide test-only secrets here (NOT real values).
+      - name: E2E / integration tests
+        env:
+          NODE_ENV: test
+          JWT_ACCESS_SECRET: ci_access_secret_0000000000000000000000000000
+          JWT_REFRESH_SECRET: ci_refresh_secret_000000000000000000000000000
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: ci
+          S3_SECRET_KEY: ci-secret
+          S3_BUCKET: zoolink-media
+        run: npm run test:e2e
+
   security:
     runs-on: ubuntu-latest
     steps:
