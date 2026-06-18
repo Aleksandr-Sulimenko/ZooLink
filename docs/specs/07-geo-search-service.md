@@ -132,6 +132,32 @@ This specification addresses the following Non-Functional Requirements:
 
 ---
 
+## Algorithm, result contract & edge cases (round-4, normative)
+
+**Haversine + bounding-box (MVP):** Earth radius `R = 6_371_000 m`.
+- **Bbox prefilter** (uses the B-tree on lat/lng): `Δlat = radius_m / 111_320`;
+  `Δlng = radius_m / (111_320 * cos(radians(lat)))`; filter `lat BETWEEN lat0-Δlat AND lat0+Δlat` and same for lng.
+- **Exact distance:** `d = 2*R*asin(sqrt( sin²((lat-lat0)/2) + cos(lat0)cos(lat) sin²((lng-lng0)/2) ))`, keep `d ≤ radius_m`.
+- **Boundary:** comparison is `≤` with a `±100 m` tolerance (NFR), so "exactly at radius" is INCLUDED despite float error.
+
+**Result contract:** `ORDER BY distance_m ASC, created_at DESC, id ASC`; `distance_m` is returned (rounded); pagination
+`page`/`limit` (default 20, max 100); `total` = COUNT within radius. Always combined with `status='ACTIVE'` and the
+animal's `market` filter.
+
+**Edge cases (normative):**
+- **Antimeridian (±180° lng):** when the bbox crosses ±180 (relevant for RF: Chukotka/Kamchatka), split into two lng
+  ranges (`lng ≥ min` OR `lng ≤ max`).
+- **Near-pole:** clamp `Δlng` (cos→0) to 180° to avoid blow-up.
+- **Missing coordinates:** listings without `lat/lng` are excluded from geo results (no city-centroid fallback in MVP).
+- **Radius:** must be `1_000 ≤ radius_m ≤ 100_000`; values outside are rejected (validation).
+- `listings.search_radius_m` is **not** a geo-search filter — it is reserved for "looking within X" matching use; the
+  query radius is the authoritative one for geo-search.
+
+**Combined search & saved searches:** geo + Russian FTS (`to_tsvector('russian', …)`) + trigram fuzzy + attribute
+filters (species/breed/price/type) compose into one query (bbox + bitmap-AND of GIN indexes). `saved_searches.filters`
+JSONB schema = the geo-search query params: `{ q?: str, species_id?: int, breed_id?: int, listing_type?: str,
+price_min?: int, price_max?: int }` plus stored `lat/lng/radius_m`; re-execution maps these to `/geo-search` params.
+
 ## Related Documents
 
 - [Glossary](glossary.md)

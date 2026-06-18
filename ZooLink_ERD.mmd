@@ -338,6 +338,33 @@ erDiagram
         %% ADR-0005: MVP "contact the seller" (no chat); audit + rate-limit source
     }
 
+    %% Identity sessions & audit (round-4 integrity)
+    refresh_tokens {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_255 token_hash UK
+        UUID family_id
+        VARCHAR_120 device_label
+        TIMESTAMPTZ issued_at
+        TIMESTAMPTZ expires_at
+        UUID rotated_from
+        TIMESTAMPTZ revoked_at
+    }
+    audit_log {
+        UUID id PK
+        UUID actor_id FK
+        VARCHAR_20 actor_role
+        VARCHAR_100 action
+        VARCHAR_40 entity_type
+        UUID entity_id
+        JSONB before_data
+        JSONB after_data
+        INET ip_address
+        TEXT user_agent
+        TIMESTAMPTZ created_at
+        %% append-only
+    }
+
     %% Extensibility / System Tables
     feature_toggles {
         VARCHAR_100 key PK
@@ -385,6 +412,8 @@ erDiagram
     users ||..o{ content_reports : "files report"
     users ||..o{ contact_reveals : "reveals/owns"
     listings ||..o{ contact_reveals : "contact revealed for"
+    users ||..o{ refresh_tokens : "has sessions"
+    users ||..o{ audit_log : "acted (nullable)"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"

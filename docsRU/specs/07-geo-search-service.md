@@ -134,6 +134,29 @@ status: "Approved"
 
 ---
 
+## Алгоритм, контракт результата и edge-cases (раунд 4, нормативно)
+
+**Haversine + bounding-box (MVP):** радиус Земли `R = 6_371_000 м`.
+- **Bbox-предфильтр** (использует B-tree по lat/lng): `Δlat = radius_m / 111_320`;
+  `Δlng = radius_m / (111_320 * cos(radians(lat)))`; фильтр `lat BETWEEN lat0-Δlat AND lat0+Δlat`, аналогично lng.
+- **Точное расстояние:** `d = 2*R*asin(sqrt( sin²((lat-lat0)/2) + cos(lat0)cos(lat) sin²((lng-lng0)/2) ))`, `d ≤ radius_m`.
+- **Граница:** сравнение `≤` с допуском `±100 м` (NFR), поэтому «ровно на радиусе» — ВКЛЮЧАЕТСЯ, несмотря на float-погрешность.
+
+**Контракт результата:** `ORDER BY distance_m ASC, created_at DESC, id ASC`; `distance_m` возвращается (округлённо);
+пагинация `page`/`limit` (default 20, max 100); `total` = COUNT в радиусе. Всегда с `status='ACTIVE'` и фильтром по `market` животного.
+
+**Edge-cases (нормативно):**
+- **Антимеридиан (±180° lng):** при пересечении bbox ±180 (актуально для РФ: Чукотка/Камчатка) — разбить на два диапазона lng (`lng ≥ min` OR `lng ≤ max`).
+- **Приполюсные:** клампить `Δlng` (cos→0) до 180°.
+- **Нет координат:** объявления без `lat/lng` исключаются из гео-результатов (без fallback на центр города в MVP).
+- **Радиус:** `1_000 ≤ radius_m ≤ 100_000`; вне — отклоняется.
+- `listings.search_radius_m` — **не** фильтр гео-поиска (зарезервирован под «ищу в радиусе X» для matching); авторитетен радиус запроса.
+
+**Combined search и saved searches:** гео + русский FTS (`to_tsvector('russian', …)`) + триграммы + атрибуты
+(species/breed/price/type) — один запрос (bbox + bitmap-AND GIN-индексов). Схема `saved_searches.filters` =
+параметры гео-запроса: `{ q?, species_id?, breed_id?, listing_type?, price_min?, price_max? }` + хранимые `lat/lng/radius_m`;
+переисполнение маппит их в параметры `/geo-search`.
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)
