@@ -5,6 +5,7 @@ import { DbModule } from './lib/db/db.module';
 import { RedisModule } from './lib/redis/redis.module';
 import { RateLimitModule } from './lib/rate-limit/rate-limit.module';
 import { MetricsModule } from './lib/metrics/metrics.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -20,6 +21,7 @@ import { HealthModule } from './health/health.module';
     RedisModule,
     RateLimitModule,
     MetricsModule,
+    AuthModule,
     HealthModule,
   ],
 })

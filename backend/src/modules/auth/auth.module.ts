@@ -1,0 +1,40 @@
+import { Global, Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
+import { AppConfigModule } from '../../config/config.module';
+import { AppConfigService } from '../../config/app-config.service';
+import { JwtAuthGuard } from '../../lib/auth/jwt-auth.guard';
+import { TokenService } from './token.service';
+import { RefreshTokenService } from './refresh-token.service';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+
+/**
+ * Auth-core (Phase 1): access-JWT signing/verification, DB-backed refresh-token rotation, and a
+ * GLOBAL JwtAuthGuard (opt out with @Public()). Identity (Phase 2) builds login/OTP/OAuth on top
+ * and calls AuthService.issueSession. Global so the guard and token services are app-wide.
+ */
+@Global()
+@Module({
+  imports: [
+    JwtModule.registerAsync({
+      imports: [AppConfigModule],
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService) => ({
+        secret: config.get('JWT_ACCESS_SECRET'),
+        signOptions: {
+          expiresIn: config.get('JWT_ACCESS_TTL') as JwtSignOptions['expiresIn'],
+        },
+      }),
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [
+    TokenService,
+    RefreshTokenService,
+    AuthService,
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+  ],
+  exports: [TokenService, AuthService, RefreshTokenService],
+})
+export class AuthModule {}

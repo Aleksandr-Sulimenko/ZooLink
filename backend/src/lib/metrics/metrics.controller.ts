@@ -1,8 +1,10 @@
 import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { Public } from '../auth/public.decorator';
 import { MetricsService } from './metrics.service';
 
+@Public()
 @ApiExcludeController()
 @SkipThrottle()
 @Controller({ path: 'metrics', version: VERSION_NEUTRAL })
