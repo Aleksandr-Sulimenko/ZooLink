@@ -10,6 +10,10 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on: [api]
+    # Caddyfile uses {$PUBLIC_DOMAIN} as the site address; without it the block is parsed as a
+    # global-options block and Caddy refuses to start. Pass it through from .env.
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
     ports:
       - "80:80"
       - "443:443"
@@ -28,7 +32,9 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      minio: { condition: service_healthy }
+      # MinIO is not required for API readiness (health = PG + Redis). Gate on start only so a
+      # storage health blip never blocks the API; media domain revisits MinIO health in Phase 2.
+      minio: { condition: service_started }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -43,6 +49,10 @@ services:
     command: ["node", "dist/worker.js"]   # outbox drain, cron, async jobs
     restart: unless-stopped
     env_file: .env
+    # The worker shares the API image (whose HEALTHCHECK probes HTTP /health/live) but runs no HTTP
+    # server, so the inherited check would always fail. Disable it; liveness = process running.
+    healthcheck:
+      disable: true
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

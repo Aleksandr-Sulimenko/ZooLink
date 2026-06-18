@@ -1,0 +1,644 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model animal_ownership_history {
+  id              String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id       String    @db.Uuid
+  owner_id        String    @db.Uuid
+  start_date      DateTime  @db.Date
+  end_date        DateTime? @db.Date
+  transfer_reason String?
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  animals         animals   @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  users           users     @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+
+  @@index([animal_id], map: "idx_aoh_animal")
+  @@index([start_date, end_date], map: "idx_aoh_dates")
+  @@index([owner_id], map: "idx_aoh_owner")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model animals {
+  id                                         String                     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  owner_id                                   String?                    @db.Uuid
+  organization_id                            String?                    @db.Uuid
+  species_id                                 Int
+  breed_id                                   Int?
+  breed_text_localized                       Json?
+  nickname_localized                         Json
+  sex                                        String                     @db.VarChar(10)
+  date_of_birth                              DateTime                   @db.Date
+  color_coat                                 String?                    @db.VarChar(100)
+  microchip_id                               String?                    @db.VarChar(50)
+  tattoo_brand_id                            String?                    @db.VarChar(50)
+  description_localized                      Json                       @default("{\"en\": \"\", \"ru\": \"\"}")
+  is_active                                  Boolean                    @default(true)
+  health_records                             Json                       @default("[]")
+  reproductive_data                          Json                       @default("[]")
+  owned_since                                DateTime?                  @db.Date
+  mother_id                                  String?                    @db.Uuid
+  father_id                                  String?                    @db.Uuid
+  pedigree_id                                String?                    @db.VarChar(100)
+  health_test_results                        Json                       @default("[]")
+  show_titles                                Json                       @default("[]")
+  is_visible_in_breeding_search              Boolean                    @default(true)
+  created_at                                 DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                 DateTime                   @default(now()) @db.Timestamptz(6)
+  deactivated_at                             DateTime?                  @db.Timestamptz(6)
+  reproductive_status                        String                     @default("UNKNOWN") @db.VarChar(20)
+  animal_ownership_history                   animal_ownership_history[]
+  breeds_animals_breed_idTobreeds            breeds?                    @relation("animals_breed_idTobreeds", fields: [breed_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  animals_animals_father_idToanimals         animals?                   @relation("animals_father_idToanimals", fields: [father_id], references: [id], onUpdate: NoAction)
+  other_animals_animals_father_idToanimals   animals[]                  @relation("animals_father_idToanimals")
+  animals_animals_mother_idToanimals         animals?                   @relation("animals_mother_idToanimals", fields: [mother_id], references: [id], onUpdate: NoAction)
+  other_animals_animals_mother_idToanimals   animals[]                  @relation("animals_mother_idToanimals")
+  organizations                              organizations?             @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users                                      users?                     @relation(fields: [owner_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  species                                    species                    @relation(fields: [species_id], references: [id], onUpdate: NoAction)
+  breeds_animals_breed_id_species_idTobreeds breeds?                    @relation("animals_breed_id_species_idTobreeds", fields: [breed_id, species_id], references: [id, species_id], onUpdate: NoAction, map: "fk_animals_breed_species")
+  digital_assets                             digital_assets[]
+  listings                                   listings[]
+  ownership_transfers                        ownership_transfers[]
+
+  @@index([breed_text_localized], map: "idx_animals_breed_text")
+  @@index([health_records], map: "idx_animals_health_records", type: Gin)
+  @@index([owned_since], map: "idx_animals_owned_since")
+  @@index([owner_id], map: "idx_animals_owner")
+  @@index([reproductive_data], map: "idx_animals_reproductive_data", type: Gin)
+  @@index([species_id, breed_id], map: "idx_animals_species_breed")
+}
+
+model audit_log {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  actor_id    String?  @db.Uuid
+  actor_role  String?  @db.VarChar(20)
+  action      String   @db.VarChar(100)
+  entity_type String?  @db.VarChar(40)
+  entity_id   String?  @db.Uuid
+  before_data Json?
+  after_data  Json?
+  ip_address  String?  @db.Inet
+  user_agent  String?
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  users       users?   @relation(fields: [actor_id], references: [id], onUpdate: NoAction)
+
+  @@index([actor_id, created_at], map: "idx_audit_log_actor")
+  @@index([entity_type, entity_id], map: "idx_audit_log_entity")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model branches {
+  id                    String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  organization_id       String        @db.Uuid
+  city_id               Int
+  address               String?
+  phone                 String?       @db.VarChar(30)
+  email                 String?       @db.VarChar(255)
+  name_localized        Json          @default("{\"en\": \"\", \"ru\": \"\"}")
+  description_localized Json          @default("{\"en\": \"\", \"ru\": \"\"}")
+  is_headquarters       Boolean       @default(false)
+  is_active             Boolean       @default(true)
+  created_at            DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime      @default(now()) @db.Timestamptz(6)
+  cities                cities        @relation(fields: [city_id], references: [id], onUpdate: NoAction)
+  organizations         organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  listings              listings[]
+
+  @@index([city_id], map: "idx_branches_city")
+  @@index([organization_id], map: "idx_branches_organization")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model breeds {
+  id                                          Int       @id @default(autoincrement())
+  species_id                                  Int
+  code                                        String    @db.VarChar(50)
+  name_ru                                     String    @db.VarChar(100)
+  name_en                                     String    @db.VarChar(100)
+  created_at                                  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                                  DateTime  @default(now()) @db.Timestamptz(6)
+  is_active                                   Boolean   @default(true)
+  animals_animals_breed_idTobreeds            animals[] @relation("animals_breed_idTobreeds")
+  animals_animals_breed_id_species_idTobreeds animals[] @relation("animals_breed_id_species_idTobreeds")
+  species                                     species   @relation(fields: [species_id], references: [id], onUpdate: NoAction)
+
+  @@unique([species_id, code])
+  @@unique([id, species_id], map: "uq_breeds_id_species")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model cities {
+  id         Int        @id @default(autoincrement())
+  name_ru    String     @db.VarChar(100)
+  name_en    String     @db.VarChar(100)
+  created_at DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at DateTime   @default(now()) @db.Timestamptz(6)
+  is_active  Boolean    @default(true)
+  branches   branches[]
+  users      users[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model contact_reveals {
+  id                                     String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  listing_id                             String   @db.Uuid
+  viewer_id                              String   @db.Uuid
+  seller_id                              String   @db.Uuid
+  created_at                             DateTime @default(now()) @db.Timestamptz(6)
+  listings                               listings @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_contact_reveals_seller_idTousers users    @relation("contact_reveals_seller_idTousers", fields: [seller_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_contact_reveals_viewer_idTousers users    @relation("contact_reveals_viewer_idTousers", fields: [viewer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([listing_id], map: "idx_contact_reveals_listing")
+  @@index([viewer_id, created_at], map: "idx_contact_reveals_viewer_time")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model content_reports {
+  id                                       String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  reporter_id                              String?  @db.Uuid
+  entity_type                              String   @db.VarChar(20)
+  entity_id                                String   @db.Uuid
+  reason                                   String   @db.VarChar(50)
+  notes                                    String?
+  status                                   String   @default("OPEN") @db.VarChar(20)
+  resolved_by                              String?  @db.Uuid
+  created_at                               DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                               DateTime @default(now()) @db.Timestamptz(6)
+  users_content_reports_reporter_idTousers users?   @relation("content_reports_reporter_idTousers", fields: [reporter_id], references: [id], onUpdate: NoAction)
+  users_content_reports_resolved_byTousers users?   @relation("content_reports_resolved_byTousers", fields: [resolved_by], references: [id], onUpdate: NoAction)
+
+  @@index([entity_type, entity_id], map: "idx_content_reports_entity")
+  @@index([status], map: "idx_content_reports_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model conversations {
+  id                                          String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  listing_id                                  String     @db.Uuid
+  participant_a_id                            String     @db.Uuid
+  participant_b_id                            String     @db.Uuid
+  created_at                                  DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at                                  DateTime   @default(now()) @db.Timestamptz(6)
+  listings                                    listings   @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_conversations_participant_a_idTousers users      @relation("conversations_participant_a_idTousers", fields: [participant_a_id], references: [id], onUpdate: NoAction)
+  users_conversations_participant_b_idTousers users      @relation("conversations_participant_b_idTousers", fields: [participant_b_id], references: [id], onUpdate: NoAction)
+  messages                                    messages[]
+
+  @@index([listing_id], map: "idx_conversations_listing")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model digital_assets {
+  id               String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id        String?  @db.Uuid
+  asset_type       String   @db.VarChar(30)
+  chain            String   @default("TON") @db.VarChar(20)
+  contract_address String?  @db.VarChar(120)
+  token_id         String?  @db.VarChar(120)
+  ipfs_cid         String?  @db.VarChar(120)
+  metadata_uri     String?
+  tx_hash          String?  @db.VarChar(120)
+  mint_status      String   @default("NONE") @db.VarChar(20)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+  animals          animals? @relation(fields: [animal_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([animal_id], map: "idx_digital_assets_animal")
+}
+
+model favorites {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id    String   @db.Uuid
+  listing_id String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, listing_id], map: "uq_favorite_user_listing")
+  @@index([listing_id], map: "idx_favorites_listing")
+  @@index([user_id], map: "idx_favorites_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model feature_toggles {
+  key                String   @id @db.VarChar(100)
+  description        String?
+  is_enabled         Boolean  @default(false)
+  rollout_percentage Int?     @default(0)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_by         String?  @db.Uuid
+  users              users?   @relation(fields: [updated_by], references: [id], onUpdate: NoAction)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model listing_photos {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  listing_id  String   @db.Uuid
+  url         String
+  order_index Int      @default(0)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  listings    listings @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([listing_id], map: "idx_listing_photos_listing")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model listings {
+  id                                String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id                         String                @db.Uuid
+  seller_id                         String                @db.Uuid
+  organization_id                   String?               @db.Uuid
+  branch_id                         String?               @db.Uuid
+  metadata                          Json?                 @default("{}")
+  listing_type                      String                @db.VarChar(20)
+  title_localized                   Json                  @default("{\"en\": \"\", \"ru\": \"\"}")
+  description_localized             Json                  @default("{\"en\": \"\", \"ru\": \"\"}")
+  price_cents                       BigInt?
+  currency                          String?               @default("RUB") @db.Char(3)
+  quantity                          Int?                  @default(1)
+  status                            String                @default("DRAFT") @db.VarChar(20)
+  moderation_status                 String                @default("PENDING") @db.VarChar(20)
+  published_at                      DateTime?             @db.Timestamptz(6)
+  sold_at                           DateTime?             @db.Timestamptz(6)
+  transaction_id                    String?               @db.Uuid
+  lat                               Float?
+  lng                               Float?
+  search_radius_m                   Int?
+  is_active                         Boolean               @default(true)
+  expires_at                        DateTime?             @db.Timestamptz(6)
+  created_at                        DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at                        DateTime              @default(now()) @db.Timestamptz(6)
+  moderation_enqueued_at            DateTime?             @db.Timestamptz(6)
+  assigned_to                       String?               @db.Uuid
+  locked_at                         DateTime?             @db.Timestamptz(6)
+  lock_expires_at                   DateTime?             @db.Timestamptz(6)
+  contact_reveals                   contact_reveals[]
+  conversations                     conversations[]
+  favorites                         favorites[]
+  listing_photos                    listing_photos[]
+  payment_transactions              payment_transactions? @relation(fields: [transaction_id], references: [id], onUpdate: NoAction, map: "fk_listings_transaction")
+  animals                           animals               @relation(fields: [animal_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_listings_assigned_toTousers users?                @relation("listings_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction)
+  branches                          branches?             @relation(fields: [branch_id], references: [id], onUpdate: NoAction)
+  organizations                     organizations?        @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_listings_seller_idTousers   users                 @relation("listings_seller_idTousers", fields: [seller_id], references: [id], onUpdate: NoAction)
+
+  @@index([animal_id], map: "idx_listings_animal")
+  @@index([moderation_status], map: "idx_listings_moderation_status")
+  @@index([seller_id], map: "idx_listings_seller")
+  @@index([status], map: "idx_listings_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model messages {
+  id                                 String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  conversation_id                    String?        @db.Uuid
+  sender_id                          String         @db.Uuid
+  recipient_id                       String         @db.Uuid
+  body                               String
+  sent_at                            DateTime       @default(now()) @db.Timestamptz(6)
+  read_at                            DateTime?      @db.Timestamptz(6)
+  created_at                         DateTime       @default(now()) @db.Timestamptz(6)
+  conversations                      conversations? @relation(fields: [conversation_id], references: [id], onUpdate: NoAction)
+  users_messages_recipient_idTousers users          @relation("messages_recipient_idTousers", fields: [recipient_id], references: [id], onUpdate: NoAction)
+  users_messages_sender_idTousers    users          @relation("messages_sender_idTousers", fields: [sender_id], references: [id], onUpdate: NoAction)
+
+  @@index([conversation_id], map: "idx_messages_conversation")
+  @@index([conversation_id, sent_at], map: "idx_messages_conversation_sent")
+  @@index([recipient_id], map: "idx_messages_recipient")
+  @@index([sender_id], map: "idx_messages_sender")
+  @@index([sent_at], map: "idx_messages_sent_at")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model moderation_decisions {
+  id                 String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  moderator_id       String              @db.Uuid
+  entity_type        String              @db.VarChar(20)
+  entity_id          String              @db.Uuid
+  decision           String              @db.VarChar(20)
+  reason             String?             @db.VarChar(50)
+  notes              String?
+  created_at         DateTime            @default(now()) @db.Timestamptz(6)
+  users              users               @relation(fields: [moderator_id], references: [id], onUpdate: NoAction)
+  moderation_reasons moderation_reasons? @relation(fields: [reason], references: [code], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([entity_type, entity_id], map: "idx_moddec_entity")
+  @@index([moderator_id, created_at], map: "idx_moddec_moderator")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model moderation_reasons {
+  code                  String                 @id @db.VarChar(50)
+  description_localized Json                   @default("{\"en\": \"\", \"ru\": \"\"}")
+  applies_to            String                 @default("ANY") @db.VarChar(20)
+  is_active             Boolean                @default(true)
+  created_at            DateTime               @default(now()) @db.Timestamptz(6)
+  moderation_decisions  moderation_decisions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model notification_logs {
+  id                     String                  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id                String?                 @db.Uuid
+  type                   String                  @db.VarChar(10)
+  template_id            String?                 @db.Uuid
+  recipient              String                  @db.VarChar(255)
+  content                String?
+  status                 String                  @default("SENT") @db.VarChar(20)
+  provider_response      Json?
+  attempts               Int                     @default(0)
+  created_at             DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                @default(now()) @db.Timestamptz(6)
+  provider_message_id    String?                 @db.VarChar(255)
+  idempotency_key        String?                 @db.VarChar(255)
+  notification_templates notification_templates? @relation(fields: [template_id], references: [id], onUpdate: NoAction)
+  users                  users?                  @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+
+  @@index([status], map: "idx_notiflog_status")
+  @@index([user_id], map: "idx_notiflog_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model notification_suppressions {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  recipient  String   @db.VarChar(255)
+  channel    String   @db.VarChar(10)
+  reason     String   @db.VarChar(30)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([recipient, channel])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model notification_templates {
+  id                  String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name                String              @db.VarChar(100)
+  type                String              @db.VarChar(10)
+  subject_template    String?
+  body_template       String
+  language            String              @db.Char(2)
+  is_active           Boolean             @default(true)
+  created_at          DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime            @default(now()) @db.Timestamptz(6)
+  notification_logs   notification_logs[]
+  supported_languages supported_languages @relation(fields: [language], references: [code], onUpdate: NoAction, map: "fk_notification_templates_language")
+
+  @@unique([name, type, language])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model organization_users {
+  id                                                 String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  organization_id                                    String        @db.Uuid
+  user_id                                            String        @db.Uuid
+  role_in_org                                        String        @db.VarChar(20)
+  is_primary                                         Boolean       @default(false)
+  joined_at                                          DateTime?     @db.Date
+  created_at                                         DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                                         DateTime      @default(now()) @db.Timestamptz(6)
+  status                                             String        @default("ACTIVE") @db.VarChar(20)
+  invitation_token                                   String?       @db.VarChar(100)
+  invitation_expires_at                              DateTime?     @db.Timestamptz(6)
+  invited_by_user_id                                 String?       @db.Uuid
+  users_organization_users_user_idTousers            users         @relation("organization_users_user_idTousers", fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_organization_users_user")
+  users_organization_users_invited_by_user_idTousers users?        @relation("organization_users_invited_by_user_idTousers", fields: [invited_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                      organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+
+  @@unique([organization_id, user_id], map: "uq_organization_user")
+  @@index([organization_id], map: "idx_organization_users_org")
+  @@index([role_in_org], map: "idx_organization_users_role")
+  @@index([user_id], map: "idx_organization_users_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model organizations {
+  id                    String               @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  inn                   String?              @db.VarChar(20)
+  kpp                   String?              @db.VarChar(20)
+  address               String?
+  phone                 String?              @db.VarChar(30)
+  email                 String?              @db.VarChar(255)
+  logo_url              String?
+  name_localized        Json                 @default("{\"en\": \"\", \"ru\": \"\"}")
+  description_localized Json                 @default("{\"en\": \"\", \"ru\": \"\"}")
+  metadata              Json?                @default("{}")
+  is_active             Boolean              @default(true)
+  created_at            DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime             @default(now()) @db.Timestamptz(6)
+  status                String               @default("PENDING_VERIFICATION") @db.VarChar(25)
+  verified_at           DateTime?            @db.Timestamptz(6)
+  suspended_at          DateTime?            @db.Timestamptz(6)
+  archived_at           DateTime?            @db.Timestamptz(6)
+  animals               animals[]
+  branches              branches[]
+  listings              listings[]
+  organization_users    organization_users[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model outbox_events {
+  id             String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  aggregate_type String    @db.VarChar(50)
+  aggregate_id   String    @db.Uuid
+  event_type     String    @db.VarChar(100)
+  payload        Json
+  processed_at   DateTime? @db.Timestamptz(6)
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ownership_transfers {
+  id                                            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id                                     String    @db.Uuid
+  from_user_id                                  String?   @db.Uuid
+  to_user_id                                    String?   @db.Uuid
+  status                                        String    @default("PENDING") @db.VarChar(20)
+  from_confirmed                                Boolean   @default(false)
+  to_confirmed                                  Boolean   @default(false)
+  payment_confirmed                             Boolean   @default(false)
+  failure_reason                                String?
+  expires_at                                    DateTime? @db.Timestamptz(6)
+  created_at                                    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime  @default(now()) @db.Timestamptz(6)
+  animals                                       animals   @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  users_ownership_transfers_from_user_idTousers users?    @relation("ownership_transfers_from_user_idTousers", fields: [from_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_to_user_idTousers   users?    @relation("ownership_transfers_to_user_idTousers", fields: [to_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([animal_id], map: "idx_owntransfer_animal")
+  @@index([status], map: "idx_owntransfer_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model payment_transactions {
+  id                     String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id                String     @db.Uuid
+  gateway_transaction_id String?    @db.VarChar(255)
+  amount_minor           BigInt
+  currency               String     @default("RUB") @db.Char(3)
+  status                 String     @default("PENDING") @db.VarChar(20)
+  purpose_type           String     @db.VarChar(40)
+  purpose_id             String?    @db.Uuid
+  idempotency_key        String?    @unique @db.VarChar(255)
+  created_at             DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime   @default(now()) @db.Timestamptz(6)
+  listings               listings[]
+  users                  users      @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+  refunds                refunds[]
+
+  @@index([purpose_type, purpose_id], map: "idx_paytx_purpose")
+  @@index([status], map: "idx_paytx_status")
+  @@index([user_id], map: "idx_paytx_user")
+}
+
+model refresh_tokens {
+  id           String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id      String    @db.Uuid
+  token_hash   String    @unique @db.VarChar(255)
+  family_id    String    @db.Uuid
+  device_label String?   @db.VarChar(120)
+  issued_at    DateTime  @default(now()) @db.Timestamptz(6)
+  expires_at   DateTime  @db.Timestamptz(6)
+  rotated_from String?   @db.Uuid
+  revoked_at   DateTime? @db.Timestamptz(6)
+  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([family_id], map: "idx_refresh_tokens_family")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model refunds {
+  id                     String               @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  payment_transaction_id String               @db.Uuid
+  gateway_refund_id      String?              @db.VarChar(255)
+  amount_minor           BigInt
+  reason                 String?
+  status                 String               @default("PENDING") @db.VarChar(20)
+  created_at             DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime             @default(now()) @db.Timestamptz(6)
+  payment_transactions   payment_transactions @relation(fields: [payment_transaction_id], references: [id], onUpdate: NoAction)
+
+  @@index([payment_transaction_id], map: "idx_refunds_paytx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model saved_searches {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id    String   @db.Uuid
+  name       String?  @db.VarChar(100)
+  filters    Json     @default("{}")
+  lat        Float?
+  lng        Float?
+  radius_m   Int?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_saved_searches_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model species {
+  id         Int       @id @default(autoincrement())
+  code       String    @unique @db.VarChar(50)
+  name_ru    String    @db.VarChar(100)
+  name_en    String    @db.VarChar(100)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime  @default(now()) @db.Timestamptz(6)
+  market     String    @default("pet") @db.VarChar(10)
+  is_active  Boolean   @default(true)
+  animals    animals[]
+  breeds     breeds[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model supported_languages {
+  code                   String                   @id @db.Char(2)
+  name_localized         Json
+  is_active              Boolean                  @default(true)
+  display_order          Int                      @default(0)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  notification_templates notification_templates[]
+  users                  users[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model users {
+  id                                                              String                     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  phone_hash                                                      String?                    @db.VarChar(60)
+  oauth_google_id                                                 String?                    @db.VarChar(255)
+  oauth_apple_id                                                  String?                    @db.VarChar(255)
+  oauth_telegram_id                                               String?                    @db.VarChar(255)
+  oauth_vk_id                                                     String?                    @db.VarChar(255)
+  full_name                                                       String                     @db.VarChar(100)
+  city_id                                                         Int?
+  avatar_url                                                      String?
+  email                                                           String?                    @db.VarChar(255)
+  email_verified                                                  Boolean?                   @default(false)
+  password_hash                                                   String?                    @db.VarChar(60)
+  role                                                            String                     @default("USER") @db.VarChar(20)
+  principal_type                                                  String                     @default("HUMAN") @db.VarChar(10)
+  status                                                          String                     @default("UNVERIFIED") @db.VarChar(25)
+  suspended_at                                                    DateTime?                  @db.Timestamptz(6)
+  verification_attempts                                           Int                        @default(0)
+  notification_prefs                                              Json                       @default("{\"sms\": true, \"email\": true, \"promo\": false}")
+  is_active                                                       Boolean                    @default(true)
+  last_login_at                                                   DateTime?                  @db.Timestamptz(6)
+  deactivated_at                                                  DateTime?                  @db.Timestamptz(6)
+  created_at                                                      DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                      DateTime                   @default(now()) @db.Timestamptz(6)
+  contact_phone                                                   String?                    @db.VarChar(30)
+  contact_telegram                                                String?                    @db.VarChar(64)
+  contact_prefs                                                   Json                       @default("{\"show_phone\": true, \"show_telegram\": false}")
+  preferred_language                                              String                     @default("ru") @db.Char(2)
+  animal_ownership_history                                        animal_ownership_history[]
+  animals                                                         animals[]
+  audit_log                                                       audit_log[]
+  contact_reveals_contact_reveals_seller_idTousers                contact_reveals[]          @relation("contact_reveals_seller_idTousers")
+  contact_reveals_contact_reveals_viewer_idTousers                contact_reveals[]          @relation("contact_reveals_viewer_idTousers")
+  content_reports_content_reports_reporter_idTousers              content_reports[]          @relation("content_reports_reporter_idTousers")
+  content_reports_content_reports_resolved_byTousers              content_reports[]          @relation("content_reports_resolved_byTousers")
+  conversations_conversations_participant_a_idTousers             conversations[]            @relation("conversations_participant_a_idTousers")
+  conversations_conversations_participant_b_idTousers             conversations[]            @relation("conversations_participant_b_idTousers")
+  favorites                                                       favorites[]
+  feature_toggles                                                 feature_toggles[]
+  listings_listings_assigned_toTousers                            listings[]                 @relation("listings_assigned_toTousers")
+  listings_listings_seller_idTousers                              listings[]                 @relation("listings_seller_idTousers")
+  messages_messages_recipient_idTousers                           messages[]                 @relation("messages_recipient_idTousers")
+  messages_messages_sender_idTousers                              messages[]                 @relation("messages_sender_idTousers")
+  moderation_decisions                                            moderation_decisions[]
+  notification_logs                                               notification_logs[]
+  organization_users_organization_users_user_idTousers            organization_users[]       @relation("organization_users_user_idTousers")
+  organization_users_organization_users_invited_by_user_idTousers organization_users[]       @relation("organization_users_invited_by_user_idTousers")
+  ownership_transfers_ownership_transfers_from_user_idTousers     ownership_transfers[]      @relation("ownership_transfers_from_user_idTousers")
+  ownership_transfers_ownership_transfers_to_user_idTousers       ownership_transfers[]      @relation("ownership_transfers_to_user_idTousers")
+  payment_transactions                                            payment_transactions[]
+  refresh_tokens                                                  refresh_tokens[]
+  saved_searches                                                  saved_searches[]
+  cities                                                          cities?                    @relation(fields: [city_id], references: [id], onUpdate: NoAction)
+  supported_languages                                             supported_languages        @relation(fields: [preferred_language], references: [code], onUpdate: NoAction)
+
+  @@index([city_id], map: "idx_users_city")
+  @@index([role], map: "idx_users_role")
+  @@index([status], map: "idx_users_status")
+}

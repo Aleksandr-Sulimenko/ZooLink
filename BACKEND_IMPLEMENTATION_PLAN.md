@@ -43,18 +43,18 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 ---
 
 ## Фаза 0 — Каркас и платформенный фундамент
-- [ ] `backend/` NestJS-скелет: package.json, tsconfig, nest-cli, eslint/prettier, npm-скрипты (start/build/lint/typecheck/test).
-- [ ] `config/`: zod-валидация всех env из `.env.example`; падать при отсутствии обязательных.
-- [ ] `lib/db`: PrismaService (connection pool, graceful shutdown) + Kysely instance на том же пуле; PgBouncer-совместимость.
-- [ ] `prisma db pull` из БД (database_schema.sql) → `schema.prisma`; `generate`; зафиксировать команду в README.
-- [ ] **RFC7807** global exception filter + `Problem` schema; `ValidationPipe` (whitelist); `PageMeta` util; `Idempotency-Key` интерсептор; `ETag`/`If-Match` хелпер; `@nestjs/throttler`+Redis.
-- [ ] Логирование Pino (request-id, **PII-redaction** по `data-governance.md`); `/metrics` (Prometheus); Sentry init.
-- [ ] Health: `GET /health/live`, `GET /health/ready` (PG+Redis).
-- [ ] `worker.ts` каркас (отдельный bootstrap) + общий код с api.
+- [x] `backend/` NestJS-скелет: package.json, tsconfig, nest-cli, eslint(flat v9)/prettier, npm-скрипты (start/build/lint/typecheck/test).
+- [x] `config/`: zod-валидация всех env из `.env.example`; падать при отсутствии обязательных (fail-fast, типизированный `AppConfigService`).
+- [x] `lib/db`: PrismaService (connection pool, graceful shutdown) + Kysely instance (выделенный pg-пул; Prisma свой пул не экспонирует — задокументировано); PgBouncer-совместимость.
+- [x] `prisma db pull` из БД (database_schema.sql) → `schema.prisma` (31 модель); `generate`; команда зафиксирована в `backend/README.md`.
+- [x] **RFC7807** global exception filter + `Problem` schema; `ValidationPipe` (whitelist); `PageMeta` util; `Idempotency-Key` интерсептор; `ETag`/`If-Match` хелпер; `@nestjs/throttler`+Redis.
+- [x] Логирование Pino (request-id, **PII-redaction** по `data-governance.md`); `/metrics` (Prometheus, prom-client); Sentry init (no-op без DSN).
+- [x] Health: `GET /health/live`, `GET /health/ready` (PG+Redis) — version-neutral, проверено `200`.
+- [x] `worker.ts` каркас (отдельный bootstrap, `worker.module.ts`) + общий код с api.
 - [ ] Seed-runner: применяет reference-data + `moderation_reasons` + `notification_templates` (миграции 0010) в dev/test.
-- [ ] docker-compose dev поднимается: `cp .env.example .env` → `docker compose up -d` → миграции → health 200.
+- [x] docker-compose dev поднимается: `docker compose up -d --build` → весь стек `healthy`, `https://localhost/health/ready` → 200. Исправлены баги канона: Dockerfile не доносил сгенерированный Prisma-клиент в runtime; proxy не получал `PUBLIC_DOMAIN` (Caddy крэшил); worker наследовал HTTP-healthcheck; `.env.example` JWT-плейсхолдеры <32; minio gating `service_started`.
 - [ ] CI `ci.yml` активировать (lint+typecheck+`migrate deploy`-check+unit на PG-service+security-гейты).
-- **DoD Фазы 0:** `docker compose up` даёт зелёный `/health/ready`; CI зелёный; Prisma client типизирован из канон-схемы.
+- **DoD Фазы 0:** `docker compose up` даёт зелёный `/health/ready` ✅; Prisma client типизирован из канон-схемы ✅; CI — остаток. Testcontainers-тесты теперь возможны (Docker установлен).
 
 ## Фаза 1 — Кросс-каттинг / платформа
 - [ ] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
