@@ -300,7 +300,7 @@ CREATE TABLE users (
 - Мягкое удаление: поля `deactivated_at` в ключевых таблицах
 - История владения животными: отдельная таблица `animal_ownership_history`
 - Исходящие события: таблица `outbox_events` для надёжной интеграции, со статусом доставки relay (`attempts`, `last_error`, `next_attempt_at`, `dead_lettered_at`) — доставка at-least-once с экспоненциальным backoff и dead-lettering (миграция 0012)
-- Временные метки: `created_at` везде; `updated_at` поддерживается триггером на таблицах изменяемых сущностей (у append/log-таблиц, таких как `outbox_events` и `audit_log`, столбца `updated_at` нет)
+- Временные метки: `created_at` везде; `updated_at` поддерживается триггером, который вешается ровно на те таблицы, где есть эта колонка (выводится из схемы, миграция 0013). У append/log-таблиц (`outbox_events`, `audit_log`, `animal_ownership_history`, `messages`) колонки `updated_at` и такого триггера нет
 - Аудит: append-only таблица `audit_log` (неизменяемость на уровне БД) для привилегированных операций
 
 ## Связанные решения

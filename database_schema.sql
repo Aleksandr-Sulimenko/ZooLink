@@ -564,23 +564,23 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Attach the updated_at trigger to EXACTLY the tables that have an updated_at column
+-- (derived, not a hand-maintained list). This permanently prevents the bug class where a
+-- trigger is attached to an append/log table without updated_at (e.g. outbox_events,
+-- animal_ownership_history, messages) and raises on every UPDATE — and conversely guarantees
+-- any table that does have updated_at (e.g. digital_assets) gets the trigger. Idempotent:
+-- drops the trigger first, so re-running this script never errors. (migration 0013)
 DO $$
 DECLARE
     tbl text;
 BEGIN
     FOR tbl IN
-        SELECT tablename FROM pg_tables
-        WHERE schemaname = 'public'
-          AND tablename IN ('users', 'species', 'breeds', 'cities', 'organizations', 'branches', 'organization_users',
-                            'animals', 'animal_ownership_history', 'listings', 'conversations',
-                            'messages', 'feature_toggles',
-                            -- NOTE: outbox_events intentionally excluded — it has no updated_at
-                            -- column (append + processed_at/next_attempt_at lifecycle), and the
-                            -- trigger would raise on every relay UPDATE. Removed in migration 0012.
-                            'payment_transactions', 'refunds', 'notification_templates',
-                            'notification_logs', 'ownership_transfers',
-                            'saved_searches', 'content_reports')
+        SELECT c.table_name
+        FROM information_schema.columns c
+        JOIN pg_tables p ON p.tablename = c.table_name AND p.schemaname = 'public'
+        WHERE c.table_schema = 'public' AND c.column_name = 'updated_at'
     LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS update_%I_updated_at ON %I;', tbl, tbl);
         EXECUTE format('
             CREATE TRIGGER update_%I_updated_at
             BEFORE UPDATE ON %I

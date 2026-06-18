@@ -300,7 +300,7 @@ Used for:
 - Soft deletion: `deactivated_at` fields in key tables
 - Animal ownership history: a dedicated `animal_ownership_history` table
 - Outbox events: an `outbox_events` table for reliable integration, with relay delivery state (`attempts`, `last_error`, `next_attempt_at`, `dead_lettered_at`) for at-least-once delivery with exponential backoff and dead-lettering (migration 0012)
-- Timestamps: `created_at` everywhere; `updated_at` maintained by trigger on mutable entity tables (append/log tables such as `outbox_events` and `audit_log` have no `updated_at`)
+- Timestamps: `created_at` everywhere; `updated_at` maintained by a trigger attached to exactly the tables that have the column (derived from the schema, migration 0013). Append/log tables (`outbox_events`, `audit_log`, `animal_ownership_history`, `messages`) have no `updated_at` and no such trigger
 - Audit: an append-only `audit_log` table (DB-enforced immutability) for privileged operations
 
 ## Related Decisions
