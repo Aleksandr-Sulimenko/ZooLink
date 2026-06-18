@@ -1,15 +1,27 @@
-# ⚠️ DRAFT template — normative shape of the MVP CI gate. Activates once ./backend exists.
-# Defined per docs/specs/09-testing-strategy.md and docs/specs/security/security_specification.md.
+# MVP CI gate. Per docs/specs/09-testing-strategy.md and security/security_specification.md.
+# DB workflow is SQL-canonical + Prisma introspect (ADR-0007): the schema is applied from
+# database_schema.sql and the typed client is generated from the committed schema.prisma —
+# Prisma Migrate is intentionally NOT used, so there is no `prisma migrate deploy` step.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [ main, backend ]
+    branches: [main, test, backend]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://zoolink:ci@localhost:5432/zoolink_test?schema=public
+      REDIS_URL: redis://localhost:6379
     services:
       postgres:
         image: postgres:16-alpine
@@ -17,37 +29,69 @@ jobs:
           POSTGRES_USER: zoolink
           POSTGRES_PASSWORD: ci
           POSTGRES_DB: zoolink_test
-        ports: [ "5432:5432" ]
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      # --- the steps below require ./backend (package.json, prisma) to exist ---
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install
-        run: cd backend && npm ci
-      - name: Lint & typecheck
-        run: cd backend && npm run lint && npm run typecheck
-      - name: Migrate (schema applies cleanly)
-        run: cd backend && npx prisma migrate deploy
-        env:
-          DATABASE_URL: postgresql://zoolink:ci@localhost:5432/zoolink_test
-      - name: Unit + integration (PostgreSQL; coverage gate)
-        run: cd backend && npm test -- --coverage
-        env:
-          DATABASE_URL: postgresql://zoolink:ci@localhost:5432/zoolink_test
+        run: npm ci
+
+      - name: Generate Prisma client (from committed schema.prisma)
+        run: npm run db:generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests (coverage)
+        run: npm test -- --coverage
+
+      - name: Apply canonical schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../database_schema.sql
+
+      - name: Prisma schema drift check (schema.prisma must match the DB)
+        run: |
+          npm run db:pull
+          git diff --exit-code prisma/schema.prisma \
+            || (echo "::error::prisma/schema.prisma is out of sync — run 'npm run db:sync' and commit"; exit 1)
+
+      - name: Seed runner (idempotent — run twice)
+        run: |
+          npm run seed
+          npm run seed
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
       - name: Dependency audit
         run: cd backend && npm audit --audit-level=high
       - name: SAST (Semgrep, OWASP)
         uses: returntocorp/semgrep-action@v1
         with: { config: p/owasp-top-ten }
-      - name: Container/IaC scan (Trivy)
+      - name: Filesystem scan (Trivy)
         uses: aquasecurity/trivy-action@master
         with: { scan-type: fs, severity: HIGH,CRITICAL }
-      # DAST (OWASP ZAP baseline) runs on the staging deployment on a schedule, not per-PR.
+      # DAST (OWASP ZAP baseline) runs against staging on a schedule, not per-PR.

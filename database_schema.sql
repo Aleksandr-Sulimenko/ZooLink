@@ -598,11 +598,12 @@ UNION ALL
 SELECT s.id, 'holmstein', 'Голштинская', 'Holstein' FROM species s WHERE s.code = 'cattle'
 ON CONFLICT (species_id, code) DO NOTHING;
 
--- Initial cities (optional)
-INSERT INTO cities (name_ru, name_en) VALUES
-('Москва', 'Moscow'),
-('Санкт-Петербург', 'Saint Petersburg')
-ON CONFLICT DO NOTHING;
+-- Initial cities (optional). cities has no natural unique key, so ON CONFLICT cannot dedup;
+-- guard with NOT EXISTS so re-running the schema/seed stays idempotent.
+INSERT INTO cities (name_ru, name_en)
+SELECT v.name_ru, v.name_en
+FROM (VALUES ('Москва', 'Moscow'), ('Санкт-Петербург', 'Saint Petersburg')) AS v(name_ru, name_en)
+WHERE NOT EXISTS (SELECT 1 FROM cities c WHERE c.name_ru = v.name_ru);
 
 -- Initial feature toggles (MVP: everything off except core)
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) VALUES

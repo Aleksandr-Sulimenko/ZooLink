@@ -51,10 +51,10 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 - [x] Логирование Pino (request-id, **PII-redaction** по `data-governance.md`); `/metrics` (Prometheus, prom-client); Sentry init (no-op без DSN).
 - [x] Health: `GET /health/live`, `GET /health/ready` (PG+Redis) — version-neutral, проверено `200`.
 - [x] `worker.ts` каркас (отдельный bootstrap, `worker.module.ts`) + общий код с api.
-- [ ] Seed-runner: применяет reference-data + `moderation_reasons` + `notification_templates` (миграции 0010) в dev/test.
+- [x] Seed-runner (`npm run seed`, `src/seed.ts`): применяет идемпотентные seed-миграции — reference-data (новая `0011`) + `moderation_reasons`/`notification_templates` (`0010`); guard от прод-БД. Найден+исправлен баг идемпотентности `cities` (нет уникального ключа → `WHERE NOT EXISTS` в `0011` и `database_schema.sql`).
 - [x] docker-compose dev поднимается: `docker compose up -d --build` → весь стек `healthy`, `https://localhost/health/ready` → 200. Исправлены баги канона: Dockerfile не доносил сгенерированный Prisma-клиент в runtime; proxy не получал `PUBLIC_DOMAIN` (Caddy крэшил); worker наследовал HTTP-healthcheck; `.env.example` JWT-плейсхолдеры <32; minio gating `service_started`.
-- [ ] CI `ci.yml` активировать (lint+typecheck+`migrate deploy`-check+unit на PG-service+security-гейты).
-- **DoD Фазы 0:** `docker compose up` даёт зелёный `/health/ready` ✅; Prisma client типизирован из канон-схемы ✅; CI — остаток. Testcontainers-тесты теперь возможны (Docker установлен).
+- [x] CI `ci.yml` активирован: install→`db:generate`→lint→typecheck→build→unit(coverage)→apply `database_schema.sql`→**drift-check** `schema.prisma`→seed×2; отдельный security-джоб (npm audit/Semgrep/Trivy). Убран ошибочный `prisma migrate deploy` (мы на SQL-canon + introspect, ADR-0007).
+- **DoD Фазы 0 ✅:** `docker compose up` → зелёный `/health/ready`; Prisma client типизирован из канон-схемы; CI-гейт активен (drift-check сторожит док↔код); seed идемпотентен. Testcontainers-тесты возможны (Docker установлен).
 
 ## Фаза 1 — Кросс-каттинг / платформа
 - [ ] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
