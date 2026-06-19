@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { SMS_PROVIDER, type SmsProvider } from '../../lib/providers';
+import { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principal';
 import { AuthService, type TokenPair } from '../auth/auth.service';
 import { OtpService, OtpCooldownError } from './otp.service';
@@ -47,6 +48,7 @@ export class IdentityService {
     private readonly config: AppConfigService,
     private readonly otp: OtpService,
     private readonly auth: AuthService,
+    private readonly audit: AuditLogService,
     @Inject(SMS_PROVIDER) private readonly sms: SmsProvider,
   ) {}
 
@@ -72,9 +74,10 @@ export class IdentityService {
       throw new ConflictException({ message: 'Phone already registered', code: 'CONFLICT' });
     }
 
+    let userId = existing?.id;
     if (!existing) {
       try {
-        await this.prisma.users.create({
+        const created = await this.prisma.users.create({
           data: {
             phone_hash: ph,
             full_name: dto.fullName,
@@ -87,6 +90,7 @@ export class IdentityService {
             status: 'PENDING_VERIFICATION',
           },
         });
+        userId = created.id;
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError) {
           if (err.code === 'P2002') throw new ConflictException({ message: 'Phone already registered', code: 'CONFLICT' });
@@ -97,6 +101,13 @@ export class IdentityService {
     }
 
     const expiresInSeconds = await this.sendOtp(ph, dto.preferredLanguage ?? existing?.preferred_language ?? 'ru', phone);
+    await this.audit.record({
+      actorId: userId ?? null,
+      actorRole: 'USER',
+      action: 'identity.register_initiated',
+      entityType: 'user',
+      entityId: userId ?? null,
+    });
     return { status: 'VERIFICATION_REQUIRED', expiresInSeconds };
   }
 
@@ -109,11 +120,19 @@ export class IdentityService {
     if (!user) {
       throw new BadRequestException({ message: 'No pending verification for this phone', code: 'VALIDATION_ERROR' });
     }
+    // Only an account awaiting verification may be activated here — never re-activate an
+    // already-active/suspended/deactivated account via a stale OTP (race-safety).
+    if (user.status !== 'UNVERIFIED' && user.status !== 'PENDING_VERIFICATION') {
+      throw new ConflictException({ message: 'Account is not awaiting verification', code: 'CONFLICT' });
+    }
 
     const result = await this.otp.verify(ph, dto.code);
     if (result === 'LOCKED') {
       // attempts exhausted → bounce back to UNVERIFIED (state machine) and lock out
       await this.prisma.users.update({ where: { id: user.id }, data: { status: 'UNVERIFIED', verification_attempts: 0 } });
+      await this.audit.record({
+        actorId: user.id, actorRole: 'USER', action: 'identity.verify_locked_out', entityType: 'user', entityId: user.id,
+      });
       throw new HttpException({ message: 'Too many attempts; try again later', code: 'RATE_LIMITED' }, HttpStatus.TOO_MANY_REQUESTS);
     }
     if (result === 'INVALID') {
@@ -121,12 +140,18 @@ export class IdentityService {
         where: { id: user.id },
         data: { verification_attempts: await this.otp.attempts(ph) },
       });
+      await this.audit.record({
+        actorId: user.id, actorRole: 'USER', action: 'identity.verify_failed', entityType: 'user', entityId: user.id,
+      });
       throw new BadRequestException({ message: 'Invalid or expired code', code: 'INVALID_OTP' });
     }
 
     const activated = await this.prisma.users.update({
       where: { id: user.id },
-      data: { status: 'ACTIVE', verification_attempts: 0, last_login_at: new Date() },
+      data: { status: 'ACTIVE', is_active: true, verification_attempts: 0, last_login_at: new Date() },
+    });
+    await this.audit.record({
+      actorId: activated.id, actorRole: activated.role, action: 'identity.phone_verified', entityType: 'user', entityId: activated.id,
     });
 
     const principal: AuthPrincipal = {

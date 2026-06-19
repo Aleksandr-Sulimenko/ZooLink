@@ -1,9 +1,12 @@
 import { BadRequestException, ConflictException, HttpException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { IdentityService } from './identity.service';
+import { OtpCooldownError } from './otp.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AppConfigService } from '../../config/app-config.service';
 import type { OtpService } from './otp.service';
 import type { AuthService } from '../auth/auth.service';
+import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { SmsProvider } from '../../lib/providers';
 
 function setup(overrides: {
@@ -49,13 +52,20 @@ function setup(overrides: {
   } as unknown as AuthService;
   const sendSms = overrides.sendSms ?? jest.fn().mockResolvedValue({ accepted: true });
   const sms = { sendSms } as unknown as SmsProvider;
+  const record = jest.fn().mockResolvedValue(undefined);
+  const audit = { record } as unknown as AuditLogService;
   const mocks = {
     create: (prisma.users as unknown as { create: jest.Mock }).create,
     update: (prisma.users as unknown as { update: jest.Mock }).update,
     issueSession: (auth as unknown as { issueSession: jest.Mock }).issueSession,
     sendSms,
+    record,
   };
-  return { svc: new IdentityService(prisma, config, otp, auth, sms), mocks };
+  return { svc: new IdentityService(prisma, config, otp, auth, audit, sms), mocks };
+}
+
+function prismaError(code: string): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError('e', { code, clientVersion: 'test' });
 }
 
 describe('IdentityService.registerPhone', () => {
@@ -78,6 +88,35 @@ describe('IdentityService.registerPhone', () => {
     const { svc } = setup();
     await expect(svc.registerPhone({ phone: '123', fullName: 'Ann' })).rejects.toBeInstanceOf(
       BadRequestException,
+    );
+  });
+
+  it('maps a unique-violation race (P2002) to 409', async () => {
+    const { svc } = setup({ create: jest.fn().mockRejectedValue(prismaError('P2002')) });
+    await expect(svc.registerPhone({ phone: '+79991234567', fullName: 'Ann' })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('maps an unknown cityId FK error (P2003) to 400', async () => {
+    const { svc } = setup({ create: jest.fn().mockRejectedValue(prismaError('P2003')) });
+    await expect(
+      svc.registerPhone({ phone: '+79991234567', fullName: 'Ann', cityId: 999999 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('maps OTP resend cooldown to 429', async () => {
+    const { svc } = setup({ otpIssue: jest.fn().mockRejectedValue(new OtpCooldownError(42)) });
+    await expect(svc.registerPhone({ phone: '+79991234567', fullName: 'Ann' })).rejects.toBeInstanceOf(
+      HttpException,
+    );
+  });
+
+  it('writes an audit record on successful registration', async () => {
+    const { svc, mocks } = setup({ create: jest.fn().mockResolvedValue({ id: 'u9' }) });
+    await svc.registerPhone({ phone: '+79991234567', fullName: 'Ann' });
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'identity.register_initiated', entityId: 'u9' }),
     );
   });
 });
@@ -113,6 +152,22 @@ describe('IdentityService.verifyPhone', () => {
     });
     await expect(svc.verifyPhone({ phone: '+79991234567', code: '000000' })).rejects.toBeInstanceOf(
       HttpException,
+    );
+  });
+
+  it('400s when no account is awaiting verification for the phone', async () => {
+    const { svc } = setup({ findFirst: jest.fn().mockResolvedValue(null) });
+    await expect(svc.verifyPhone({ phone: '+79991234567', code: '123456' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('409s if the account is not awaiting verification (e.g. already ACTIVE)', async () => {
+    const { svc } = setup({
+      findFirst: jest.fn().mockResolvedValue({ ...pending, status: 'ACTIVE' }),
+    });
+    await expect(svc.verifyPhone({ phone: '+79991234567', code: '123456' })).rejects.toBeInstanceOf(
+      ConflictException,
     );
   });
 });
