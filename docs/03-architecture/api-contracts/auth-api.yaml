@@ -141,18 +141,33 @@ paths:
         - bearerAuth: []
       responses:
         '200':
-          description: Current user profile
+          description: Current user profile (returns a weak ETag for optimistic concurrency)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
+        '304':
+          description: Not Modified (If-None-Match matched)
         '401':
           description: Unauthorized
     patch:
       summary: Update current user profile
       operationId: updateMe
+      description: >-
+        Optimistic concurrency (API_CONVENTIONS §10): requires the If-Match header carrying the
+        ETag from a prior GET /me.
       security:
         - bearerAuth: []
+      parameters:
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from GET /me
       requestBody:
         required: true
         content:
@@ -170,6 +185,10 @@ paths:
           description: Bad request (validation error)
         '401':
           description: Unauthorized
+        '412':
+          description: Precondition Failed (stale ETag — re-fetch and retry)
+        '428':
+          description: Precondition Required (If-Match header missing)
     post:
       summary: Deactivate current user account
       operationId: deactivateMe
@@ -408,6 +427,8 @@ components:
           description: When user chose to deactivate (null if active)
     UpdateProfileRequest:
       type: object
+      # (Phase-2/round-7, normative) passwordless — `password` removed; cityId is INTEGER (lookup).
+      # All fields optional (partial update); at least one should be present.
       properties:
         fullName:
           type: string
@@ -415,20 +436,22 @@ components:
           minLength: 2
           description: User's full name for display
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
+          type: integer
+          nullable: true
+          description: Reference to city (cities.id) for geo-search (null clears it)
         avatarUrl:
           type: string
           format: uri
           maxLength: 500
+          nullable: true
           description: URL to avatar image in object storage
         email:
           type: string
           format: email
           maxLength: 255
+          nullable: true
           description: Email address for notifications
-        password:
+        preferredLanguage:
           type: string
-          minLength: 8
-          description: New password (only for phone auth users)
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code)
