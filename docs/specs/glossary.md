@@ -151,6 +151,15 @@ The workflow (ADR-0003) where a listing is not publicly visible until a moderato
 **ID convention**  
 Business entities use **UUID** primary keys; lookup/reference tables (`species`, `breeds`, `cities`, `supported_languages`) use **INTEGER** keys. Hence `species_id`/`breed_id`/`city_id` are INTEGER.
 
+**Passwordless auth**  
+End-user authentication uses **phone OTP + OAuth**, never a password. `password_hash` is reserved for operator roles (ADMIN/MODERATOR) only (spec 01 round-4).
+
+**OTP (one-time password)**  
+6-digit SMS verification code: TTL 5 min, 60 s resend cooldown, 5 attempts then 15-min lockout. Stored only as a SHA-256 digest in Redis (never at rest in PG); keyed by `phone_hash`.
+
+**phone_hash (HMAC + pepper)**  
+Deterministic `HMAC-SHA256(phone, server_pepper)` (base64url) of the E.164 phone, stored unique on `users`. Deterministic (unlike bcrypt) so phones are unique/look-up-able without storing the raw number; the `PHONE_HASH_PEPPER` secret is server-side env.
+
 **creator_id ≡ seller_id**  
 `creator_id` is the business term for "the user who posted a listing (for audit)"; it maps to the canonical schema column `listings.seller_id`. Same field; for org listings it is the affiliated user who created the listing.
 

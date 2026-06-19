@@ -175,10 +175,16 @@ CREATE TABLE users (
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
-    password_hash VARCHAR(60),
+    password_hash VARCHAR(60), -- bcrypt; ТОЛЬКО операторы (конечные пользователи passwordless: phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (principal_type IN ('HUMAN', 'AGENT')), -- ADR-0006: операторские роли может занимать ИИ-агент
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    status VARCHAR(25) NOT NULL DEFAULT 'UNVERIFIED'
+        CHECK (status IN ('UNVERIFIED','PENDING_VERIFICATION','VERIFIED','ACTIVE','SUSPENDED','DEACTIVATED')), -- источник истины жизненного цикла (user_state_machine.md)
+    suspended_at TIMESTAMP WITH TIME ZONE,
+    verification_attempts INTEGER NOT NULL DEFAULT 0, -- попытки OTP; MAX 5, затем lockout
+    notification_prefs JSONB NOT NULL DEFAULT '{"email": true, "sms": true, "promo": false}'::jsonb,
+    preferred_language CHAR(2) NOT NULL DEFAULT 'ru' REFERENCES supported_languages(code),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, -- ПРОИЗВОДНОЕ от status (синхронизируется; не авторитетно)
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -187,10 +193,11 @@ CREATE TABLE users (
 ```
 
 **Ключевые моменты:**
-- Множественные способы аутентификации (телефон/SMS + OAuth провайдеры)
+- Множественные способы аутентификации (телефон/SMS OTP + OAuth провайдеры); конечные пользователи passwordless
+- `status` — источник истины жизненного цикла; `is_active`/`deactivated_at` — производные от него
 - Роль пользователя определяет доступ к функциям системы
 - Связь с городом для геопоиска по местоположению
-- Мягкое удаление через поле deactivated_at
+- Мягкое удаление через поле deactivated_at (status=DEACTIVATED)
 
 ## Связи и ограничения
 

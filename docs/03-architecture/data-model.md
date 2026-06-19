@@ -165,7 +165,7 @@ CREATE TABLE listings (
 ```sql
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    phone_hash VARCHAR(60),
+    phone_hash VARCHAR(60), -- deterministic HMAC-SHA256(phone, server_pepper), unique; NOT bcrypt (spec 01 round-4)
     oauth_google_id VARCHAR(255),
     oauth_apple_id VARCHAR(255),
     oauth_telegram_id VARCHAR(255),
@@ -175,10 +175,16 @@ CREATE TABLE users (
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
-    password_hash VARCHAR(60),
+    password_hash VARCHAR(60), -- bcrypt; OPERATOR-only (end users are passwordless: phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (principal_type IN ('HUMAN', 'AGENT')), -- ADR-0006: operator roles may be held by an AI agent
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    status VARCHAR(25) NOT NULL DEFAULT 'UNVERIFIED'
+        CHECK (status IN ('UNVERIFIED','PENDING_VERIFICATION','VERIFIED','ACTIVE','SUSPENDED','DEACTIVATED')), -- lifecycle source of truth (user_state_machine.md)
+    suspended_at TIMESTAMP WITH TIME ZONE,
+    verification_attempts INTEGER NOT NULL DEFAULT 0, -- OTP attempts; MAX 5 then lockout
+    notification_prefs JSONB NOT NULL DEFAULT '{"email": true, "sms": true, "promo": false}'::jsonb,
+    preferred_language CHAR(2) NOT NULL DEFAULT 'ru' REFERENCES supported_languages(code),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, -- DERIVED from status (kept in sync; not authoritative)
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -187,10 +193,11 @@ CREATE TABLE users (
 ```
 
 **Key points:**
-- Multiple authentication methods (phone/SMS + OAuth providers)
+- Multiple authentication methods (phone/SMS OTP + OAuth providers); end users are passwordless
+- `status` is the lifecycle source of truth; `is_active`/`deactivated_at` are derived from it
 - The user role determines access to system features
 - Relationship with a city for geo-search by location
-- Soft deletion through the deactivated_at field
+- Soft deletion through the deactivated_at field (status=DEACTIVATED)
 
 ## Relationships and Constraints
 

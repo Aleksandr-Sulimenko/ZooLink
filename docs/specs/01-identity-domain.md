@@ -116,6 +116,21 @@ This specification addresses the following Non-Functional Requirements:
   procedure `erase_user` is defined in [data-governance.md](data-governance.md). `status` is the single source of
   truth; `is_active`/`deactivated_at` are derived.
 
+### Phone-OTP activation flow (round-7/Phase-2, normative)
+- Registration that sends the OTP in the same request creates the account **directly in
+  `PENDING_VERIFICATION`** (the `UNVERIFIED` entry state is transient/internal — the instant before the
+  code is sent — and is not persisted by the phone flow).
+- On a valid OTP the account goes **`PENDING_VERIFICATION → ACTIVE`** in one step: there is **no
+  mandatory profile-completion gate in the MVP**, so the `VERIFIED` state collapses into `ACTIVE`
+  ("automatic activation (no profile req)" in [user_state_machine.md](statemachines/user_state_machine.md)).
+  `VERIFIED` remains a logical pass-through; if a future profile-completion requirement is added, the
+  flow rests at `VERIFIED` until profile is complete.
+- `verify-phone` only activates an account in `{UNVERIFIED, PENDING_VERIFICATION}`; a stale OTP can
+  never re-activate an `ACTIVE/SUSPENDED/DEACTIVATED` account (race-safety).
+- **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ:** collapsing `VERIFIED→ACTIVE` matches the MVP (no profile gate),
+  avoids a redundant intermediate write, and keeps the state machine honest about what is actually
+  persisted — without removing the `VERIFIED` state needed when a profile gate arrives.
+
 ## Related Documents
 
 - [Glossary](glossary.md)
