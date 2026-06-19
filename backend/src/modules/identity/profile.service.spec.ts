@@ -128,3 +128,26 @@ describe('ProfileService.deactivateMe (guard)', () => {
     await expect(svc.deactivateMe('u1')).rejects.toBeInstanceOf(ConflictException);
   });
 });
+
+describe('ProfileService.eraseMe', () => {
+  it('deactivates an active account, revokes sessions, and records the request', async () => {
+    const { svc, update, logout, record } = setup();
+    await svc.eraseMe('u1');
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'DEACTIVATED', is_active: false }) }),
+    );
+    expect(logout).toHaveBeenCalledWith('u1');
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'identity.erasure_requested' }),
+    );
+  });
+
+  it('does not re-deactivate an already-deactivated account but still records the request', async () => {
+    const { svc, update, record } = setup({ ...baseUser, status: 'DEACTIVATED', deactivated_at: new Date() });
+    await svc.eraseMe('u1');
+    expect(update).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'identity.erasure_requested' }),
+    );
+  });
+});

@@ -615,6 +615,7 @@ model users {
   contact_telegram                                                String?                    @db.VarChar(64)
   contact_prefs                                                   Json                       @default("{\"show_phone\": true, \"show_telegram\": false}")
   preferred_language                                              String                     @default("ru") @db.Char(2)
+  erased_at                                                       DateTime?                  @db.Timestamptz(6)
   animal_ownership_history                                        animal_ownership_history[]
   animals                                                         animals[]
   audit_log                                                       audit_log[]

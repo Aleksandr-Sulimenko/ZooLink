@@ -160,6 +160,18 @@ End-user authentication uses **phone OTP + OAuth**, never a password. `password_
 **phone_hash (HMAC + pepper)**  
 Deterministic `HMAC-SHA256(phone, server_pepper)` (base64url) of the E.164 phone, stored unique on `users`. Deterministic (unlike bcrypt) so phones are unique/look-up-able without storing the raw number; the `PHONE_HASH_PEPPER` secret is server-side env.
 
+**Account recovery (email-OTP)**  
+Self-service path for a user who lost their phone/OAuth but has a **verified email**: a fresh OTP is sent to that email (`/auth/recover/email/*`) and, once confirmed, a new session is issued (a DEACTIVATED-within-grace account is reactivated). No silent takeover (spec 01 Slice-4).
+
+**Identifier re-bind (admin-assisted)**  
+ADMIN-only, audit-logged replacement of a user's `phone_hash` or an `oauth_*` identifier (`/admin/users/{id}/rebind`) for recovery when no verified email exists. Revokes the target's sessions; never a silent takeover.
+
+**Role-elevation**  
+ADMIN-granted change of `users.role` (`/admin/users/{id}/role`) — USER → BREEDER/FARMER/VETERINARIAN/GROOMER (or operator roles) is never self-claimed; audit-logged and revokes all the target's refresh families (round-4).
+
+**erase_user / right-to-erasure (152-ФЗ)**  
+Anonymise-in-place procedure (`/admin/users/{id}/erase`, data-governance.md §2): PII NULLed/tombstoned, identifiers (`phone_hash`/`oauth_*`/`email`) released, sessions revoked, `notification_logs` redacted, `users.erased_at` stamped; the UUID is retained so FK RESTRICT rows stay valid. Append-only audit/moderation/financial records are retained under legal hold.
+
 **creator_id ≡ seller_id**  
 `creator_id` is the business term for "the user who posted a listing (for audit)"; it maps to the canonical schema column `listings.seller_id`. Same field; for org listings it is the affiliated user who created the listing.
 

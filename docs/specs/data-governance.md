@@ -17,6 +17,7 @@ Make data governance implementable. Provides the **PII inventory**, the **erasur
 |---|---|---|
 | `users.phone_hash` | identifier (keyed HMAC) | NULL |
 | `users.contact_phone`, `users.contact_telegram` | contact PII | NULL |
+| `users.contact_prefs` | contact-visibility setting | reset to column default |
 | `users.email` | contact PII | NULL |
 | `users.full_name` | personal | → `'[deleted]'` tombstone |
 | `users.avatar_url` | personal media | delete object from S3, NULL |

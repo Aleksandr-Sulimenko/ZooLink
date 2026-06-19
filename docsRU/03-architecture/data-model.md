@@ -187,6 +187,7 @@ CREATE TABLE users (
     is_active BOOLEAN NOT NULL DEFAULT TRUE, -- ПРОИЗВОДНОЕ от status (синхронизируется; не авторитетно)
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
+    erased_at TIMESTAMP WITH TIME ZONE, -- ставится erase_user() (ФЗ-152 анонимизация на месте); NULL = не стёрт
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
@@ -198,6 +199,9 @@ CREATE TABLE users (
 - Роль пользователя определяет доступ к функциям системы
 - Связь с городом для геопоиска по местоположению
 - Мягкое удаление через поле deactivated_at (status=DEACTIVATED)
+- Право на забвение (ФЗ-152): `erase_user()` анонимизирует PII на месте, освобождает идентификаторы
+  (phone_hash/oauth_*/email), отзывает сессии и ставит `erased_at`; UUID сохраняется, чтобы строки
+  FK RESTRICT остались валидными (data-governance.md §2)
 
 ## Связи и ограничения
 

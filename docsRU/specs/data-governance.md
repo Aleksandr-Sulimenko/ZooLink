@@ -17,6 +17,7 @@ status: "Approved"
 |---|---|---|
 | `users.phone_hash` | идентификатор (keyed HMAC) | NULL |
 | `users.contact_phone`, `users.contact_telegram` | контактные ПДн | NULL |
+| `users.contact_prefs` | настройка видимости контактов | сброс к default колонки |
 | `users.email` | контактные ПДн | NULL |
 | `users.full_name` | персональные | → `'[deleted]'` |
 | `users.avatar_url` | медиа | удалить объект из S3, NULL |

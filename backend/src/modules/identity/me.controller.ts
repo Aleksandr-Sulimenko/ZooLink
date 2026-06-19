@@ -59,4 +59,11 @@ export class MeController {
   reactivate(@CurrentUser() user: AuthPrincipal): Promise<UserProfile> {
     return this.profile.reactivateMe(user.userId);
   }
+
+  @Post('erase')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Request erasure of the current account (ФЗ-152) — deactivates now, anonymises after grace' })
+  erase(@CurrentUser() user: AuthPrincipal): Promise<void> {
+    return this.profile.eraseMe(user.userId);
+  }
 }

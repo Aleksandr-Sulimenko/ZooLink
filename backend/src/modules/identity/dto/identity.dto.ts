@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsEmail,
   IsIn,
   IsInt,
@@ -9,6 +10,10 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import type { Role } from '../../../lib/auth/principal';
+
+const ROLES = ['USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER'] as const;
+const OAUTH_PROVIDERS = ['google', 'apple', 'telegram', 'vk'] as const;
 
 const E164 = /^\+?[1-9]\d{7,14}$/;
 
@@ -131,4 +136,59 @@ export class RegisterPhoneResponseDto {
 
   @ApiProperty({ description: 'OTP validity window in seconds' })
   expiresInSeconds!: number;
+}
+
+export class RecoverEmailRequestDto {
+  @ApiProperty({ description: 'Verified email on file for the account to recover' })
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+}
+
+export class RecoverEmailVerifyDto {
+  @ApiProperty({ description: 'Verified email the recovery OTP was sent to' })
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @ApiProperty({ description: '6-digit recovery code', example: '123456' })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'code must be 6 digits' })
+  code!: string;
+}
+
+export class SetRoleDto {
+  @ApiProperty({ description: 'New role to grant', enum: ROLES })
+  @IsIn(ROLES)
+  role!: Role;
+}
+
+export class RebindDto {
+  @ApiPropertyOptional({ description: 'New phone (E.164) to bind' })
+  @IsOptional()
+  @IsString()
+  @Matches(E164, { message: 'newPhone must be a valid E.164 number' })
+  newPhone?: string;
+
+  @ApiPropertyOptional({ description: 'OAuth provider to (re)bind or clear', enum: OAUTH_PROVIDERS })
+  @IsOptional()
+  @IsIn(OAUTH_PROVIDERS)
+  oauthProvider?: (typeof OAUTH_PROVIDERS)[number];
+
+  @ApiPropertyOptional({ description: 'New provider-side id to bind (omit with clear=true)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  oauthId?: string;
+
+  @ApiPropertyOptional({ description: 'When true with oauthProvider, unbinds that OAuth identifier' })
+  @IsOptional()
+  @IsBoolean()
+  clear?: boolean;
+
+  @ApiPropertyOptional({ description: 'Operator-supplied reason (recorded in audit_log)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

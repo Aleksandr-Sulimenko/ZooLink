@@ -120,6 +120,10 @@ CREATE TABLE users (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
+    -- Set by erase_user() (data-governance.md §2, ФЗ-152). Marks the account as anonymised-in-place:
+    -- PII NULLed/tombstoned, identifiers released, but the UUID retained for FK RESTRICT integrity.
+    -- Distinguishes an erased account from a merely DEACTIVATED one and makes erasure idempotent.
+    erased_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );

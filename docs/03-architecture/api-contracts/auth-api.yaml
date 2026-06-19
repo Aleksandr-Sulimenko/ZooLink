@@ -95,6 +95,175 @@ paths:
           description: Bad request (invalid or expired code)
         '429':
           description: Too Many Requests (too many attempts / locked out)
+  /auth/recover/email/request:
+    post:
+      summary: Request account recovery via a verified email (sends an OTP)
+      operationId: recoverEmailRequest
+      description: >-
+        (Slice-4, normative) Account recovery for a user who lost access to the phone/OAuth they
+        registered with but has a VERIFIED email on file. Sends a 6-digit OTP to that email.
+        For privacy this ALWAYS returns 202 even if no account/verified-email matches (no account
+        enumeration). The OTP only activates a recovery session when /auth/recover/email/verify is
+        called with a real code. If the account is DEACTIVATED within the 30-day grace, a successful
+        recovery also reactivates it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoverEmailRequest'
+      responses:
+        '202':
+          description: If a recoverable account with that verified email exists, an OTP was sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoverEmailRequestResponse'
+        '400':
+          description: Bad request (validation error)
+        '429':
+          description: Too Many Requests (rate limit / resend cooldown)
+  /auth/recover/email/verify:
+    post:
+      summary: Verify the email recovery OTP — issues a session
+      operationId: recoverEmailVerify
+      description: >-
+        (Slice-4, normative) Validates the recovery OTP sent to the verified email and returns a
+        fresh session (access + refresh) plus the profile. 5 failed attempts → 15-min lockout.
+        SUSPENDED accounts cannot be recovered (operator action required). A DEACTIVATED account
+        within grace is reactivated; past grace it cannot be recovered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoverEmailVerifyRequest'
+      responses:
+        '200':
+          description: Recovery verified; session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Bad request (invalid or expired code)
+        '403':
+          description: Forbidden (account not recoverable — SUSPENDED or grace elapsed)
+        '429':
+          description: Too Many Requests (too many attempts / locked out)
+  /admin/users/{userId}/role:
+    patch:
+      summary: '[ADMIN] Grant/change a user role (role-elevation)'
+      operationId: adminSetUserRole
+      description: >-
+        (Slice-4, normative) USER → BREEDER/FARMER/VETERINARIAN/GROOMER (and operator roles) is
+        ADMIN-granted, never self-claimed. Audit-logged; a role change revokes ALL refresh-token
+        families for the target user (round-4 "role change → revoke all families").
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRoleRequest'
+      responses:
+        '200':
+          description: Role updated; target sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request (invalid role)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (caller is not ADMIN)
+        '404':
+          description: User not found
+  /admin/users/{userId}/rebind:
+    post:
+      summary: '[ADMIN] Re-bind a user phone/OAuth identifier (assisted recovery)'
+      operationId: adminRebindIdentifier
+      description: >-
+        (Slice-4, normative) ADMIN-assisted, audit-logged re-binding of the phone or an OAuth
+        identifier for a user who lost access and has no verified email. No silent takeover — the
+        action is attributed to the ADMIN in audit_log. Re-binding revokes ALL of the target's
+        sessions. Exactly one identifier (newPhone OR oauth provider+id, or a clear) per call.
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RebindRequest'
+      responses:
+        '200':
+          description: Identifier re-bound; target sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request (validation — not exactly one identifier, bad phone)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (caller is not ADMIN)
+        '404':
+          description: User not found
+        '409':
+          description: Conflict (the new identifier is already in use by another account)
+  /admin/users/{userId}/erase:
+    post:
+      summary: '[ADMIN] Erase (anonymise-in-place) a user — ФЗ-152 right-to-erasure'
+      operationId: adminEraseUser
+      description: >-
+        (Slice-4, normative) Runs the `erase_user` procedure (data-governance.md §2): anonymise
+        users PII (UUID retained so FK RESTRICT rows stay valid), release identifiers (phone_hash /
+        oauth_* / email NULLed), revoke all sessions, redact notification_logs recipient/content,
+        NULL avatar_url. Append-only audit_log/moderation_decisions are RETAINED under legal hold.
+        Idempotent — erasing an already-erased account is a no-op 200. Status becomes DEACTIVATED
+        with an `erased_at` marker.
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200':
+          description: User erased (or already erased — idempotent)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (caller is not ADMIN)
+        '404':
+          description: User not found
+  /me/erase:
+    post:
+      summary: Request erasure of the current account (ФЗ-152)
+      operationId: eraseMe
+      description: >-
+        (Slice-4, normative) Self-service right-to-erasure. Per data-governance.md §2 the canonical
+        path is deactivate → 30-day grace → erase. This endpoint deactivates immediately if the
+        account is still ACTIVE, then schedules/executes erasure. In the MVP (no scheduler for the
+        grace job) it deactivates and records the erasure request; the actual anonymisation is run
+        by the retention job / an ADMIN after grace. See Open Questions.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Erasure requested; account deactivated, anonymisation scheduled after grace
+        '401':
+          description: Unauthorized
   /auth/refresh:
     post:
       summary: Refresh access token using refresh token
@@ -218,7 +387,87 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    UserIdParam:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Target user id (users.id)
   schemas:
+    RecoverEmailRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: The VERIFIED email on file for the account to recover
+    RecoverEmailRequestResponse:
+      type: object
+      required:
+        - status
+        - expiresInSeconds
+      properties:
+        status:
+          type: string
+          enum: [VERIFICATION_REQUIRED]
+          description: Always VERIFICATION_REQUIRED — confirm via /auth/recover/email/verify
+        expiresInSeconds:
+          type: integer
+          description: OTP validity window in seconds (e.g. 300)
+    RecoverEmailVerifyRequest:
+      type: object
+      required:
+        - email
+        - code
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: The verified email the recovery OTP was sent to
+        code:
+          type: string
+          pattern: '^\\d{6}$'
+          description: 6-digit recovery code from email
+    SetRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: New role to grant (canonical 7-role set)
+    RebindRequest:
+      type: object
+      description: >-
+        Exactly one of `newPhone`, (`oauthProvider` + `oauthId`), or a clear
+        (`oauthProvider` + `clear: true`) must be provided.
+      properties:
+        newPhone:
+          type: string
+          pattern: '^\\+?[1-9]\\d{1,14}$'
+          description: New phone number (E.164) to bind (re-hashed server-side)
+        oauthProvider:
+          type: string
+          enum: [google, apple, telegram, vk]
+          description: OAuth provider whose identifier to (re)bind or clear
+        oauthId:
+          type: string
+          description: New provider-side id to bind (omit with clear=true to unbind)
+        clear:
+          type: boolean
+          description: When true with oauthProvider, unbinds that OAuth identifier
+        reason:
+          type: string
+          maxLength: 500
+          description: Operator-supplied reason (recorded in audit_log)
     RegisterPhoneRequest:
       type: object
       # (Phase-2/round-7, normative) Aligned with spec 01 round-4: end-user auth is PASSWORDLESS

@@ -95,6 +95,178 @@ paths:
           description: Bad request (invalid or expired code)
         '429':
           description: Too Many Requests (too many attempts / locked out)
+  /auth/recover/email/request:
+    post:
+      summary: Запрос восстановления доступа через подтверждённый email (отправляет OTP)
+      operationId: recoverEmailRequest
+      description: >-
+        (Slice-4, нормативно) Восстановление доступа для пользователя, потерявшего телефон/OAuth,
+        с которыми он регистрировался, но имеющего ПОДТВЕРЖДЁННЫЙ email. Отправляет 6-значный OTP
+        на этот email. Из соображений приватности ВСЕГДА возвращает 202, даже если совпадения
+        нет (защита от перечисления аккаунтов). OTP активирует сессию восстановления только при
+        вызове /auth/recover/email/verify с реальным кодом. Если аккаунт DEACTIVATED в пределах
+        30-дневного grace, успешное восстановление также реактивирует его.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoverEmailRequest'
+      responses:
+        '202':
+          description: Если восстанавливаемый аккаунт с таким подтверждённым email есть — OTP отправлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoverEmailRequestResponse'
+        '400':
+          description: Bad request (ошибка валидации)
+        '429':
+          description: Too Many Requests (rate limit / кулдаун повторной отправки)
+  /auth/recover/email/verify:
+    post:
+      summary: Проверка OTP восстановления по email — выдаёт сессию
+      operationId: recoverEmailVerify
+      description: >-
+        (Slice-4, нормативно) Проверяет OTP восстановления, отправленный на подтверждённый email,
+        и возвращает свежую сессию (access + refresh) и профиль. 5 неудачных попыток → блокировка
+        на 15 минут. SUSPENDED-аккаунты восстановить нельзя (требуется действие оператора).
+        DEACTIVATED в пределах grace реактивируется; после grace — восстановление невозможно.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoverEmailVerifyRequest'
+      responses:
+        '200':
+          description: Восстановление подтверждено; сессия выдана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Bad request (неверный или истёкший код)
+        '403':
+          description: Forbidden (аккаунт не подлежит восстановлению — SUSPENDED или grace истёк)
+        '429':
+          description: Too Many Requests (слишком много попыток / блокировка)
+  /admin/users/{userId}/role:
+    patch:
+      summary: '[ADMIN] Назначение/смена роли пользователя (повышение роли)'
+      operationId: adminSetUserRole
+      description: >-
+        (Slice-4, нормативно) USER → BREEDER/FARMER/VETERINARIAN/GROOMER (и операторские роли)
+        назначаются ADMIN, а не заявляются самим пользователем. Записывается в аудит; смена роли
+        отзывает ВСЕ семейства refresh-токенов целевого пользователя (round-4 «смена роли → отзыв
+        всех семейств»).
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRoleRequest'
+      responses:
+        '200':
+          description: Роль обновлена; сессии цели отозваны
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request (недопустимая роль)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (вызывающий не ADMIN)
+        '404':
+          description: Пользователь не найден
+  /admin/users/{userId}/rebind:
+    post:
+      summary: '[ADMIN] Перепривязка телефона/OAuth-идентификатора (ассистированное восстановление)'
+      operationId: adminRebindIdentifier
+      description: >-
+        (Slice-4, нормативно) ADMIN-ассистированная, записываемая в аудит перепривязка телефона
+        или OAuth-идентификатора для пользователя, потерявшего доступ и не имеющего подтверждённого
+        email. Никакого тихого захвата — действие атрибутируется ADMIN в audit_log. Перепривязка
+        отзывает ВСЕ сессии цели. Ровно один идентификатор (newPhone ЛИБО провайдер+id, либо
+        очистка) за вызов.
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RebindRequest'
+      responses:
+        '200':
+          description: Идентификатор перепривязан; сессии цели отозваны
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request (валидация — не ровно один идентификатор, неверный телефон)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (вызывающий не ADMIN)
+        '404':
+          description: Пользователь не найден
+        '409':
+          description: Conflict (новый идентификатор уже используется другим аккаунтом)
+  /admin/users/{userId}/erase:
+    post:
+      summary: '[ADMIN] Стереть (анонимизировать на месте) пользователя — право на забвение ФЗ-152'
+      operationId: adminEraseUser
+      description: >-
+        (Slice-4, нормативно) Выполняет процедуру `erase_user` (data-governance.md §2):
+        анонимизирует PII в users (UUID сохраняется, чтобы строки FK RESTRICT остались валидными),
+        освобождает идентификаторы (phone_hash / oauth_* / email → NULL), отзывает все сессии,
+        редактирует recipient/content в notification_logs, обнуляет avatar_url. Append-only
+        audit_log/moderation_decisions СОХРАНЯЮТСЯ под юридическим удержанием. Идемпотентно —
+        стирание уже стёртого аккаунта это no-op 200. Статус становится DEACTIVATED с меткой
+        `erased_at`.
+      security:
+        - bearerAuth: []
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200':
+          description: Пользователь стёрт (или уже стёрт — идемпотентно)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (вызывающий не ADMIN)
+        '404':
+          description: Пользователь не найден
+  /me/erase:
+    post:
+      summary: Запрос на стирание текущего аккаунта (ФЗ-152)
+      operationId: eraseMe
+      description: >-
+        (Slice-4, нормативно) Самостоятельное право на забвение. По data-governance.md §2
+        канонический путь: деактивация → 30-дневный grace → стирание. Этот эндпоинт немедленно
+        деактивирует аккаунт, если он ещё ACTIVE, затем планирует/выполняет стирание. В MVP (нет
+        планировщика для grace-задачи) он деактивирует и фиксирует запрос на стирание; собственно
+        анонимизацию выполняет retention-задача / ADMIN после grace. См. Open Questions.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Стирание запрошено; аккаунт деактивирован, анонимизация запланирована после grace
+        '401':
+          description: Unauthorized
   /auth/refresh:
     post:
       summary: Refresh access token using refresh token
@@ -218,7 +390,87 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    UserIdParam:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Идентификатор целевого пользователя (users.id)
   schemas:
+    RecoverEmailRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: Подтверждённый email, привязанный к восстанавливаемому аккаунту
+    RecoverEmailRequestResponse:
+      type: object
+      required:
+        - status
+        - expiresInSeconds
+      properties:
+        status:
+          type: string
+          enum: [VERIFICATION_REQUIRED]
+          description: Всегда VERIFICATION_REQUIRED — подтвердите через /auth/recover/email/verify
+        expiresInSeconds:
+          type: integer
+          description: Окно действия OTP в секундах (напр. 300)
+    RecoverEmailVerifyRequest:
+      type: object
+      required:
+        - email
+        - code
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: Подтверждённый email, на который был отправлен OTP восстановления
+        code:
+          type: string
+          pattern: '^\\d{6}$'
+          description: 6-значный код восстановления из письма
+    SetRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Новая назначаемая роль (канонический набор из 7 ролей)
+    RebindRequest:
+      type: object
+      description: >-
+        Должно быть указано ровно одно из: `newPhone`, (`oauthProvider` + `oauthId`) или очистка
+        (`oauthProvider` + `clear: true`).
+      properties:
+        newPhone:
+          type: string
+          pattern: '^\\+?[1-9]\\d{1,14}$'
+          description: Новый номер телефона (E.164) для привязки (повторно хешируется на сервере)
+        oauthProvider:
+          type: string
+          enum: [google, apple, telegram, vk]
+          description: OAuth-провайдер, идентификатор которого перепривязать или очистить
+        oauthId:
+          type: string
+          description: Новый id на стороне провайдера для привязки (опустить при clear=true)
+        clear:
+          type: boolean
+          description: При true с oauthProvider — отвязывает данный OAuth-идентификатор
+        reason:
+          type: string
+          maxLength: 500
+          description: Причина, указанная оператором (записывается в audit_log)
     RegisterPhoneRequest:
       type: object
       # (Phase-2/round-7, normative) Aligned with spec 01 round-4: end-user auth is PASSWORDLESS

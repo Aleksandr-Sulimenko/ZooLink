@@ -108,6 +108,27 @@ export class ProfileService {
     return toUserProfile(updated);
   }
 
+  /**
+   * Self-service right-to-erasure (ФЗ-152, spec 01 Slice-4). Canonical path = deactivate → 30-day
+   * grace → anonymise. In the MVP there is no scheduler to run the grace job, so this deactivates
+   * immediately (if still active) and records the erasure request in audit_log; the actual
+   * `erase_user` anonymisation is run after grace by the retention job / an ADMIN. Idempotent.
+   */
+  async eraseMe(userId: string): Promise<void> {
+    const user = await this.load(userId);
+    if (user.status !== 'DEACTIVATED' && user.status !== 'SUSPENDED') {
+      await this.prisma.users.update({
+        where: { id: userId },
+        data: { status: 'DEACTIVATED', deactivated_at: new Date(), is_active: false },
+      });
+      await this.auth.logout(userId);
+    }
+    await this.audit.record({
+      actorId: userId, actorRole: user.role, action: 'identity.erasure_requested', entityType: 'user', entityId: userId,
+    });
+    this.logger.log(`Erasure requested (self) for ${userId}`);
+  }
+
   private etag(user: users): string {
     return weakEtag(user.id, user.updated_at);
   }
