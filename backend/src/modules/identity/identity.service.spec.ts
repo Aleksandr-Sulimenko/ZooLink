@@ -1,12 +1,20 @@
-import { BadRequestException, ConflictException, HttpException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdentityService } from './identity.service';
 import { OtpCooldownError } from './otp.service';
+import { OAuthVerificationError, type OAuthProvider } from './oauth/oauth.types';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AppConfigService } from '../../config/app-config.service';
 import type { OtpService } from './otp.service';
 import type { AuthService } from '../auth/auth.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
+import type { OAuthRegistry } from './oauth/oauth.registry';
 import type { SmsProvider } from '../../lib/providers';
 
 function setup(overrides: {
@@ -18,6 +26,7 @@ function setup(overrides: {
   otpAttempts?: jest.Mock;
   issueSession?: jest.Mock;
   sendSms?: jest.Mock;
+  oauthResolve?: jest.Mock;
 } = {}) {
   const prisma = {
     users: {
@@ -54,14 +63,17 @@ function setup(overrides: {
   const sms = { sendSms } as unknown as SmsProvider;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
+  const resolve = overrides.oauthResolve ?? jest.fn();
+  const oauth = { resolve } as unknown as OAuthRegistry;
   const mocks = {
     create: (prisma.users as unknown as { create: jest.Mock }).create,
     update: (prisma.users as unknown as { update: jest.Mock }).update,
     issueSession: (auth as unknown as { issueSession: jest.Mock }).issueSession,
     sendSms,
     record,
+    resolve,
   };
-  return { svc: new IdentityService(prisma, config, otp, auth, audit, sms), mocks };
+  return { svc: new IdentityService(prisma, config, otp, auth, audit, oauth, sms), mocks };
 }
 
 function prismaError(code: string): Prisma.PrismaClientKnownRequestError {
@@ -168,6 +180,74 @@ describe('IdentityService.verifyPhone', () => {
     });
     await expect(svc.verifyPhone({ phone: '+79991234567', code: '123456' })).rejects.toBeInstanceOf(
       ConflictException,
+    );
+  });
+});
+
+describe('IdentityService.oauthLogin', () => {
+  const fakeProvider = (verify: jest.Mock): OAuthProvider =>
+    ({ name: 'google', verify } as unknown as OAuthProvider);
+
+  const activeRow = {
+    id: 'u1',
+    full_name: 'Bob',
+    role: 'USER',
+    status: 'ACTIVE',
+    principal_type: 'HUMAN',
+    city_id: null,
+    email: null,
+    email_verified: false,
+    avatar_url: null,
+    preferred_language: 'ru',
+    created_at: new Date('2026-06-19T00:00:00Z'),
+  };
+
+  it('registers a new OAuth user (201/isNew) ACTIVE and issues a session', async () => {
+    const verify = jest.fn().mockResolvedValue({ providerId: 'g-1', fullName: 'Bob' });
+    const { svc, mocks } = setup({
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue(activeRow),
+      oauthResolve: jest.fn().mockReturnValue(fakeProvider(verify)),
+    });
+    const { response, isNew } = await svc.oauthLogin('google', { code: 'g-1', fullName: 'Bob' });
+    expect(isNew).toBe(true);
+    expect(response.user.status).toBe('ACTIVE');
+    expect(mocks.issueSession).toHaveBeenCalled();
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'identity.oauth_register' }),
+    );
+  });
+
+  it('logs in an existing OAuth user (200/!isNew)', async () => {
+    const verify = jest.fn().mockResolvedValue({ providerId: 'g-1' });
+    const { svc, mocks } = setup({
+      findFirst: jest.fn().mockResolvedValue(activeRow),
+      update: jest.fn().mockResolvedValue(activeRow),
+      oauthResolve: jest.fn().mockReturnValue(fakeProvider(verify)),
+    });
+    const { isNew } = await svc.oauthLogin('google', { code: 'g-1', fullName: 'Bob' });
+    expect(isNew).toBe(false);
+    expect(mocks.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'identity.oauth_login' }),
+    );
+  });
+
+  it('401s when provider verification fails', async () => {
+    const verify = jest.fn().mockRejectedValue(new OAuthVerificationError('bad'));
+    const { svc } = setup({ oauthResolve: jest.fn().mockReturnValue(fakeProvider(verify)) });
+    await expect(svc.oauthLogin('google', { code: 'x', fullName: 'Bob' })).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('403s when an existing OAuth account is suspended', async () => {
+    const verify = jest.fn().mockResolvedValue({ providerId: 'g-1' });
+    const { svc } = setup({
+      findFirst: jest.fn().mockResolvedValue({ ...activeRow, status: 'SUSPENDED' }),
+      oauthResolve: jest.fn().mockReturnValue(fakeProvider(verify)),
+    });
+    await expect(svc.oauthLogin('google', { code: 'g-1', fullName: 'Bob' })).rejects.toBeInstanceOf(
+      ForbiddenException,
     );
   });
 });

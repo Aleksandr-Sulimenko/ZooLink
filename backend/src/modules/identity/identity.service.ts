@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Inject,
   Injectable,
   Logger,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
@@ -16,7 +18,25 @@ import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principa
 import { AuthService, type TokenPair } from '../auth/auth.service';
 import { OtpService, OtpCooldownError } from './otp.service';
 import { normalizePhone, phoneHash } from './phone.util';
-import type { RegisterPhoneDto, VerifyPhoneDto } from './dto/identity.dto';
+import { OAuthRegistry } from './oauth/oauth.registry';
+import { OAuthVerificationError, type OAuthIdentity, type OAuthProviderName } from './oauth/oauth.types';
+import type { OAuthDto, RegisterPhoneDto, VerifyPhoneDto } from './dto/identity.dto';
+
+/** Typed (provider → column) filter for the unique users.oauth_<provider>_id lookup/insert. */
+function oauthColumnFilter(provider: OAuthProviderName, id: string) {
+  switch (provider) {
+    case 'google':
+      return { oauth_google_id: id };
+    case 'apple':
+      return { oauth_apple_id: id };
+    case 'telegram':
+      return { oauth_telegram_id: id };
+    case 'vk':
+      return { oauth_vk_id: id };
+  }
+}
+
+const LOGIN_BLOCKED_STATUSES = new Set(['SUSPENDED', 'DEACTIVATED']);
 
 /** Statuses that mean "this phone already owns a usable/recoverable account" → registration is a conflict. */
 const TAKEN_STATUSES = new Set(['VERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED']);
@@ -49,6 +69,7 @@ export class IdentityService {
     private readonly otp: OtpService,
     private readonly auth: AuthService,
     private readonly audit: AuditLogService,
+    private readonly oauth: OAuthRegistry,
     @Inject(SMS_PROVIDER) private readonly sms: SmsProvider,
   ) {}
 
@@ -162,6 +183,93 @@ export class IdentityService {
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`Phone verified, account ACTIVE: ${activated.id}`);
     return { ...tokens, user: this.toProfile(activated) };
+  }
+
+  /**
+   * OAuth login-or-register. The provider verifies the credential (provider-verified identity ⇒
+   * the account is created directly ACTIVE, no OTP). Returns `isNew` so the controller can answer
+   * 201 (registered) vs 200 (logged in), per the contract.
+   */
+  async oauthLogin(
+    providerName: string,
+    dto: OAuthDto,
+  ): Promise<{ response: AuthResponse; isNew: boolean }> {
+    const provider = this.oauth.resolve(providerName); // 400 unknown / 503 unconfigured-in-prod
+
+    let identity: OAuthIdentity;
+    try {
+      identity = await provider.verify({ code: dto.code });
+    } catch (err) {
+      if (err instanceof OAuthVerificationError) {
+        throw new UnauthorizedException({ message: 'OAuth verification failed', code: 'UNAUTHENTICATED' });
+      }
+      throw err;
+    }
+
+    const filter = oauthColumnFilter(provider.name, identity.providerId);
+    let user = await this.prisma.users.findFirst({ where: filter });
+    let isNew = false;
+
+    if (!user) {
+      try {
+        user = await this.prisma.users.create({
+          data: {
+            ...filter,
+            full_name: identity.fullName ?? dto.fullName,
+            email: identity.email ?? dto.email ?? null,
+            email_verified: identity.emailVerified ?? false,
+            avatar_url: identity.avatarUrl ?? dto.avatarUrl ?? null,
+            city_id: dto.cityId ?? null,
+            preferred_language: dto.preferredLanguage ?? 'ru',
+            role: 'USER',
+            principal_type: 'HUMAN',
+            status: 'ACTIVE',
+            is_active: true,
+            last_login_at: new Date(),
+          },
+        });
+        isNew = true;
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError) {
+          if (err.code === 'P2002') {
+            // concurrent create for the same provider id — fall back to login
+            user = await this.prisma.users.findFirst({ where: filter });
+          } else if (err.code === 'P2003') {
+            throw new BadRequestException({ message: 'Unknown cityId', code: 'VALIDATION_ERROR' });
+          }
+        }
+        if (!user) throw err;
+      }
+    }
+
+    if (LOGIN_BLOCKED_STATUSES.has(user.status)) {
+      throw new ForbiddenException({ message: 'Account is not active', code: 'FORBIDDEN' });
+    }
+
+    if (!isNew) {
+      user = await this.prisma.users.update({
+        where: { id: user.id },
+        data: { last_login_at: new Date() },
+      });
+    }
+
+    await this.audit.record({
+      actorId: user.id,
+      actorRole: user.role,
+      action: isNew ? 'identity.oauth_register' : 'identity.oauth_login',
+      entityType: 'user',
+      entityId: user.id,
+      afterData: { provider: provider.name },
+    });
+
+    const principal: AuthPrincipal = {
+      userId: user.id,
+      role: user.role as Role,
+      principalType: user.principal_type as PrincipalType,
+    };
+    const tokens = await this.auth.issueSession(principal);
+    this.logger.log(`OAuth ${provider.name} ${isNew ? 'register' : 'login'}: ${user.id}`);
+    return { response: { ...tokens, user: this.toProfile(user) }, isNew };
   }
 
   private async sendOtp(ph: string, language: string, phoneE164: string): Promise<number> {

@@ -59,6 +59,41 @@ export class VerifyPhoneDto {
   code!: string;
 }
 
+export class OAuthDto {
+  @ApiProperty({ description: 'Authorization code / id_token / signed login payload from the provider' })
+  @IsString()
+  @MinLength(1)
+  code!: string;
+
+  @ApiProperty({ description: 'Display name (provider data takes precedence)', minLength: 2, maxLength: 100 })
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  fullName!: string;
+
+  @ApiPropertyOptional({ description: 'City id (cities.id) for geo-search' })
+  @IsOptional()
+  @IsInt()
+  cityId?: number;
+
+  @ApiPropertyOptional({ description: 'Email (provider data takes precedence)' })
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(255)
+  email?: string;
+
+  @ApiPropertyOptional({ description: 'Avatar URL' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  avatarUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Preferred language', enum: ['ru', 'en'] })
+  @IsOptional()
+  @IsIn(['ru', 'en'])
+  preferredLanguage?: 'ru' | 'en';
+}
+
 export class RegisterPhoneResponseDto {
   @ApiProperty({ enum: ['VERIFICATION_REQUIRED'] })
   status!: 'VERIFICATION_REQUIRED';

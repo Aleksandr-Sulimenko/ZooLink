@@ -43,6 +43,14 @@ export const envSchema = z.object({
   EMAIL_FROM_NAME: z.string().optional().default('ZooLink'),
   YANDEX_MAPS_API_KEY: z.string().optional().default(''),
 
+  // OAuth providers (ADR-0008). Empty → that provider is stub-in-dev / rejected-in-prod.
+  OAUTH_GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  OAUTH_GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+  OAUTH_APPLE_CLIENT_ID: z.string().optional().default(''),
+  OAUTH_TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
+  OAUTH_VK_CLIENT_ID: z.string().optional().default(''),
+  OAUTH_VK_CLIENT_SECRET: z.string().optional().default(''),
+
   // Payments — Фаза 2+, gated by feature_toggles.payments (ADR-0008). Interface defined now; stub in MVP.
   PAYMENT_PROVIDER: z.string().default('yookassa'),
   YOOKASSA_SHOP_ID: z.string().optional().default(''),

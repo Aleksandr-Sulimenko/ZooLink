@@ -23,7 +23,9 @@ describe('Identity phone OTP (e2e)', () => {
   let prisma: PrismaService;
   const sentCodes: string[] = [];
   const phone = `+7999${Math.floor(1000000 + Math.random() * 8999999)}`;
+  const oauthCode = `ext-oauth-${Math.random().toString(36).slice(2)}`;
   let createdUserId: string | undefined;
+  let createdOauthUserId: string | undefined;
 
   const capturingSms = {
     sendSms: (msg: SmsMessage): Promise<SmsSendResult> => {
@@ -47,7 +49,9 @@ describe('Identity phone OTP (e2e)', () => {
   });
 
   afterAll(async () => {
-    if (createdUserId) await prisma.users.delete({ where: { id: createdUserId } }).catch(() => undefined);
+    for (const id of [createdUserId, createdOauthUserId]) {
+      if (id) await prisma.users.delete({ where: { id } }).catch(() => undefined);
+    }
     await app.close();
   });
 
@@ -96,5 +100,30 @@ describe('Identity phone OTP (e2e)', () => {
       .set('Authorization', `Bearer ${res.body.accessToken as string}`)
       .expect(200);
     expect(who.body).toMatchObject({ userId: createdUserId, role: 'USER', principalType: 'HUMAN' });
+  });
+
+  it('rejects an unknown OAuth provider with 400', async () => {
+    await request(server())
+      .post('/v1/auth/register/oauth/myspace')
+      .send({ code: 'x', fullName: 'X' })
+      .expect(400);
+  });
+
+  it('registers a new OAuth user (201, ACTIVE) via the dev stub provider', async () => {
+    const res = await request(server())
+      .post('/v1/auth/register/oauth/google')
+      .send({ code: oauthCode, fullName: 'Oauth User' })
+      .expect(201);
+    expect(res.body.accessToken).toEqual(expect.any(String));
+    expect(res.body.user).toMatchObject({ fullName: 'Oauth User', role: 'USER', status: 'ACTIVE' });
+    createdOauthUserId = res.body.user.id as string;
+  });
+
+  it('logs in the same OAuth identity on a second call (200)', async () => {
+    const res = await request(server())
+      .post('/v1/auth/register/oauth/google')
+      .send({ code: oauthCode, fullName: 'Oauth User' })
+      .expect(200);
+    expect(res.body.user.id).toBe(createdOauthUserId);
   });
 });
