@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { IdentityController } from './identity.controller';
+import { MeController } from './me.controller';
 import { IdentityService } from './identity.service';
+import { ProfileService } from './profile.service';
 import { OtpService } from './otp.service';
 import { OAuthRegistry } from './oauth/oauth.registry';
 
@@ -10,8 +12,8 @@ import { OAuthRegistry } from './oauth/oauth.registry';
  * (OTP state), PrismaService (users). OAuth / profile (/me) / recovery land in later slices.
  */
 @Module({
-  controllers: [IdentityController],
-  providers: [IdentityService, OtpService, OAuthRegistry],
+  controllers: [IdentityController, MeController],
+  providers: [IdentityService, ProfileService, OtpService, OAuthRegistry],
   exports: [IdentityService],
 })
 export class IdentityModule {}

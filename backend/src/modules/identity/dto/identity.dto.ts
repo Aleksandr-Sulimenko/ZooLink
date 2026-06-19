@@ -94,6 +94,37 @@ export class OAuthDto {
   preferredLanguage?: 'ru' | 'en';
 }
 
+export class UpdateProfileDto {
+  @ApiPropertyOptional({ minLength: 2, maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  fullName?: string;
+
+  @ApiPropertyOptional({ description: 'City id (cities.id); null clears it', nullable: true })
+  @IsOptional()
+  @IsInt()
+  cityId?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(255)
+  email?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  avatarUrl?: string | null;
+
+  @ApiPropertyOptional({ enum: ['ru', 'en'] })
+  @IsOptional()
+  @IsIn(['ru', 'en'])
+  preferredLanguage?: 'ru' | 'en';
+}
+
 export class RegisterPhoneResponseDto {
   @ApiProperty({ enum: ['VERIFICATION_REQUIRED'] })
   status!: 'VERIFICATION_REQUIRED';

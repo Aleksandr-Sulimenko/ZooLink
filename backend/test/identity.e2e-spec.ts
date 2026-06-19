@@ -26,6 +26,7 @@ describe('Identity phone OTP (e2e)', () => {
   const oauthCode = `ext-oauth-${Math.random().toString(36).slice(2)}`;
   let createdUserId: string | undefined;
   let createdOauthUserId: string | undefined;
+  let token: string | undefined;
 
   const capturingSms = {
     sendSms: (msg: SmsMessage): Promise<SmsSendResult> => {
@@ -93,6 +94,7 @@ describe('Identity phone OTP (e2e)', () => {
     expect(res.body.user).toMatchObject({ fullName: 'Ann Tester', role: 'USER', status: 'ACTIVE' });
     expect(res.body.user.phoneHash).toBeUndefined(); // never leak the credential hash
     createdUserId = res.body.user.id as string;
+    token = res.body.accessToken as string;
 
     // the issued access token works on a protected route
     const who = await request(server())
@@ -125,5 +127,62 @@ describe('Identity phone OTP (e2e)', () => {
       .send({ code: oauthCode, fullName: 'Oauth User' })
       .expect(200);
     expect(res.body.user.id).toBe(createdOauthUserId);
+  });
+
+  // ---- /me profile (uses the phone-verified session token) ----
+  const bearer = () => `Bearer ${token ?? ''}`;
+
+  it('GET /me requires auth (401 without token)', async () => {
+    await request(server()).get('/v1/me').expect(401);
+  });
+
+  it('GET /me returns the profile with an ETag, and 304 on If-None-Match', async () => {
+    const res = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    expect(res.body.id).toBe(createdUserId);
+    const etag = res.headers.etag;
+    expect(etag).toMatch(/^W\//);
+    await request(server())
+      .get('/v1/me')
+      .set('Authorization', bearer())
+      .set('If-None-Match', etag)
+      .expect(304);
+  });
+
+  it('PATCH /me requires If-Match (428) and rejects a stale one (412)', async () => {
+    await request(server())
+      .patch('/v1/me')
+      .set('Authorization', bearer())
+      .send({ fullName: 'Renamed' })
+      .expect(428);
+    await request(server())
+      .patch('/v1/me')
+      .set('Authorization', bearer())
+      .set('If-Match', 'W/"stale"')
+      .send({ fullName: 'Renamed' })
+      .expect(412);
+  });
+
+  it('PATCH /me updates with a valid If-Match', async () => {
+    const cur = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    const res = await request(server())
+      .patch('/v1/me')
+      .set('Authorization', bearer())
+      .set('If-Match', cur.headers.etag)
+      .send({ fullName: 'Renamed User', preferredLanguage: 'en' })
+      .expect(200);
+    expect(res.body.fullName).toBe('Renamed User');
+    expect(res.body.preferredLanguage).toBe('en');
+  });
+
+  it('deactivates then reactivates the account', async () => {
+    await request(server()).post('/v1/me').set('Authorization', bearer()).expect(200);
+    const after = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    expect(after.body.status).toBe('DEACTIVATED');
+
+    const re = await request(server())
+      .post('/v1/me/reactivate')
+      .set('Authorization', bearer())
+      .expect(200);
+    expect(re.body.status).toBe('ACTIVE');
   });
 });

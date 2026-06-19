@@ -20,6 +20,7 @@ import { OtpService, OtpCooldownError } from './otp.service';
 import { normalizePhone, phoneHash } from './phone.util';
 import { OAuthRegistry } from './oauth/oauth.registry';
 import { OAuthVerificationError, type OAuthIdentity, type OAuthProviderName } from './oauth/oauth.types';
+import { toUserProfile, type UserProfile } from './user-profile.util';
 import type { OAuthDto, RegisterPhoneDto, VerifyPhoneDto } from './dto/identity.dto';
 
 /** Typed (provider → column) filter for the unique users.oauth_<provider>_id lookup/insert. */
@@ -40,20 +41,6 @@ const LOGIN_BLOCKED_STATUSES = new Set(['SUSPENDED', 'DEACTIVATED']);
 
 /** Statuses that mean "this phone already owns a usable/recoverable account" → registration is a conflict. */
 const TAKEN_STATUSES = new Set(['VERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED']);
-
-export interface UserProfile {
-  id: string;
-  fullName: string;
-  role: Role;
-  status: string;
-  isActive: boolean;
-  cityId: number | null;
-  email: string | null;
-  emailVerified: boolean;
-  avatarUrl: string | null;
-  preferredLanguage: string;
-  createdAt: string;
-}
 
 export interface AuthResponse extends TokenPair {
   user: UserProfile;
@@ -182,7 +169,7 @@ export class IdentityService {
     };
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`Phone verified, account ACTIVE: ${activated.id}`);
-    return { ...tokens, user: this.toProfile(activated) };
+    return { ...tokens, user: toUserProfile(activated) };
   }
 
   /**
@@ -269,7 +256,7 @@ export class IdentityService {
     };
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`OAuth ${provider.name} ${isNew ? 'register' : 'login'}: ${user.id}`);
-    return { response: { ...tokens, user: this.toProfile(user) }, isNew };
+    return { response: { ...tokens, user: toUserProfile(user) }, isNew };
   }
 
   private async sendOtp(ph: string, language: string, phoneE164: string): Promise<number> {
@@ -289,32 +276,6 @@ export class IdentityService {
     return issued.expiresInSeconds;
   }
 
-  private toProfile(u: {
-    id: string;
-    full_name: string;
-    role: string;
-    status: string;
-    city_id: number | null;
-    email: string | null;
-    email_verified: boolean | null;
-    avatar_url: string | null;
-    preferred_language: string;
-    created_at: Date;
-  }): UserProfile {
-    return {
-      id: u.id,
-      fullName: u.full_name,
-      role: u.role as Role,
-      status: u.status,
-      isActive: u.status !== 'SUSPENDED' && u.status !== 'DEACTIVATED',
-      cityId: u.city_id,
-      email: u.email,
-      emailVerified: u.email_verified ?? false,
-      avatarUrl: u.avatar_url,
-      preferredLanguage: u.preferred_language,
-      createdAt: u.created_at.toISOString(),
-    };
-  }
 }
 
 /** Inline OTP SMS text. Template rendering proper moves to the Notification domain (later in Phase 2). */
