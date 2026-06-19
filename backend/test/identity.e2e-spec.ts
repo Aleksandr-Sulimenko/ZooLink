@@ -17,6 +17,7 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { SMS_PROVIDER, EMAIL_PROVIDER } from '../src/lib/providers';
 import type { SmsMessage, SmsSendResult, EmailMessage, EmailSendResult } from '../src/lib/providers';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { resetThrottle } from './throttle-reset.util';
 
 describe('Identity phone OTP (e2e)', () => {
   let app: INestApplication;
@@ -56,6 +57,7 @@ describe('Identity phone OTP (e2e)', () => {
     app.useGlobalFilters(new ProblemExceptionFilter());
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
+    await resetThrottle(app);
     prisma = app.get(PrismaService);
   });
 

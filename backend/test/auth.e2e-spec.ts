@@ -22,6 +22,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { TokenService } from '../src/modules/auth/token.service';
+import { resetThrottle } from './throttle-reset.util';
 
 describe('Auth/AuthZ (e2e)', () => {
   let app: INestApplication;
@@ -42,6 +43,7 @@ describe('Auth/AuthZ (e2e)', () => {
     app.useGlobalFilters(new ProblemExceptionFilter());
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
+    await resetThrottle(app);
 
     const tokens = app.get(TokenService);
     userToken = tokens.signAccess({ userId: randomUUID(), role: 'USER', principalType: 'HUMAN' });
