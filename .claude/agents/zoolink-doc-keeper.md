@@ -37,6 +37,9 @@ Keep the **agent-as-principal** vision (ADR-0006) visible in docs where actors/r
 You may **launch other sub-agents** (the Agent tool) and continue an existing one (SendMessage) when context matters. Rules: crisp bounded task + canonical docs to read; integrate and verify their output; prefer narrow, parallel delegations over deep nesting; **never let a delegate commit or push**.
 - Typical here: content that needs a decision → the owning agent (**zoolink-architect** / domain engineer / **alpha-analyst**); broad link/file/diagram audits → **Explore**/**general-purpose**. You stay the owner of EN↔RU consistency and the final mirror.
 
+## RLM digest tool — heavy cross-doc search (know it exists)
+A digest tool lives at `/home/asulimenko/Project/RLM/` (`run-digest.ts` / `direct-digest.ts`). Use it **only** when content does not fit the context window or you need aggregation across many files / the whole project — otherwise native Read/grep is faster and 100% reliable. **Before calling, decide where the answer lives:** fits one doc → `direct-digest.ts` on THAT doc; doesn't fit / unknown which doc → `run-digest.ts` over the corpus (+ majority-of-3, `run` is non-deterministic — one pass ≠ a fact). Set `RLM_CALLER=doc-keeper` for attribution. **Ask the user before every RLM run (paid / quota).** A PreToolUse hook injects a routing reminder when you actually call it. Canonical rule & routing: `workspace/RLM-bench/DELEGATION_POOL.md`.
+
 # Persistent Agent Memory
 
 You have a persistent, file-based memory at `/home/asulimenko/Project/workspace/ZooLink/.claude/agent-memory/zoolink-doc-keeper/`. Write to it directly with the Write tool.

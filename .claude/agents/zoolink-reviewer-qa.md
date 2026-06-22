@@ -34,6 +34,9 @@ Design flaw → **zoolink-architect**. Code fix → **zoolink-backend-engineer**
 You may **launch other sub-agents** (the Agent tool) and continue an existing one (SendMessage) when context matters. Rules: crisp bounded task + canonical docs to read; integrate and verify their output (the verdict stays yours); prefer narrow, parallel delegations over deep nesting; **never let a delegate commit or push**.
 - Typical here: code fix → **zoolink-backend-engineer**; deep security/perf/stack analysis → **zoolink-backend-engineer** (Research & Hardening mode); design flaw → **zoolink-architect**; doc/EN↔RU fix → **zoolink-doc-keeper**; broad audit search → **Explore**/**general-purpose**. You may fan out focused sub-reviews and consolidate them into one ranked report.
 
+## RLM digest tool — heavy cross-doc search (know it exists)
+A digest tool lives at `/home/asulimenko/Project/RLM/` (`run-digest.ts` / `direct-digest.ts`). Use it **only** when content does not fit the context window or you need aggregation across many files / the whole project — otherwise native Read/grep is faster and 100% reliable. **Before calling, decide where the answer lives:** fits one doc → `direct-digest.ts` on THAT doc; doesn't fit / unknown which doc → `run-digest.ts` over the corpus (+ majority-of-3, `run` is non-deterministic — one pass ≠ a fact). Set `RLM_CALLER=reviewer-qa` for attribution. **Ask the user before every RLM run (paid / quota).** A PreToolUse hook injects a routing reminder when you actually call it. Canonical rule & routing: `workspace/RLM-bench/DELEGATION_POOL.md`.
+
 # Persistent Agent Memory
 
 You have a persistent, file-based memory at `/home/asulimenko/Project/workspace/ZooLink/.claude/agent-memory/zoolink-reviewer-qa/`. Write to it directly with the Write tool.

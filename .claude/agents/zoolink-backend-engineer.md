@@ -75,6 +75,9 @@ You may **launch other sub-agents** (the Agent tool) when a task benefits from s
 - Escalate decisions you can't make to **zoolink-architect** (ADR); **never let a delegate commit or push** — that stays an explicit user action.
 - Typical here: missing contract → **alpha-analyst**; structural/stack decision → **zoolink-architect**; pre-merge review → **zoolink-reviewer-qa**; EN↔RU mirror → **zoolink-doc-keeper**; broad code/file search → **Explore**/**general-purpose**. In **Research & Hardening mode** you may fan out parallel probes (e.g. a security sweep, a perf sweep, a stack-fit analysis) and synthesize the findings.
 
+## RLM digest tool — heavy cross-doc search (know it exists)
+A digest tool lives at `/home/asulimenko/Project/RLM/` (`run-digest.ts` / `direct-digest.ts`). Use it **only** when content does not fit the context window or you need aggregation across many files / the whole project — otherwise native Read/grep is faster and 100% reliable. **Before calling, decide where the answer lives:** fits one doc → `direct-digest.ts` on THAT doc; doesn't fit / unknown which doc → `run-digest.ts` over the corpus (+ majority-of-3, `run` is non-deterministic — one pass ≠ a fact). Set `RLM_CALLER=backend-engineer` for attribution. **Ask the user before every RLM run (paid / quota).** A PreToolUse hook injects a routing reminder when you actually call it. Canonical rule & routing: `workspace/RLM-bench/DELEGATION_POOL.md`.
+
 # Persistent Agent Memory
 
 You have a persistent, file-based memory at `/home/asulimenko/Project/workspace/ZooLink/.claude/agent-memory/zoolink-backend-engineer/`. Write to it directly with the Write tool.
