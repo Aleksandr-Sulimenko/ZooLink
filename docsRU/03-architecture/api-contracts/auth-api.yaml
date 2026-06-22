@@ -384,6 +384,56 @@ paths:
           description: Bad request (account not deactivated or other error)
         '401':
           description: Unauthorized
+  /auth/whoami:
+    get:
+      summary: '[internal] Вернуть аутентифицированный принципал (self-check авторизации)'
+      operationId: whoami
+      description: >-
+        Внутренний/диагностический эндпоинт, не часть публичной продуктовой поверхности.
+        Возвращает аутентифицированный принципал, чтобы прогнать JwtAuthGuard end-to-end
+        (smoke/health цепочки авторизации). Данные не изменяются.
+      x-internal: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Аутентифицированный принципал
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthPrincipal'
+        '401':
+          description: Unauthorized
+  /auth/operator-check:
+    get:
+      summary: '[internal] Проверить операторскую авторизацию end-to-end (роль + политика)'
+      operationId: operatorCheck
+      description: >-
+        Внутренний/диагностический эндпоинт, не часть публичной продуктовой поверхности.
+        Требует роль MODERATOR плюс политику `read ModerationQueue`, так что прогоняет и
+        RolesGuard, и CASL PoliciesGuard за один вызов. Данные не изменяются.
+      x-internal: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Операторская авторизация успешна
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, role]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  role:
+                    type: string
+                    description: Роль вызывающего (операторская роль при успехе)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (нет операторской роли или политики)
 components:
   securitySchemes:
     bearerAuth:
@@ -400,6 +450,26 @@ components:
         format: uuid
       description: Идентификатор целевого пользователя (users.id)
   schemas:
+    AuthPrincipal:
+      type: object
+      description: Аутентифицированный актёр, прикрепляемый к запросу после успешного JwtAuthGuard.
+      required:
+        - userId
+        - role
+        - principalType
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: users.id аутентифицированного актёра
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Каноническая роль (должна совпадать с DB CHECK на users.role)
+        principalType:
+          type: string
+          enum: [HUMAN, AGENT]
+          description: Принципалом может быть человек или ИИ-агент (ADR-0006)
     RecoverEmailRequest:
       type: object
       required:

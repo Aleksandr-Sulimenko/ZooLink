@@ -381,6 +381,56 @@ paths:
           description: Bad request (account not deactivated or other error)
         '401':
           description: Unauthorized
+  /auth/whoami:
+    get:
+      summary: '[internal] Return the authenticated principal (auth self-check)'
+      operationId: whoami
+      description: >-
+        Internal/diagnostic endpoint, not part of the public product surface. Echoes the
+        authenticated principal so the JwtAuthGuard can be exercised end-to-end (smoke/health of
+        the auth chain). No data is mutated.
+      x-internal: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The authenticated principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthPrincipal'
+        '401':
+          description: Unauthorized
+  /auth/operator-check:
+    get:
+      summary: '[internal] Verify operator AuthZ end-to-end (role + policy)'
+      operationId: operatorCheck
+      description: >-
+        Internal/diagnostic endpoint, not part of the public product surface. Requires the
+        MODERATOR role plus a `read ModerationQueue` policy, so it exercises both the RolesGuard
+        and the CASL PoliciesGuard in one call. No data is mutated.
+      x-internal: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Operator authorization succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, role]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  role:
+                    type: string
+                    description: The caller's role (operator role on success)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (lacks the operator role or policy)
 components:
   securitySchemes:
     bearerAuth:
@@ -397,6 +447,26 @@ components:
         format: uuid
       description: Target user id (users.id)
   schemas:
+    AuthPrincipal:
+      type: object
+      description: The authenticated actor attached to a request after JwtAuthGuard succeeds.
+      required:
+        - userId
+        - role
+        - principalType
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: users.id of the authenticated actor
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Canonical role (must match the DB CHECK on users.role)
+        principalType:
+          type: string
+          enum: [HUMAN, AGENT]
+          description: A principal may be a human or an AI agent (ADR-0006)
     RecoverEmailRequest:
       type: object
       required:
