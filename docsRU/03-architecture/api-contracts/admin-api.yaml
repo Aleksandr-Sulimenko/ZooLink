@@ -2,7 +2,35 @@ openapi: 3.0.3
 info:
   title: ZooLink Admin API
   version: 1.0.0
-  description: API for managing reference data, moderation workflows, and system settings in ZooLink.
+  description: >-
+    API for managing reference data, moderation workflows, and system settings in ZooLink.
+
+
+    Reference-data `dataset` reconciliation (round-9, normative) — aligned to the actual schema
+    (`database_schema.sql`) and rbac-matrix.md ("Reference data (species, breeds, cities)").
+
+    WHAT: the `dataset` enum is narrowed from 8 speculative values to the **3 managed lookup tables**
+    that exist as CRUD-able admin reference data: `species`, `breeds`, `cities`.
+    The other 5 are NOT admin-managed lookup tables and are removed from the enum:
+      - `listing-types`  → fixed DB CHECK enum on `listings.listing_type`
+                           ('sale','breeding','show','adoption','stud_service'); changing it is a
+                           schema/ADR change, not row CRUD.
+      - `animal-statuses`→ fixed DB CHECK enums on `listings.status` / `animals` lifecycle; same as above.
+      - `traits`         → no table; deferred (Animal/breeding domain not yet built — Фаза 2).
+      - `health-certifications` → no table; health data is JSONB on animals; deferred (Фаза 2).
+      - `genetic-markers`→ no table; gated behind `feature_toggles.genetics_portal` (off) — deferred (Фаза 2).
+
+    WHY: only species/breeds/cities are INT-keyed managed lookups in the schema; the contract listed
+    datasets with no backing managed table, which would let clients call endpoints that cannot exist
+    and contradicts the RBAC matrix (CRUD scope = species, breeds, cities only).
+
+    WHY BETTER: the contract now matches the source of truth (schema + RBAC), prevents 404/handler
+    drift, keeps MVP scope honest (no Фаза-2 leakage), and leaves a documented path to re-add a
+    dataset once it has a real managed table (then extend this enum + add the slice).
+
+    Also (round-9): reference-data entry `id` is an **integer** (SERIAL lookup keys per the id-type
+    convention: lookups=INT, entities=UUID), not a UUID; and list responses use the standard
+    `{ items, meta: PageMeta }` envelope (API_CONVENTIONS.md §5), not `{ items, total, page, limit }`.
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -17,7 +45,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
         - in: query
           name: includeInactive
@@ -82,7 +110,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
       security:
         - bearerAuth: []
@@ -115,7 +143,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
       security:
         - bearerAuth: []
@@ -142,15 +170,15 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
         - in: path
           name: id
           required: true
           schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
+            type: integer
+            minimum: 1
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
       security:
         - bearerAuth: []
       responses:
@@ -175,15 +203,15 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
         - in: path
           name: id
           required: true
           schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
+            type: integer
+            minimum: 1
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
       security:
         - bearerAuth: []
       requestBody:
@@ -217,15 +245,15 @@ paths:
           required: true
           schema:
             type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+            enum: [species, breeds, cities]
           description: Reference dataset name
         - in: path
           name: id
           required: true
           schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
+            type: integer
+            minimum: 1
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
       security:
         - bearerAuth: []
       responses:
@@ -700,41 +728,51 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    # round-9: reconciled to database_schema.sql. Lookup tables (species/breeds/cities) carry
+    # name_ru + name_en (both NOT NULL) — bilingual, not a single 'name'. `code` is present only on
+    # species/breeds (UNIQUE: species globally, breeds per-species); cities have no code. `species_id`
+    # is REQUIRED for breeds (FK → species, breed must belong to a species). No description/version/
+    # deactivated_at columns exist; soft-delete = is_active boolean.
     ReferenceDataEntry:
       type: object
       required:
         - id
-        - code
-        - name
+        - name_ru
+        - name_en
         - isActive
         - createdAt
         - updatedAt
       properties:
         id:
-          type: string
-          format: uuid
-          description: Unique identifier
+          type: integer
+          minimum: 1
+          description: Unique identifier (SERIAL; lookups=INT per id-type convention)
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset (e.g., 'dog', 'labrador')
-        name:
+          nullable: true
+          description: Unique code within dataset (species/breeds only; null for cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: Parent species id (breeds only; null otherwise)
+        name_ru:
           type: string
           maxLength: 100
-          description: 'Display name (localized for MVP: Russian)'
+          description: Russian display name
         name_en:
           type: string
           maxLength: 100
-          nullable: true
-          description: English name (for future phases)
-        description:
+          description: English display name
+        market:
           type: string
-          maxLength: 500
+          enum: [pet, livestock]
           nullable: true
-          description: Detailed description (optional)
+          description: Market the species belongs to (species only; ADR-0002)
         isActive:
           type: boolean
-          description: Whether entry is active (can be deactivated without deletion)
+          description: Whether entry is active (deactivated via is_active=false, not deleted)
         createdAt:
           type: string
           format: date-time
@@ -743,60 +781,54 @@ components:
           type: string
           format: date-time
           description: Last update timestamp
-        deactivatedAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: When entry was deactivated (null if active)
-        version:
-          type: integer
-          default: 1
-          description: Version number for optimistic locking
     ReferenceDataCreateRequest:
       type: object
       required:
-        - code
-        - name
+        - name_ru
+        - name_en
       properties:
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset
-        name:
+          description: Unique code (required for species/breeds; rejected for cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          description: Parent species id (required for breeds; rejected for species/cities)
+        name_ru:
           type: string
           maxLength: 100
-          description: Display name (Russian)
+          description: Russian display name
         name_en:
           type: string
           maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
+          description: English display name
+        market:
           type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Market (species only; defaults to 'pet' when omitted)
         isActive:
           type: boolean
           default: true
           description: Whether entry is active upon creation
     ReferenceDataUpdateRequest:
       type: object
+      description: >-
+        Partial update. `code`/`speciesId` are immutable (identity of the lookup row); only the
+        display names, market (species) and is_active may change.
       properties:
-        name:
+        name_ru:
           type: string
           maxLength: 100
-          description: Display name (Russian)
+          description: Russian display name
         name_en:
           type: string
           maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
+          description: English display name
+        market:
           type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Market (species only)
         isActive:
           type: boolean
           description: Whether entry is active

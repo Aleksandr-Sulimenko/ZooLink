@@ -11,6 +11,7 @@ import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module'
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { IdentityModule } from './modules/identity/identity.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -33,6 +34,7 @@ import { HealthModule } from './health/health.module';
     OutboxModule,
     AuthModule,
     IdentityModule,
+    AdminModule,
     HealthModule,
   ],
 })

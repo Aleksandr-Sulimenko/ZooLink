@@ -72,6 +72,18 @@ This specification addresses the following Non-Functional Requirements:
   - Versioning and change history for reference data
   - Notification system for users when reference data changes affect their listings
 
+> **Implementation scope (round-9, normative — Admin Slice 1).** Only the **managed lookup tables that
+> exist in `database_schema.sql` are CRUD-able reference data: `species`, `breeds`, `cities`** (matches
+> rbac-matrix.md "Reference data (species, breeds, cities) = ADMIN C/R/U/D"). "Listing types" and
+> "animal/health statuses" are **fixed DB CHECK enums** (`listings.listing_type`, `listings.status`,
+> animal lifecycle), not row-CRUD — changing them is a schema/ADR change. Traits, health-certifications
+> and genetic-markers have **no managed table** and are deferred to Фаза 2 (the latter gated by
+> `feature_toggles.genetics_portal`). Lookup ids are **INT** (id-type convention). Bulk import/export
+> and change-history/versioning are deferred (no `version`/`deactivated_at` columns in MVP; soft-delete =
+> `is_active`); the audit_log records every mutation. WHY: contract must match the source of truth
+> (schema + RBAC); WHY BETTER: prevents endpoints that cannot exist, keeps MVP scope honest, leaves a
+> clean path to add a dataset once it has a real table. See `api-contracts/admin-api.yaml` (reconciled).
+
 **UC-AD-04:** As an administrator, I want to monitor system activity and security so that I can detect and respond to potential issues.
 - Acceptance Criteria:
   - Audit log viewer loads in <2s
