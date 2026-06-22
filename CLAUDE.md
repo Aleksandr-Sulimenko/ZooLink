@@ -28,6 +28,7 @@ RFC7807 `application/problem+json` (`type/title/status/code`); `page`/`limit` + 
 - **MVP-границы:** не тащить Фазу 2+ (платежи/NFT/чат/AI-операторы/микросервисы/K8s/Elasticsearch/PostGIS) в код — только хуки/гейты; Payment за `feature_toggles.payments` (off).
 - **agent-as-principal (ADR-0006):** где фиксируется актёр (модерация, audit_log, админ-действия) — принципалом может быть ИИ-агент (`users.principal_type HUMAN|AGENT`); сохранять идентичность актёра, аудит и human-override.
 - **Git:** ветка `backend`; коммит/пуш — только по явной просьбе пользователя.
+- **RLM digest (тяжёлый кросс-док поиск/агрегация/дайджест):** инструмент `/home/asulimenko/Project/RLM/` — звать **только** когда контент не влезает в контекст или нужна агрегация по многим файлам/всему проекту (иначе нативный Read/grep — быстрее и надёжнее). ДО вызова: определи, **где живёт ответ** → влезает в окно → `direct` на этот док; не влезает → `run` по корпусу (+majority-of-3, run недетерминирован). Запуск с `RLM_CALLER=<имя-агента>` (трекинг), **спросить пользователя перед каждым запуском** (платно). Полное правило/маршрутизация — корневой `workspace/CLAUDE.md` (RAG/RLM) + `workspace/RLM-bench/DELEGATION_POOL.md` + память `rlm-delegation-rule`.
 
 ## Частые команды (из `backend/`)
 `npm run start:dev` · `npm run worker:dev` · `npm run build` · `npm run typecheck` · `npm run lint` · `npm test` · `npm run db:sync` · `npm run seed`. Полный стек: `docker compose up -d --build` (из корня репо).
