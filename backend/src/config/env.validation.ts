@@ -32,6 +32,16 @@ export const envSchema = z.object({
   // (spec 01 round-4). Must be long/secret; rotating it invalidates phone-based lookups.
   PHONE_HASH_PEPPER: z.string().min(32),
 
+  // Agent service-auth signing secret (ADR-0011 §5.2). FORM ONLY in MVP: declared and length-validated
+  // (≥32) at boot, but the AGENT gate is off so no agent service token is ever issued/verified. Optional
+  // in dev/test; the prod-required check is enforced by the .superRefine below (same discipline as JWT
+  // secrets). Empty string is treated as "not set" so dev/test boot without it.
+  AGENT_SERVICE_SIGNING_SECRET: z
+    .string()
+    .min(32)
+    .optional()
+    .or(z.literal('')),
+
   // Providers (ADR-0008). Empty credential → that adapter runs in stub mode.
   SMS_PROVIDER: z.string().default('smsru'),
   SMSRU_API_ID: z.string().optional().default(''),
@@ -73,6 +83,16 @@ export function validateEnv(config: Record<string, unknown>): Env {
       .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+  // ADR-0011 §5.2: the agent service-signing secret is optional in dev/test (form-only, gate off) but
+  // MUST be present (≥32) in production so the form is boot-ready the moment the AGENT gate is enabled.
+  if (
+    parsed.data.NODE_ENV === 'production' &&
+    !parsed.data.AGENT_SERVICE_SIGNING_SECRET
+  ) {
+    throw new Error(
+      'Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: required in production (min 32 chars)',
+    );
   }
   return parsed.data;
 }

@@ -165,7 +165,7 @@ CREATE TABLE listings (
 ```sql
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    phone_hash VARCHAR(60),
+    phone_hash VARCHAR(60), -- детерминированный HMAC-SHA256(phone, server_pepper), уникальный; НЕ bcrypt (spec 01 round-4)
     oauth_google_id VARCHAR(255),
     oauth_apple_id VARCHAR(255),
     oauth_telegram_id VARCHAR(255),
@@ -249,6 +249,49 @@ CREATE TABLE users (
 - Индексы на справочных таблицах (species, breeds, cities)
 - Индексы на таблицах истории владения и организационных связях
 
+## Модель справочных данных (species / breeds / cities)
+
+Три управляемые админом lookup-таблицы разделяют одну расширяемую форму (миграция 0018):
+
+- **Локализованное имя** — отображаемое имя представлено единой колонкой `name_localized JSONB {ru,en}`
+  (НЕ плоскими `name_ru`/`name_en`). Это соответствует канону `*_localized` JSONB, применяемому в
+  `organizations`/`branches`/`animals`, SQL-хелперам `get_localized()`/`has_translation()`,
+  `localization_specification.md` и `API_CONVENTIONS.md §6`. Новый язык добавляется записью ещё одного
+  JSON-ключа — **без изменения схемы**. Чтения для админа/редактора возвращают полный `LocalizedString`
+  (`nameLocalized`); публичные чтения возвращают разрешённую строку `name` для `Accept-Language` (фолбэк на
+  en). Локализованный поиск обеспечивают per-locale индексы `GIN ((name_localized -> 'xx'))`.
+- **Provenance и порядок** — `created_by`/`updated_by` (nullable `FK → users(id) ON DELETE SET NULL`,
+  готовность к agent-as-principal по ADR-0006: строку-изменение может владеть AGENT) и `sort_order INTEGER`
+  (порядок отображения; списки `ORDER BY sort_order, id`). Мягкое удаление через `is_active` (без удаления
+  строк → безопасность FK).
+- **Расширяемость реестра (паттерн кода)** — backend-модуль reference-data управляется датасетами:
+  управляемый набор — это один кортеж `DATASETS` и таблица `CAPS` (per-dataset флаги `{code, speciesId, market}`)
+  в `modules/admin/dto/reference-data.dto.ts` + `reference-data.service.ts`. `ParseDatasetPipe` валидирует
+  сегмент пути `{dataset}` против `DATASETS`. Добавить новую lookup-таблицу = добавить её в `DATASETS` + запись
+  `CAPS` + Prisma-делегат — **без изменения формы CRUD/audit/локализации**. (Является ли кандидат управляемым
+  датасетом или фиксированным CHECK-enum — решается по `specs/06-admin-domain.md`.)
+
+**Словари разведения (A3, миграция 0019).** `health_certifications` и `genetic_markers` — ещё две
+управляемые админом lookup-таблицы в **той же форме** (`id` INT PK, `code`, `name_localized` JSONB {ru,en},
+`market`, `sort_order`, `is_active`, `created_by`/`updated_by`, per-locale GIN, триггер
+`update_<tbl>_updated_at`), добавленные потому, что фильтры поиска по livestock в
+`business-requirements/livestock-marketplace.md` (`health_certifications`, `genetic_flags`) ссылались на
+контролируемые словари, у которых не было таблицы (GAP-TRACE-002). Они были поглощены реестром **без
+изменения формы** — это доказательство расширяемости A2 — поэтому управляемый набор `dataset` вырос `3 → 5`
+(`species, breeds, cities, health_certifications, genetic_markers`). Уникальность — `(market, code)`
+(симметрично breeds' `(species_id, code)`): код может повторяться между рынками, но уникален внутри одного.
+**Форма сейчас, поведение потом:** **фильтрация** маркетплейса, потребляющая эти словари, остаётся отложенной
+(Фаза 2, сторона генетики гейтится `feature_toggles.genetics_portal`); в MVP существуют только форма таблиц +
+admin CRUD. Pet-side soft-tags `temperament_tags`/`health_flags` сознательно сделаны **свободным текстом/JSONB,
+не таблицами** (lookup можно добавить аддитивно в Фазе 2 без переписывания); `animal-statuses` — это
+**state CHECK enum, не датасет**; `decision-templates` (модерация) **отложены к контракту модерации** (связаны с
+формой модерации, а не с обобщённым reference-data).
+
+Аудит CRUD справочных данных: id у lookup'ов — `INT`, а `audit_log.entity_id` — `UUID`. Миграция 0018 добавляет
+`audit_log.entity_id_int INTEGER` (частичный индекс `idx_audit_log_entity_int`), чтобы INT-ключевая сущность
+аудировалась по своему реальному id; UUID-сущности продолжают использовать `entity_id`. Ровно одна из двух
+колонок заполняется на строку.
+
 ## Операционные домены (Moderation / Payment / Notification / Ownership Transfer)
 
 Полный DDL перечисленных таблиц находится в `database_schema.sql` (источник истины); контракты доменов
@@ -258,7 +301,7 @@ CREATE TABLE users (
 | Таблица | Спека домена | Примечания |
 |---|---|---|
 | `moderation_reasons` | `specs/12-moderation-domain.md` | Настраиваемые админом коды причин (справочник) |
-| `moderation_decisions` | `specs/12-moderation-domain.md` | Append-only журнал аудита (UPDATE/DELETE блокируется триггером) |
+| `moderation_decisions` | `specs/12-moderation-domain.md` · `../04-decisions/0011-agent-principal-actor-model.md` | Append-only журнал аудита (UPDATE/DELETE блокируется триггером). ADR-0011 actor-snapshot (`actor_principal_type` HUMAN/AGENT, `actor_role`) + цепочка human-override (`supersedes_decision_id` self-ref FK ON DELETE RESTRICT, `is_human_override`, биусловный `chk_moddec_override`) |
 | `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (минорные единицы, никогда FLOAT); `idempotency_key` UNIQUE |
 | `refunds` | `specs/14-payment-domain.md` | Связаны с `payment_transactions` |
 | `notification_templates` | `specs/13-notification-domain.md` | По языкам; FK на `supported_languages` |
@@ -314,6 +357,52 @@ CREATE TABLE users (
 - Временные метки: `created_at` везде; `updated_at` поддерживается триггером, который вешается ровно на те таблицы, где есть эта колонка (выводится из схемы, миграция 0013). У append/log-таблиц (`outbox_events`, `audit_log`, `animal_ownership_history`, `messages`) колонки `updated_at` и такого триггера нет
 - Аудит: append-only таблица `audit_log` (неизменяемость на уровне БД) для привилегированных операций
 
+### Модель Actor-Principal на append-only журналах (ADR-0011)
+
+Оба append-only журнала актёров — `audit_log` и `moderation_decisions` — записывают действующего принципала
+**как снимок на момент записи**, никогда не как join во время чтения к `users` (где хранится *текущий*,
+изменяемый `principal_type`/`role`). Неизменяемая строка обязана отражать кто/что действовал *в момент
+действия*.
+
+- **`actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'`** (CHECK `HUMAN|AGENT`) на обеих таблицах.
+  `DEFAULT 'HUMAN'` — истина MVP (ни один агент не активен); колонка присутствует уже сейчас, потому что
+  отсутствующий атрибут на append-only строке уже нельзя достоверно восстановить после того, как любой AGENT
+  начнёт действовать. `principal_type` **ортогонален `role`** — никакой кросс-колоночный CHECK их не связывает
+  (ADR-0011 §7).
+- **`moderation_decisions.actor_role VARCHAR(20)`** — свободный снимок роли, которую актёр держал при принятии
+  решения (nullable; намеренно **без** enum CHECK, так как enum ролей может эволюционировать). Зеркалит
+  `audit_log.actor_role`, который уже существовал.
+- **Цепочка human-override** — человек, отменяющий решение агента, вставляет **новую append-only строку**
+  (никогда не мутацию): `is_human_override = TRUE`, `supersedes_decision_id` → отменяемое решение
+  (само-ссылающийся FK, `ON DELETE RESTRICT`). Обе строки остаются навсегда; цепочка агент→человек полностью
+  реконструируема. Биусловный `chk_moddec_override` обеспечивает `is_human_override = TRUE ⇔
+  supersedes_decision_id IS NOT NULL`. Правило сервис-слоя (не DB CHECK, так как охватывает несколько строк)
+  требует, чтобы у override-строки `actor_principal_type = 'HUMAN'`, а её `supersedes_decision_id` ссылался на
+  решение по **тому же** `(entity_type, entity_id)`. Сторона чтения вычисляет «последнее действующее решение»,
+  следуя по `supersedes_decision_id` (индекс `idx_moddec_supersedes`).
+- **Хранилище сервис-учёток агента** — `service_credentials` (ADR-0011 §5.3/§C, A0b, миграция 0017),
+  **форвард-совместимая ФОРМА**: внутримонолитное хранилище хешированного секрета, привязанное к агенту
+  (`agent_user_id` FK `users.id`, `ON DELETE RESTRICT`), **ротируемое** (`rotated_from` self-FK = новые выпуски
+  связываются со старыми) и **отзываемое** (`is_active` / `revoked_at`), c **только `secret_hash`** в покое
+  (никогда не plaintext) и без отдельного auth-сервиса. В MVP это **ТОЛЬКО ФОРМА**: гейт AGENT выключен, поэтому
+  строка не создаётся и секрет не проверяется; заглушка `AgentServiceTokenAuthenticator` не в цепочке
+  аутентификаторов и всегда возвращает `null`. Активация сервис-auth агента позже (ADR-0006 P-A…P-D) не требует
+  переписывания схемы.
+- **Цепочка аутентификаторов** (ADR-0011 §5) — аутентификация вынесена из `JwtAuthGuard` в упорядоченную
+  цепочку `RequestAuthenticator`, порождающую источник-агностичный `AuthPrincipal {userId, role, principalType}`.
+  `BearerJwtAuthenticator` — единственное звено сегодня (люди-конечные-пользователи + операторы);
+  `AgentServiceTokenAuthenticator` — аддитивное будущее звено (gated). RBAC/CASL/actor-snapshotting потребляют
+  абстракцию принципала, поэтому добавление агентов — это один лишний аутентификатор, а не переписывание
+  guard/authz. Env `AGENT_SERVICE_SIGNING_SECRET` (≥32; опционален в dev/test, обязателен в production) — это
+  форма подписывающего секрета, не используется пока gated.
+- **Жизненный цикл агента** = деактивация, никогда не удаление (`users.status='DEACTIVATED'`), поэтому
+  FK `ON DELETE RESTRICT` из журналов никогда не осиротеют.
+
+Канон `organization_users.role_in_org` — это набор из **4 значений** `{OWNER, ADMIN, STAFF, VET}`
+(`chk_org_user_role`). `MODERATOR` — это роль платформенного оператора, **а не** роль членства в организации
+(ADR-0011 §7); ранее противоречивые inline CHECK и комментарий колонки были исправлены под действующее
+именованное ограничение.
+
 ## Связанные решения
 
 - [ADR-0001: Выбор технологического стека](../04-decisions/0001-tech-stack.md)
@@ -321,6 +410,7 @@ CREATE TABLE users (
 - [ADR-0003: Премодерация рабочего процесса](../04-decisions/0003-pre-moderation-workflow.md)
 - [ADR-0004: Животное как агрегатный корень](../04-decisions/0004-animal-as-aggregate.md)
 - [ADR-0005: Нет встроенного чата в MVP](../04-decisions/0005-no-chat-mvp.md)
+- [ADR-0011: Модель Agent-Principal Actor (снимок актёра, human-override, канон ролей)](../04-decisions/0011-agent-principal-actor-model.md)
 
 ## Диаграмма ERD
 

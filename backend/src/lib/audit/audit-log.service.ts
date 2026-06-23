@@ -30,6 +30,7 @@ export class AuditLogService {
         action: entry.action,
         entity_type: entry.entityType ?? null,
         entity_id: entry.entityId ?? null,
+        entity_id_int: entry.entityIdInt ?? null,
         before_data: jsonInput(entry.beforeData),
         after_data: jsonInput(entry.afterData),
         ip_address: entry.ipAddress ?? null,

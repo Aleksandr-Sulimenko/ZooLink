@@ -90,6 +90,7 @@ model audit_log {
   user_agent           String?
   created_at           DateTime @default(now()) @db.Timestamptz(6)
   actor_principal_type String   @default("HUMAN") @db.VarChar(10)
+  entity_id_int        Int?
   users                users?   @relation(fields: [actor_id], references: [id], onUpdate: NoAction)
 
   @@index([actor_id, created_at], map: "idx_audit_log_actor")
@@ -120,33 +121,43 @@ model branches {
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model breeds {
   id                                          Int       @id @default(autoincrement())
   species_id                                  Int
   code                                        String    @db.VarChar(50)
-  name_ru                                     String    @db.VarChar(100)
-  name_en                                     String    @db.VarChar(100)
   created_at                                  DateTime  @default(now()) @db.Timestamptz(6)
   updated_at                                  DateTime  @default(now()) @db.Timestamptz(6)
   is_active                                   Boolean   @default(true)
+  sort_order                                  Int       @default(0)
+  created_by                                  String?   @db.Uuid
+  updated_by                                  String?   @db.Uuid
+  name_localized                              Json      @default("{\"en\": \"\", \"ru\": \"\"}")
   animals_animals_breed_idTobreeds            animals[] @relation("animals_breed_idTobreeds")
   animals_animals_breed_id_species_idTobreeds animals[] @relation("animals_breed_id_species_idTobreeds")
+  users_breeds_created_byTousers              users?    @relation("breeds_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
   species                                     species   @relation(fields: [species_id], references: [id], onUpdate: NoAction)
+  users_breeds_updated_byTousers              users?    @relation("breeds_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
 
   @@unique([species_id, code])
   @@unique([id, species_id], map: "uq_breeds_id_species")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model cities {
-  id         Int        @id @default(autoincrement())
-  name_ru    String     @db.VarChar(100)
-  name_en    String     @db.VarChar(100)
-  created_at DateTime   @default(now()) @db.Timestamptz(6)
-  updated_at DateTime   @default(now()) @db.Timestamptz(6)
-  is_active  Boolean    @default(true)
-  branches   branches[]
-  users      users[]
+  id                             Int        @id @default(autoincrement())
+  created_at                     DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at                     DateTime   @default(now()) @db.Timestamptz(6)
+  is_active                      Boolean    @default(true)
+  sort_order                     Int        @default(0)
+  created_by                     String?    @db.Uuid
+  updated_by                     String?    @db.Uuid
+  name_localized                 Json       @default("{\"en\": \"\", \"ru\": \"\"}")
+  branches                       branches[]
+  users_cities_created_byTousers users?     @relation("cities_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
+  users_cities_updated_byTousers users?     @relation("cities_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
+  users                          users[]
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -568,17 +579,22 @@ model saved_searches {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model species {
-  id         Int       @id @default(autoincrement())
-  code       String    @unique @db.VarChar(50)
-  name_ru    String    @db.VarChar(100)
-  name_en    String    @db.VarChar(100)
-  created_at DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at DateTime  @default(now()) @db.Timestamptz(6)
-  market     String    @default("pet") @db.VarChar(10)
-  is_active  Boolean   @default(true)
-  animals    animals[]
-  breeds     breeds[]
+  id                              Int       @id @default(autoincrement())
+  code                            String    @unique @db.VarChar(50)
+  created_at                      DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime  @default(now()) @db.Timestamptz(6)
+  market                          String    @default("pet") @db.VarChar(10)
+  is_active                       Boolean   @default(true)
+  sort_order                      Int       @default(0)
+  created_by                      String?   @db.Uuid
+  updated_by                      String?   @db.Uuid
+  name_localized                  Json      @default("{\"en\": \"\", \"ru\": \"\"}")
+  animals                         animals[]
+  breeds                          breeds[]
+  users_species_created_byTousers users?    @relation("species_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
+  users_species_updated_byTousers users?    @relation("species_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -626,6 +642,10 @@ model users {
   animal_ownership_history                                        animal_ownership_history[]
   animals                                                         animals[]
   audit_log                                                       audit_log[]
+  breeds_breeds_created_byTousers                                 breeds[]                   @relation("breeds_created_byTousers")
+  breeds_breeds_updated_byTousers                                 breeds[]                   @relation("breeds_updated_byTousers")
+  cities_cities_created_byTousers                                 cities[]                   @relation("cities_created_byTousers")
+  cities_cities_updated_byTousers                                 cities[]                   @relation("cities_updated_byTousers")
   contact_reveals_contact_reveals_seller_idTousers                contact_reveals[]          @relation("contact_reveals_seller_idTousers")
   contact_reveals_contact_reveals_viewer_idTousers                contact_reveals[]          @relation("contact_reveals_viewer_idTousers")
   content_reports_content_reports_reporter_idTousers              content_reports[]          @relation("content_reports_reporter_idTousers")
@@ -634,6 +654,10 @@ model users {
   conversations_conversations_participant_b_idTousers             conversations[]            @relation("conversations_participant_b_idTousers")
   favorites                                                       favorites[]
   feature_toggles                                                 feature_toggles[]
+  genetic_markers_genetic_markers_created_byTousers               genetic_markers[]          @relation("genetic_markers_created_byTousers")
+  genetic_markers_genetic_markers_updated_byTousers               genetic_markers[]          @relation("genetic_markers_updated_byTousers")
+  health_certifications_health_certifications_created_byTousers   health_certifications[]    @relation("health_certifications_created_byTousers")
+  health_certifications_health_certifications_updated_byTousers   health_certifications[]    @relation("health_certifications_updated_byTousers")
   listings_listings_assigned_toTousers                            listings[]                 @relation("listings_assigned_toTousers")
   listings_listings_seller_idTousers                              listings[]                 @relation("listings_seller_idTousers")
   messages_messages_recipient_idTousers                           messages[]                 @relation("messages_recipient_idTousers")
@@ -647,10 +671,66 @@ model users {
   payment_transactions                                            payment_transactions[]
   refresh_tokens                                                  refresh_tokens[]
   saved_searches                                                  saved_searches[]
+  service_credentials                                             service_credentials[]
+  species_species_created_byTousers                               species[]                  @relation("species_created_byTousers")
+  species_species_updated_byTousers                               species[]                  @relation("species_updated_byTousers")
   cities                                                          cities?                    @relation(fields: [city_id], references: [id], onUpdate: NoAction)
   supported_languages                                             supported_languages        @relation(fields: [preferred_language], references: [code], onUpdate: NoAction)
 
   @@index([city_id], map: "idx_users_city")
   @@index([role], map: "idx_users_role")
   @@index([status], map: "idx_users_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model service_credentials {
+  id                        String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  agent_user_id             String                @db.Uuid
+  label                     String?               @db.VarChar(120)
+  secret_hash               String                @db.VarChar(255)
+  is_active                 Boolean               @default(true)
+  created_at                DateTime              @default(now()) @db.Timestamptz(6)
+  revoked_at                DateTime?             @db.Timestamptz(6)
+  rotated_from              String?               @db.Uuid
+  users                     users                 @relation(fields: [agent_user_id], references: [id], onUpdate: NoAction)
+  service_credentials       service_credentials?  @relation("service_credentialsToservice_credentials", fields: [rotated_from], references: [id], onUpdate: NoAction)
+  other_service_credentials service_credentials[] @relation("service_credentialsToservice_credentials")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model genetic_markers {
+  id                                      Int      @id @default(autoincrement())
+  code                                    String   @db.VarChar(50)
+  name_localized                          Json     @default("{\"en\": \"\", \"ru\": \"\"}")
+  market                                  String   @default("livestock") @db.VarChar(10)
+  sort_order                              Int      @default(0)
+  is_active                               Boolean  @default(true)
+  created_by                              String?  @db.Uuid
+  updated_by                              String?  @db.Uuid
+  created_at                              DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                              DateTime @default(now()) @db.Timestamptz(6)
+  users_genetic_markers_created_byTousers users?   @relation("genetic_markers_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
+  users_genetic_markers_updated_byTousers users?   @relation("genetic_markers_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
+
+  @@unique([market, code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model health_certifications {
+  id                                            Int      @id @default(autoincrement())
+  code                                          String   @db.VarChar(50)
+  name_localized                                Json     @default("{\"en\": \"\", \"ru\": \"\"}")
+  market                                        String   @default("livestock") @db.VarChar(10)
+  sort_order                                    Int      @default(0)
+  is_active                                     Boolean  @default(true)
+  created_by                                    String?  @db.Uuid
+  updated_by                                    String?  @db.Uuid
+  created_at                                    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime @default(now()) @db.Timestamptz(6)
+  users_health_certifications_created_byTousers users?   @relation("health_certifications_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
+  users_health_certifications_updated_byTousers users?   @relation("health_certifications_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
+
+  @@unique([market, code])
 }

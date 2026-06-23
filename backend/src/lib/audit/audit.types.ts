@@ -14,6 +14,12 @@ export interface AuditEntry {
   entityType?: string | null;
   /** UUID of the affected entity when it has one (audit_log.entity_id is UUID/nullable). */
   entityId?: string | null;
+  /**
+   * Integer id of the affected entity for INT-keyed lookup entities (species/breeds/cities),
+   * which cannot use the UUID entity_id (audit_log.entity_id_int, migration 0018). Set exactly
+   * one of entityId / entityIdInt per row.
+   */
+  entityIdInt?: number | null;
   beforeData?: unknown;
   afterData?: unknown;
   ipAddress?: string | null;

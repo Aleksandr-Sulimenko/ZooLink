@@ -9,26 +9,29 @@ info:
     возвращает обе локали), конвенция sort §12, If-Match/ETag на мутирующих PATCH (§10).
 
 
-    Реконсиляция `dataset` справочных данных (round-9, нормативно) — выровнено по фактической схеме
-    (`database_schema.sql`) и rbac-matrix.md ("Reference data (species, breeds, cities)").
+    Реконсиляция `dataset` справочных данных (round-9 → A3, нормативно) — выровнено по фактической схеме
+    (`database_schema.sql`) и rbac-matrix.md.
 
-    ЧТО: enum `dataset` сужен с 8 спекулятивных значений до **3 управляемых lookup-таблиц**,
-    существующих как CRUD-able admin-справочники: `species`, `breeds`, `cities`.
-    Остальные 5 НЕ являются admin-управляемыми lookup-таблицами и убраны из enum:
+    ЧТО: enum `dataset` — это **5 управляемых INT-ключевых lookup-таблиц**, существующих как CRUD-able
+    admin-справочники: `species`, `breeds`, `cities`, `health_certifications`, `genetic_markers`.
+    Последние две добавлены в A3 (ADMIN_PHASE_ACTION_PLAN) как словари разведения **форма-сейчас /
+    поведение-потом** (livestock health-certs и генетические маркеры): управляемая lookup-форма + CRUD
+    существуют уже сейчас, тогда как их **фильтрация** в маркетплейсе отложена (Фаза 2) — анти-переписывание
+    по IMPLEMENTATION_PLAYBOOK §5.
+    НЕ admin-управляемые датасеты (исключены из enum):
       - `listing-types`  → фиксированный DB CHECK-enum на `listings.listing_type`
-                           ('sale','breeding','show','adoption','stud_service'); смена = схема/ADR, не CRUD строки.
-      - `animal-statuses`→ фиксированные DB CHECK-enum на `listings.status` / жизненный цикл `animals`; то же.
-      - `traits`         → нет таблицы; отложено (домен Animal/breeding ещё не построен — Фаза 2).
-      - `health-certifications` → нет таблицы; данные здоровья = JSONB на animals; отложено (Фаза 2).
-      - `genetic-markers`→ нет таблицы; гейтится `feature_toggles.genetics_portal` (выкл) — отложено (Фаза 2).
+                           ('sale','breeding','show','adoption','stud_service'); смена схемы/ADR, не CRUD.
+      - `animal-statuses`→ фиксированные DB CHECK lifecycle-enum на `listings.status` / `animals`; то же.
+      - `traits` / `temperament_tags` / `health_flags` → soft-теги свободным текстом/JSONB, не управляемые
+                           lookup'ы; lookup-таблицу можно добавить аддитивно в Фазе 2 без переписывания.
 
-    ПОЧЕМУ: только species/breeds/cities — INT-ключевые управляемые lookup в схеме; контракт перечислял
-    датасеты без backing-таблицы, что позволило бы вызывать несуществующие эндпоинты и противоречит
-    RBAC-матрице (CRUD-scope = species, breeds, cities).
+    ПОЧЕМУ: species/breeds/cities/health_certifications/genetic_markers — это INT-ключевые управляемые
+    lookup в схеме (= код `DATASETS`); контракт не должен ни перечислять датасеты без backing-таблицы
+    (404/дрейф хендлеров), ни опускать уже существующие (дрейф код↔контракт).
 
-    ПОЧЕМУ ЛУЧШЕ: контракт теперь совпадает с источником истины (схема + RBAC), предотвращает 404/дрейф
-    хендлеров, держит MVP-scope честным (без протечки Фазы 2) и оставляет документированный путь вернуть
-    датасет, когда у него появится реальная управляемая таблица (тогда расширить enum + добавить slice).
+    ПОЧЕМУ ЛУЧШЕ: контракт совпадает с источником истины (схема + RBAC + код DATASETS), держит MVP-scope
+    честным (форма сейчас, поведение фильтрации gated), а реестр датасетов поглощает новые lookup'ы без
+    изменения формы CRUD/audit/локализации.
 
     Также (round-9): `id` записи справочника — **integer** (SERIAL lookup-ключи по конвенции id-типов:
     lookups=INT, entities=UUID), не UUID; list-ответы используют стандартный конверт
@@ -48,12 +51,17 @@ paths:
     get:
       summary: Получить все активные записи справочного датасета
       operationId: getReferenceData
-      x-required-roles: [ADMIN]
+      description: >-
+        Публичное чтение (security opt-out по API_CONVENTIONS §3): справочные данные — это публичный
+        reference-контент (rbac-matrix.md "Reference data = R/R/CRUD" + список публичных эндпоинтов §3).
+        PUBLIC-чтения возвращают разрешённое `name` (Accept-Language); аутентифицированное чтение
+        ADMIN/редактора возвращает `nameLocalized` (§6). `includeInactive=true` учитывается только для ADMIN.
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
         - in: query
           name: includeInactive
@@ -84,8 +92,6 @@ paths:
                     items: { $ref: '#/components/schemas/ReferenceDataEntry' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
         '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Создать новую запись справочника
@@ -95,7 +101,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
         - in: header
           name: Idempotency-Key
@@ -126,7 +132,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
       responses:
         '200':
@@ -142,12 +148,16 @@ paths:
     get:
       summary: Получить конкретную запись справочника по ID
       operationId: getReferenceDataById
-      x-required-roles: [ADMIN]
+      description: >-
+        Публичное чтение (security opt-out по API_CONVENTIONS §3): справочные данные — публичный контент
+        (rbac-matrix.md "Reference data = R/R/CRUD"). PUBLIC-чтения возвращают разрешённое `name`
+        (Accept-Language); аутентифицированное чтение ADMIN/редактора возвращает `nameLocalized` (§6).
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
         - in: path
           name: id
@@ -164,8 +174,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     patch:
@@ -177,7 +185,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
         - in: path
           name: id
@@ -221,7 +229,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Имя справочного датасета
         - in: path
           name: id
@@ -632,17 +640,21 @@ components:
         detail: { type: string }
         instance: { type: string }
         errors: { type: array, items: { type: object } }
-    # round-9 / B0: выровнено по database_schema.sql. Lookup-таблицы (species/breeds/cities) несут
-    # двуязычное имя как nameLocalized {en, ru} (обе локали) — единый LocalizedString, не плоские
-    # name_ru/name_en. Admin возвращает ОБЕ локали (редактор). `code` только у species/breeds
+    # round-9 / B0 / A2: выровнено по database_schema.sql (миграция 0018). Lookup-таблицы
+    # (species/breeds/cities) локализуют имя через name_localized JSONB {ru,en} — единый
+    # LocalizedString, не плоские name_ru/name_en. По API_CONVENTIONS §6 форма чтения зависит от
+    # контекста: чтение ADMIN/редактора возвращает полный `nameLocalized` (обе локали); PUBLIC-чтение
+    # возвращает разрешённую строку `name` для Accept-Language (фолбэк на en). Объявлены оба поля;
+    # заполняется ровно одно, подходящее по контексту. `code` присутствует только у species/breeds
     # (UNIQUE: species глобально, breeds по виду); у cities кода нет. `speciesId` ОБЯЗАТЕЛЕН для
-    # breeds (FK → species). Нет колонок description/version/deactivated_at; soft-delete = isActive.
+    # breeds (FK → species). `sortOrder` — порядок отображения (миграция 0018). Нет колонок
+    # description/version/deactivated_at; soft-delete = isActive boolean.
     ReferenceDataEntry:
       type: object
       required:
         - id
-        - nameLocalized
         - isActive
+        - sortOrder
         - createdAt
         - updatedAt
       properties:
@@ -660,9 +672,21 @@ components:
           minimum: 1
           nullable: true
           description: ID родительского вида (только breeds; иначе null)
+        name:
+          type: string
+          nullable: true
+          description: >-
+            Разрешённое отображаемое имя для запрошенного Accept-Language (фолбэк на en). Заполняется на
+            PUBLIC-чтениях (API_CONVENTIONS §6); null на ADMIN-чтениях (используйте nameLocalized).
         nameLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Отображаемое имя (LocalizedString {en, ru}; admin возвращает обе локали)
+          nullable: true
+          description: >-
+            Отображаемое имя как LocalizedString {en, ru} (обе локали). Заполняется на чтениях
+            ADMIN/редактора; null на PUBLIC-чтениях (используйте разрешённое `name`).
+        sortOrder:
+          type: integer
+          description: Порядок отображения внутри датасета (по возрастанию; по умолчанию 0)
         market:
           type: string
           enum: [pet, livestock]
@@ -699,6 +723,10 @@ components:
           type: string
           enum: [pet, livestock]
           description: Рынок (только species; по умолчанию 'pet' при отсутствии)
+        sortOrder:
+          type: integer
+          default: 0
+          description: Порядок отображения внутри датасета (по возрастанию)
         isActive:
           type: boolean
           default: true
@@ -716,6 +744,9 @@ components:
           type: string
           enum: [pet, livestock]
           description: Рынок (только species)
+        sortOrder:
+          type: integer
+          description: Порядок отображения внутри датасета (по возрастанию)
         isActive:
           type: boolean
           description: Активность

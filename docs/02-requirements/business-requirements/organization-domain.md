@@ -41,9 +41,17 @@ Handles the modeling of legal entities (organizations) and their physical locati
 - Each affiliation record stores:
   - `organization_id`
   - `user_id`
-  - `role_in_org` (ENUM: 'OWNER', 'ADMIN', 'STAFF', 'VET', 'MODERATOR')
+  - `role_in_org` (ENUM: 'OWNER', 'ADMIN', 'STAFF', 'VET')
   - `is_primary` (flag indicating the user’s primary organization for notifications, default false)
   - `joined_at` (date when the user started with the organization)
+
+> **(role-canon sync, normative) — `role_in_org` narrowed to the 4-role canon.**
+> **WHAT:** Removed `MODERATOR` from `role_in_org`; canon is `{OWNER, ADMIN, STAFF, VET}` per `database_schema.sql`
+> and `docs/specs/security/rbac-matrix.md` (ADR-0011).
+> **WHY:** GAP-TRACE-008 — the schema migration already narrowed `role_in_org` to 4 values; the BR listed a role
+> (`MODERATOR`) that does not exist in the column.
+> **WHY BETTER for the whole project:** clean separation between **platform** moderation (a `users.role`) and
+> **org-membership** roles removes RBAC ambiguity; organisation-scoped moderation, if ever needed, is a Phase-2 concern.
 
 ### 4. Listing Attribution
 - When creating a listing, the user must specify either:
@@ -126,7 +134,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 | `id` | UUID | Yes | Primary key |
 | `organization_id` | UUID | Yes | FK to organizations.id |
 | `user_id` | UUID | Yes | FK to users.id |
-| `role_in_org` | VARCHAR(20) | Yes | Role: OWNER, ADMIN, STAFF, VET, MODERATOR |
+| `role_in_org` | VARCHAR(20) | Yes | Role: OWNER, ADMIN, STAFF, VET (4-role canon per `database_schema.sql` / `rbac-matrix.md`; MODERATOR is a platform-operator role, **not** an org-membership role) |
 | `is_primary` | BOOLEAN | No | Default false |
 | `joined_at` | DATE | Yes | Date user joined organization |
 | `created_at` | TIMESTAMP | Yes | Record creation time |

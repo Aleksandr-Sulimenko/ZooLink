@@ -170,12 +170,21 @@ sequenceDiagram
 | `email` | VARCHAR(255) | No | For notifications (optional) |
 | `email_verified` | BOOLEAN | No | True if email confirmed via link |
 | `password_hash` | VARCHAR(60) | No (if OAuth only) | Bcrypt hash if using phone auth |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER. 7-role canon per `docs/specs/security/rbac-matrix.md` / ADR-0011; roles are additive (BREEDER/FARMER/VETERINARIAN/GROOMER = USER + extra capabilities). `principal_type` (HUMAN\|AGENT) is orthogonal to `role` (ADR-0006). |
 | `is_active` | BOOLEAN | Yes | True = can login; False = deactivated |
 | `created_at` | TIMESTAMP | Yes | Registration timestamp |
 | `updated_at` | TIMESTAMP | Yes | Last profile update |
 | `last_login_at` | TIMESTAMP | No | For activity tracking |
 | `deactivated_at` | TIMESTAMP | No | When user chose to deactivate |
+
+> **(role-canon sync, normative) — `users.role` aligned to the 7-role canon.**
+> **WHAT:** Added `BREEDER` and `FARMER` to the `role` enum so identity-BR now lists all 7 roles
+> `{USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER}`, matching `database_schema.sql` and
+> `docs/specs/security/rbac-matrix.md`.
+> **WHY:** GAP-TRACE-004 — the role set was de-synchronised across three docs (identity-BR was missing BREEDER/FARMER).
+> Three sources of truth for roles is a direct risk to RBAC, which is the subject of the Admin domain.
+> **WHY BETTER for the whole project:** one role canon (validated on PG) means the RBAC matrix, CASL abilities, guards
+> and migrations all rest on a single set; additive model and `principal_type ⟂ role` (ADR-0006) are preserved.
 
 ## Non-Functional Requirements (Specific to Identity)
 - **Performance**: Authentication (login/register) must complete within 2s under normal load.

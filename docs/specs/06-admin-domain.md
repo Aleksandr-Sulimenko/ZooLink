@@ -14,7 +14,7 @@ Provide administrative functions for platform management, including user moderat
 **In Scope:**
 - User management: view users, change roles, ban/unban, verify identity
 - Listing moderation: review queue, approve/reject listings, add rejection reasons
-- Reference data management: species, breeds, cities, listing types, health statuses
+- Reference data management: species, breeds, cities, health_certifications, genetic_markers (the five managed lookup datasets; see the round-9 → A3 implementation-scope note below — listing types and animal/health statuses are fixed DB CHECK enums, not row-CRUD)
 - System configuration: moderation rules, rate limits, feature toggles
 - Audit logs: track moderation actions, user actions, system changes
 - Integration with all other domains (Identity, Animal, Marketplaces, Matching)
@@ -66,23 +66,28 @@ This specification addresses the following Non-Functional Requirements:
 **UC-AD-03:** As an administrator, I want to manage reference data so that I can ensure accuracy and consistency across the platform.
 - Acceptance Criteria:
   - Reference data management loads in <2s
-  - CRUD operations for species, breeds, cities, listing types, health statuses
+  - CRUD operations for species, breeds, cities, health_certifications, genetic_markers (listing types and animal/health statuses are fixed CHECK enums, not row-CRUD — see the round-9 → A3 note below)
   - Validation rules for reference data (e.g., breed must belong to species)
   - Bulk import/export of reference data (CSV/JSON)
   - Versioning and change history for reference data
   - Notification system for users when reference data changes affect their listings
 
-> **Implementation scope (round-9, normative — Admin Slice 1).** Only the **managed lookup tables that
-> exist in `database_schema.sql` are CRUD-able reference data: `species`, `breeds`, `cities`** (matches
-> rbac-matrix.md "Reference data (species, breeds, cities) = ADMIN C/R/U/D"). "Listing types" and
-> "animal/health statuses" are **fixed DB CHECK enums** (`listings.listing_type`, `listings.status`,
-> animal lifecycle), not row-CRUD — changing them is a schema/ADR change. Traits, health-certifications
-> and genetic-markers have **no managed table** and are deferred to Фаза 2 (the latter gated by
-> `feature_toggles.genetics_portal`). Lookup ids are **INT** (id-type convention). Bulk import/export
-> and change-history/versioning are deferred (no `version`/`deactivated_at` columns in MVP; soft-delete =
-> `is_active`); the audit_log records every mutation. WHY: contract must match the source of truth
-> (schema + RBAC); WHY BETTER: prevents endpoints that cannot exist, keeps MVP scope honest, leaves a
-> clean path to add a dataset once it has a real table. See `api-contracts/admin-api.yaml` (reconciled).
+> **Implementation scope (round-9 → A3, normative).** The **managed lookup tables that exist in
+> `database_schema.sql` are CRUD-able reference data: `species`, `breeds`, `cities`,
+> `health_certifications`, `genetic_markers`** (= code `DATASETS`; matches rbac-matrix.md "Reference
+> data = ADMIN C/R/U/D"). `health_certifications`/`genetic_markers` were added in **A3**
+> (ADMIN_PHASE_ACTION_PLAN) as **form-now / behaviour-later** livestock breeding dictionaries: the
+> managed lookup + CRUD exists now, while their marketplace **filtering** is deferred to Фаза 2
+> (anti-rewrite, IMPLEMENTATION_PLAYBOOK §5). "Listing types" and "animal/health statuses" are **fixed DB
+> CHECK enums** (`listings.listing_type`, `listings.status`, animal lifecycle), not row-CRUD — changing
+> them is a schema/ADR change. `traits`/`temperament_tags`/`health_flags` are **free text/JSONB soft
+> tags** (no managed table; a lookup can be added additively in Фаза 2 without a rewrite). Lookup ids are
+> **INT** (id-type convention); localized names are **`name_localized` JSONB** (A2). Bulk import/export
+> and change-history/versioning are deferred (soft-delete = `is_active`); the audit_log records every
+> mutation (via `entity_id_int` for INT lookups). WHY: contract must match the source of truth
+> (schema + RBAC + code); WHY BETTER: prevents endpoints that cannot exist, keeps MVP scope honest
+> (form vs behaviour), and the dataset registry absorbs new lookups without shape change. See
+> `api-contracts/admin-api.yaml` (reconciled).
 
 **UC-AD-04:** As an administrator, I want to monitor system activity and security so that I can detect and respond to potential issues.
 - Acceptance Criteria:

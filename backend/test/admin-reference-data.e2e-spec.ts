@@ -84,7 +84,7 @@ describe('Admin Reference Data (e2e)', () => {
     await request(server())
       .post('/v1/reference-data/species')
       .set('Authorization', `Bearer ${userToken}`)
-      .send({ code: speciesCode, name_ru: 'Тест', name_en: 'Test' })
+      .send({ code: speciesCode, nameLocalized: { ru: 'Тест', en: 'Test' } })
       .expect(403);
   });
 
@@ -92,16 +92,19 @@ describe('Admin Reference Data (e2e)', () => {
     const res = await request(server())
       .post('/v1/reference-data/species')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ code: speciesCode, name_ru: 'Тестовид', name_en: 'TestSpecies', market: 'pet' })
+      .send({ code: speciesCode, nameLocalized: { ru: 'Тестовид', en: 'TestSpecies' }, market: 'pet' })
       .expect(201);
     expect(res.body.id).toEqual(expect.any(Number));
     expect(res.body.code).toBe(speciesCode);
+    // ADMIN create returns both locales (nameLocalized), no resolved name (API_CONVENTIONS §6).
+    expect(res.body.nameLocalized).toEqual({ ru: 'Тестовид', en: 'TestSpecies' });
+    expect(res.body.name).toBeNull();
     createdSpeciesId = res.body.id as number;
   });
 
   it('replays the same Idempotency-Key without creating a duplicate', async () => {
     const key = `idem-${suffix}`;
-    const body = { code: `${speciesCode}_idem`, name_ru: 'Идем', name_en: 'Idem' };
+    const body = { code: `${speciesCode}_idem`, nameLocalized: { ru: 'Идем', en: 'Idem' } };
     const first = await request(server())
       .post('/v1/reference-data/species')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -123,7 +126,7 @@ describe('Admin Reference Data (e2e)', () => {
     await request(server())
       .post('/v1/reference-data/breeds')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ code: breedCode, speciesId: 2147483000, name_ru: 'X', name_en: 'X' })
+      .send({ code: breedCode, speciesId: 2147483000, nameLocalized: { ru: 'X', en: 'X' } })
       .expect(400);
   });
 
@@ -131,7 +134,7 @@ describe('Admin Reference Data (e2e)', () => {
     const res = await request(server())
       .post('/v1/reference-data/breeds')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ code: breedCode, speciesId: createdSpeciesId, name_ru: 'Тестпорода', name_en: 'TestBreed' })
+      .send({ code: breedCode, speciesId: createdSpeciesId, nameLocalized: { ru: 'Тестпорода', en: 'TestBreed' } })
       .expect(201);
     expect(res.body.speciesId).toBe(createdSpeciesId);
     createdBreedId = res.body.id as number;
@@ -141,7 +144,7 @@ describe('Admin Reference Data (e2e)', () => {
     await request(server())
       .post('/v1/reference-data/cities')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ code: 'nope', name_ru: 'Городок', name_en: 'Town' })
+      .send({ code: 'nope', nameLocalized: { ru: 'Городок', en: 'Town' } })
       .expect(400);
   });
 
@@ -149,10 +152,25 @@ describe('Admin Reference Data (e2e)', () => {
     const res = await request(server())
       .post('/v1/reference-data/cities')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name_ru: `Город ${suffix}`, name_en: `City ${suffix}` })
+      .send({ nameLocalized: { ru: `Город ${suffix}`, en: `City ${suffix}` } })
       .expect(201);
     expect(res.body.code).toBeNull();
     createdCityId = res.body.id as number;
+  });
+
+  it('public GET by id resolves the name for Accept-Language (en fallback)', async () => {
+    const en = await request(server())
+      .get(`/v1/reference-data/species/${createdSpeciesId}`)
+      .set('Accept-Language', 'en')
+      .expect(200);
+    expect(en.body.name).toBe('TestSpecies');
+    expect(en.body.nameLocalized).toBeNull();
+
+    const ru = await request(server())
+      .get(`/v1/reference-data/species/${createdSpeciesId}`)
+      .set('Accept-Language', 'ru')
+      .expect(200);
+    expect(ru.body.name).toBe('Тестовид');
   });
 
   it('GET by id returns an ETag; PATCH without If-Match is 428; stale is 412; valid succeeds', async () => {
@@ -162,26 +180,28 @@ describe('Admin Reference Data (e2e)', () => {
     const etag = get.headers['etag'];
     expect(etag).toBeTruthy();
 
+    const body = { nameLocalized: { ru: 'Переименовано', en: 'Renamed' } };
     await request(server())
       .patch(`/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name_en: 'Renamed' })
+      .send(body)
       .expect(428);
 
     await request(server())
       .patch(`/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .set('If-Match', 'W/"deadbeef"')
-      .send({ name_en: 'Renamed' })
+      .send(body)
       .expect(412);
 
     const patched = await request(server())
       .patch(`/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .set('If-Match', etag)
-      .send({ name_en: 'Renamed' })
+      .send(body)
       .expect(200);
-    expect(patched.body.name_en).toBe('Renamed');
+    // ADMIN PATCH response returns nameLocalized (both locales).
+    expect(patched.body.nameLocalized).toEqual({ ru: 'Переименовано', en: 'Renamed' });
   });
 
   it('toggle-active deactivates then hides from the public active-only list', async () => {

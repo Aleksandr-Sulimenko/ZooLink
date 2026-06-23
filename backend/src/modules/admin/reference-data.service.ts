@@ -15,17 +15,23 @@ import {
   type CreateReferenceDataDto,
   type Dataset,
   type ListReferenceDataQueryDto,
+  type LocalizedString,
   type ReferenceDataEntry,
   type UpdateReferenceDataDto,
 } from './dto/reference-data.dto';
+
+/** Languages we resolve to (matches supported_languages active set + §6 en-fallback). */
+const SUPPORTED_LANGS = ['ru', 'en'] as const;
+type Lang = (typeof SUPPORTED_LANGS)[number];
+const DEFAULT_LANG: Lang = 'ru'; // users.preferred_language DEFAULT 'ru'
 
 /** A raw lookup row as Prisma returns it (the columns common to species/breeds/cities + optionals). */
 interface LookupRow {
   id: number;
   code?: string | null;
   species_id?: number | null;
-  name_ru: string;
-  name_en: string;
+  name_localized: LocalizedString;
+  sort_order: number;
   market?: string | null;
   is_active: boolean;
   created_at: Date;
@@ -37,13 +43,35 @@ const CAPS: Record<Dataset, { code: boolean; speciesId: boolean; market: boolean
   species: { code: true, speciesId: false, market: true },
   breeds: { code: true, speciesId: true, market: false },
   cities: { code: false, speciesId: false, market: false },
+  // A3 breeding dictionaries (migration 0019): code + market (ADR-0002), no speciesId.
+  health_certifications: { code: true, speciesId: false, market: true },
+  genetic_markers: { code: true, speciesId: false, market: true },
 };
+
+/**
+ * Resolve an Accept-Language header to one of our supported languages (en fallback per §6).
+ * Minimal RFC-7231 parse: take the first tag's primary subtag; restrict to ru/en; else DEFAULT_LANG.
+ */
+export function resolveLang(acceptLanguage: string | undefined): Lang {
+  if (!acceptLanguage) return DEFAULT_LANG;
+  const primary = acceptLanguage.split(',')[0]?.trim().slice(0, 2).toLowerCase() ?? '';
+  return (SUPPORTED_LANGS as readonly string[]).includes(primary)
+    ? (primary as Lang)
+    : DEFAULT_LANG;
+}
+
+/** Resolve a LocalizedString for a language with en fallback then any non-empty (§6 / get_localized). */
+function resolveLocalized(value: LocalizedString, lang: Lang): string {
+  return value?.[lang] || value?.en || value?.ru || '';
+}
 
 /**
  * Reference Data management (Admin Slice 1): CRUD for the three managed lookup tables
  * (species, breeds, cities) per `admin-api.yaml`. Reads are public; mutations are ADMIN-only
- * (RolesGuard at the controller). Every mutation is audit-logged with the acting principal
- * (ADR-0006 agent-as-principal). PATCH uses optimistic concurrency (If-Match / ETag).
+ * (RolesGuard at the controller). Localized names are stored as name_localized JSONB {ru,en}
+ * (migration 0018): admin reads return both locales (nameLocalized), public reads return the
+ * resolved `name` for Accept-Language (API_CONVENTIONS §6). Every mutation is audit-logged with the
+ * acting principal (ADR-0006 agent-as-principal). PATCH uses optimistic concurrency (If-Match / ETag).
  */
 @Injectable()
 export class ReferenceDataService {
@@ -66,13 +94,18 @@ export class ReferenceDataService {
     return this.prisma[dataset] as unknown as ReturnType<ReferenceDataService['delegate']>;
   }
 
-  private toEntry(row: LookupRow): ReferenceDataEntry {
+  /**
+   * Map a row to the wire entry. `forAdmin` decides the name shape (§6): admin → nameLocalized
+   * (both locales), public → resolved `name` for `lang`.
+   */
+  private toEntry(row: LookupRow, forAdmin: boolean, lang: Lang): ReferenceDataEntry {
     return {
       id: row.id,
       code: row.code ?? null,
       speciesId: row.species_id ?? null,
-      name_ru: row.name_ru,
-      name_en: row.name_en,
+      name: forAdmin ? null : resolveLocalized(row.name_localized, lang),
+      nameLocalized: forAdmin ? row.name_localized : null,
+      sortOrder: row.sort_order,
       market: row.market ?? null,
       isActive: row.is_active,
       createdAt: row.created_at,
@@ -85,17 +118,20 @@ export class ReferenceDataService {
     dataset: Dataset,
     query: ListReferenceDataQueryDto,
     actor: AuthPrincipal | undefined,
+    acceptLanguage?: string,
   ): Promise<Paginated<ReferenceDataEntry>> {
     const isAdmin = actor?.role === 'ADMIN';
+    const lang = resolveLang(acceptLanguage);
     const where: Record<string, unknown> = {};
     if (!(query.includeInactive && isAdmin)) {
       where.is_active = true;
     }
     if (query.search) {
       const contains = query.search;
+      // name_localized is JSONB {ru,en}; filter on the per-locale string paths.
       const or: Record<string, unknown>[] = [
-        { name_ru: { contains, mode: 'insensitive' } },
-        { name_en: { contains, mode: 'insensitive' } },
+        { name_localized: { path: ['ru'], string_contains: contains } },
+        { name_localized: { path: ['en'], string_contains: contains } },
       ];
       if (CAPS[dataset].code) {
         or.push({ code: { contains, mode: 'insensitive' } });
@@ -105,17 +141,32 @@ export class ReferenceDataService {
 
     const delegate = this.delegate(dataset);
     const [rows, total] = await Promise.all([
-      delegate.findMany({ where, orderBy: { id: 'asc' }, skip: query.skip, take: query.limit }),
+      delegate.findMany({
+        where,
+        orderBy: [{ sort_order: 'asc' }, { id: 'asc' }],
+        skip: query.skip,
+        take: query.limit,
+      }),
       delegate.count({ where }),
     ]);
-    return paginate(rows.map((r) => this.toEntry(r)), total, query.page, query.limit);
+    return paginate(rows.map((r) => this.toEntry(r, isAdmin, lang)), total, query.page, query.limit);
   }
 
   /** GET by id. 404 if missing. Returns the entry + its weak ETag (updated_at-derived). */
-  async getById(dataset: Dataset, id: number): Promise<{ entry: ReferenceDataEntry; etag: string }> {
+  async getById(
+    dataset: Dataset,
+    id: number,
+    actor: AuthPrincipal | undefined,
+    acceptLanguage?: string,
+  ): Promise<{ entry: ReferenceDataEntry; etag: string }> {
     const row = await this.delegate(dataset).findUnique({ where: { id } });
     if (!row) throw new NotFoundException({ message: 'Reference data entry not found', code: 'NOT_FOUND' });
-    return { entry: this.toEntry(row), etag: weakEtag(`${dataset}:${row.id}`, row.updated_at) };
+    const isAdmin = actor?.role === 'ADMIN';
+    const lang = resolveLang(acceptLanguage);
+    return {
+      entry: this.toEntry(row, isAdmin, lang),
+      etag: weakEtag(`${dataset}:${row.id}`, row.updated_at),
+    };
   }
 
   /** Form/template for the create UI (admin-api.yaml ReferenceDataForm), derived from the dataset's columns. */
@@ -128,8 +179,8 @@ export class ReferenceDataService {
     if (caps.speciesId) {
       fields.speciesId = { type: 'number', label: 'Species', required: true };
     }
-    fields.name_ru = { type: 'text', label: 'Name (RU)', required: true, maxLength: 100 };
-    fields.name_en = { type: 'text', label: 'Name (EN)', required: true, maxLength: 100 };
+    // Single localized name field (LocalizedString {en, ru}); the editor renders one input per locale.
+    fields.nameLocalized = { type: 'localized', label: 'Name', required: true, maxLength: 100 };
     if (caps.market) {
       fields.market = {
         type: 'select',
@@ -141,6 +192,7 @@ export class ReferenceDataService {
         ],
       };
     }
+    fields.sortOrder = { type: 'number', label: 'Sort order', required: false };
     fields.isActive = { type: 'boolean', label: 'Active', required: false };
     return { fields };
   }
@@ -169,6 +221,10 @@ export class ReferenceDataService {
     if (caps.speciesId && dto.speciesId === undefined) {
       throw new BadRequestException({ message: 'speciesId is required for breeds', code: 'VALIDATION_ERROR' });
     }
+    // At least one locale must be non-empty (a fully empty name is meaningless).
+    if (!dto.nameLocalized.en && !dto.nameLocalized.ru) {
+      throw new BadRequestException({ message: 'nameLocalized must have at least one locale', code: 'VALIDATION_ERROR' });
+    }
 
     // Referential integrity: a breed must belong to an existing species (UC-AD-03).
     if (dataset === 'breeds') {
@@ -178,10 +234,13 @@ export class ReferenceDataService {
       }
     }
 
+    const name_localized: LocalizedString = { en: dto.nameLocalized.en, ru: dto.nameLocalized.ru };
     const data: Record<string, unknown> = {
-      name_ru: dto.name_ru,
-      name_en: dto.name_en,
+      name_localized,
+      sort_order: dto.sortOrder ?? 0,
       is_active: dto.isActive ?? true,
+      created_by: actor.userId,
+      updated_by: actor.userId,
     };
     if (caps.code) data.code = dto.code;
     if (caps.speciesId) data.species_id = dto.speciesId;
@@ -202,11 +261,11 @@ export class ReferenceDataService {
       actorRole: actor.role,
       action: 'reference_data.created',
       entityType: `reference-data:${dataset}`,
-      entityId: null, // lookup ids are INT; audit_log.entity_id is UUID/nullable
+      entityIdInt: row.id, // lookup ids are INT → audit_log.entity_id_int (migration 0018)
       afterData: { dataset, id: row.id, ...data },
     });
     this.logger.log(`Reference data created ${dataset}#${row.id} by ${actor.userId}`);
-    return this.toEntry(row);
+    return this.toEntry(row, true, DEFAULT_LANG);
   }
 
   /** PATCH update (ADMIN). Optimistic concurrency via If-Match; code/speciesId immutable. */
@@ -224,15 +283,21 @@ export class ReferenceDataService {
     if (!CAPS[dataset].market && dto.market !== undefined) {
       throw new BadRequestException({ message: `${dataset} entries have no market`, code: 'VALIDATION_ERROR' });
     }
+    if (dto.nameLocalized && !dto.nameLocalized.en && !dto.nameLocalized.ru) {
+      throw new BadRequestException({ message: 'nameLocalized must have at least one locale', code: 'VALIDATION_ERROR' });
+    }
 
     const data: Record<string, unknown> = {};
-    if (dto.name_ru !== undefined) data.name_ru = dto.name_ru;
-    if (dto.name_en !== undefined) data.name_en = dto.name_en;
+    if (dto.nameLocalized !== undefined) {
+      data.name_localized = { en: dto.nameLocalized.en, ru: dto.nameLocalized.ru };
+    }
+    if (dto.sortOrder !== undefined) data.sort_order = dto.sortOrder;
     if (dto.isActive !== undefined) data.is_active = dto.isActive;
     if (CAPS[dataset].market && dto.market !== undefined) data.market = dto.market;
     if (Object.keys(data).length === 0) {
       throw new BadRequestException({ message: 'No updatable fields provided', code: 'VALIDATION_ERROR' });
     }
+    data.updated_by = actor.userId;
 
     const row = await this.delegate(dataset).update({ where: { id }, data });
     await this.audit.record({
@@ -240,12 +305,19 @@ export class ReferenceDataService {
       actorRole: actor.role,
       action: 'reference_data.updated',
       entityType: `reference-data:${dataset}`,
-      entityId: null,
-      beforeData: { dataset, id, name_ru: existing.name_ru, name_en: existing.name_en, is_active: existing.is_active, market: existing.market ?? null },
+      entityIdInt: id,
+      beforeData: {
+        dataset,
+        id,
+        name_localized: existing.name_localized,
+        sort_order: existing.sort_order,
+        is_active: existing.is_active,
+        market: existing.market ?? null,
+      },
       afterData: { dataset, id, ...data },
     });
     this.logger.log(`Reference data updated ${dataset}#${id} by ${actor.userId}`);
-    return { entry: this.toEntry(row), etag: weakEtag(`${dataset}:${row.id}`, row.updated_at) };
+    return { entry: this.toEntry(row, true, DEFAULT_LANG), etag: weakEtag(`${dataset}:${row.id}`, row.updated_at) };
   }
 
   /** PATCH toggle-active (ADMIN). Flips is_active; soft-delete instead of row deletion (FK safety). */
@@ -254,17 +326,20 @@ export class ReferenceDataService {
     if (!existing) throw new NotFoundException({ message: 'Reference data entry not found', code: 'NOT_FOUND' });
 
     const next = !existing.is_active;
-    const row = await this.delegate(dataset).update({ where: { id }, data: { is_active: next } });
+    const row = await this.delegate(dataset).update({
+      where: { id },
+      data: { is_active: next, updated_by: actor.userId },
+    });
     await this.audit.record({
       actorId: actor.userId,
       actorRole: actor.role,
       action: next ? 'reference_data.activated' : 'reference_data.deactivated',
       entityType: `reference-data:${dataset}`,
-      entityId: null,
+      entityIdInt: id,
       beforeData: { dataset, id, is_active: existing.is_active },
       afterData: { dataset, id, is_active: next },
     });
     this.logger.log(`Reference data ${next ? 'activated' : 'deactivated'} ${dataset}#${id} by ${actor.userId}`);
-    return this.toEntry(row);
+    return this.toEntry(row, true, DEFAULT_LANG);
   }
 }

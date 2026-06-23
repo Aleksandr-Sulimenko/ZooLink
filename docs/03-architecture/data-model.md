@@ -249,6 +249,47 @@ CREATE TABLE users (
 - Indexes on reference tables (species, breeds, cities)
 - Indexes on ownership history tables and organization association tables
 
+## Reference Data Model (species / breeds / cities)
+
+The three admin-managed lookup tables share one extensible shape (migration 0018):
+
+- **Localized name** — the display name is a single `name_localized JSONB {ru,en}` column (NOT flat
+  `name_ru`/`name_en`). This matches the `*_localized` JSONB canon used by `organizations`/`branches`/
+  `animals`, the `get_localized()`/`has_translation()` SQL helpers, `localization_specification.md`, and
+  `API_CONVENTIONS.md §6`. A new language is added by writing another JSON key — **no schema change**.
+  Admin/editor reads return the full `LocalizedString` (`nameLocalized`); public reads return the resolved
+  `name` string for `Accept-Language` (en fallback). Per-locale `GIN ((name_localized -> 'xx'))` indexes
+  back localized search.
+- **Provenance & ordering** — `created_by`/`updated_by` (nullable `FK → users(id) ON DELETE SET NULL`,
+  agent-as-principal ready per ADR-0006: an AGENT row may own a change) and `sort_order INTEGER` (display
+  ordering; lists are `ORDER BY sort_order, id`). Soft-delete via `is_active` (no row deletion → FK safety).
+- **Registry extensibility (code pattern)** — the backend reference-data module is dataset-driven: the
+  managed set is one `DATASETS` tuple and a `CAPS` table (per-dataset `{code, speciesId, market}` flags) in
+  `modules/admin/dto/reference-data.dto.ts` + `reference-data.service.ts`. `ParseDatasetPipe` validates the
+  `{dataset}` path segment against `DATASETS`. Adding a new lookup table = add it to `DATASETS` + a `CAPS`
+  entry + a Prisma delegate — **no change to the CRUD/audit/localization shape**. (Whether a candidate is a
+  managed dataset vs a fixed CHECK-enum is decided per `specs/06-admin-domain.md`.)
+
+**Breeding dictionaries (A3, migration 0019).** `health_certifications` and `genetic_markers` are two more
+admin-managed lookup tables in the **same shape** (`id` INT PK, `code`, `name_localized` JSONB {ru,en},
+`market`, `sort_order`, `is_active`, `created_by`/`updated_by`, per-locale GIN, `update_<tbl>_updated_at`
+trigger), added because the livestock search filters in `business-requirements/livestock-marketplace.md`
+(`health_certifications`, `genetic_flags`) referenced controlled dictionaries that had no backing table
+(GAP-TRACE-002). They were absorbed by the registry with **no shape change** — the extensibility proof for
+A2 — so the managed `dataset` set grew `3 → 5` (`species, breeds, cities, health_certifications,
+genetic_markers`). Uniqueness is `(market, code)` (symmetric with breeds' `(species_id, code)`): a code may
+recur across markets but is unique within one. **Form now, behaviour later:** the marketplace **filtering**
+that consumes these dictionaries stays deferred (Фаза 2, the genetics side gated by
+`feature_toggles.genetics_portal`); only the table form + admin CRUD exist in MVP. The pet-side soft-tags
+`temperament_tags`/`health_flags` are deliberately **free text/JSONB, not tables** (a lookup can be added
+additively in Фаза 2 with no rewrite); `animal-statuses` are a **state CHECK enum, not a dataset**;
+`decision-templates` (moderation) are **deferred to the moderation contract** (coupled to the moderation
+shape, not generic reference-data).
+
+Audit of reference-data CRUD: lookup ids are `INT`, but `audit_log.entity_id` is `UUID`. Migration 0018 adds
+`audit_log.entity_id_int INTEGER` (partial index `idx_audit_log_entity_int`) so an INT-keyed entity is
+audited by its real id; UUID entities keep using `entity_id`. Exactly one of the two is populated per row.
+
 ## Operational Domains (Moderation / Payment / Notification / Ownership Transfer)
 
 The full DDL for the following tables lives in `database_schema.sql` (source of truth); the domain
@@ -335,10 +376,19 @@ Both append-only actor ledgers — `audit_log` and `moderation_decisions` — re
   override row's `actor_principal_type = 'HUMAN'` and its `supersedes_decision_id` to reference a decision on
   the **same** `(entity_type, entity_id)`. Read side resolves "latest effective decision" by following
   `supersedes_decision_id` (indexed by `idx_moddec_supersedes`).
-- **Agent service-credential store** — a forward-compatible, **gated, not-yet-created** stub
-  (ADR-0011 §5/§C): an in-monolith hashed-secret store keyed to the agent `users.id`, rotatable/revocable,
-  no plaintext at rest, no separate auth service. It is **deferred to A0b** (not part of this A0a migration);
-  the table count changes only when it actually lands.
+- **Agent service-credential store** — `service_credentials` (ADR-0011 §5.3/§C, A0b, migration 0017),
+  a **forward-compatible FORM**: an in-monolith hashed-secret store keyed to the agent (`agent_user_id` FK
+  `users.id`, `ON DELETE RESTRICT`), **rotatable** (`rotated_from` self-FK = issue-new links to old) and
+  **revocable** (`is_active` / `revoked_at`), with **only `secret_hash`** at rest (never plaintext) and no
+  separate auth service. It is **FORM ONLY in MVP**: the AGENT gate is off, so no row is created and no
+  secret is verified; the `AgentServiceTokenAuthenticator` stub is not in the authenticator chain and always
+  returns `null`. Activating agent service-auth later (ADR-0006 P-A…P-D) needs no schema rewrite.
+- **Authenticator chain** (ADR-0011 §5) — authentication is factored out of `JwtAuthGuard` into an ordered
+  `RequestAuthenticator` chain producing the source-agnostic `AuthPrincipal {userId, role, principalType}`.
+  `BearerJwtAuthenticator` is the only link today (human end-users + operators); `AgentServiceTokenAuthenticator`
+  is the additive future link (gated). RBAC/CASL/actor-snapshotting all consume the principal abstraction, so
+  adding agents is one extra authenticator, not a guard/authz rewrite. Env `AGENT_SERVICE_SIGNING_SECRET`
+  (≥32; optional in dev/test, required in production) is the form of the signing secret — unused while gated.
 - **Agent lifecycle** = deactivation, never deletion (`users.status='DEACTIVATED'`), so the
   `ON DELETE RESTRICT` FKs from the ledgers are never orphaned.
 

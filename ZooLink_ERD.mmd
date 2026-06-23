@@ -3,9 +3,12 @@ erDiagram
     species {
         INTEGER id PK
         VARCHAR_50 code UK
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
         VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -13,18 +16,50 @@ erDiagram
         INTEGER id PK
         INTEGER species_id FK
         VARCHAR_50 code
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
         %% UK (species_id, code)
     }
     cities {
         INTEGER id PK
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    health_certifications {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB name_localized
+        VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% UK (market, code)
+    }
+    genetic_markers {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB name_localized
+        VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% UK (market, code)
     }
     supported_languages {
         CHAR_2 code PK
@@ -373,12 +408,24 @@ erDiagram
         VARCHAR_100 action
         VARCHAR_40 entity_type
         UUID entity_id
+        INTEGER entity_id_int
         JSONB before_data
         JSONB after_data
         INET ip_address
         TEXT user_agent
         TIMESTAMPTZ created_at
         %% append-only
+    }
+    service_credentials {
+        UUID id PK
+        UUID agent_user_id FK
+        VARCHAR_120 label
+        VARCHAR_255 secret_hash
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ revoked_at
+        UUID rotated_from FK
+        %% ADR-0011 §5.3 agent service-auth FORM ONLY (gated)
     }
 
     %% Extensibility / System Tables
@@ -434,6 +481,8 @@ erDiagram
     listings ||..o{ contact_reveals : "contact revealed for"
     users ||..o{ refresh_tokens : "has sessions"
     users ||..o{ audit_log : "acted (nullable)"
+    users ||..o{ service_credentials : "agent service-auth (gated)"
+    service_credentials |o..o{ service_credentials : "rotated_from (rotation chain)"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"

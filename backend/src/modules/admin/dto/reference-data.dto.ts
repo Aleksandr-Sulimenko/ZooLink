@@ -4,23 +4,51 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNotEmptyObject,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 /**
- * The three managed lookup datasets (admin-api.yaml round-9 reconciliation). Only species/breeds/
- * cities are CRUD-able reference data (rbac-matrix.md). Code is the URL path segment `{dataset}`.
+ * The managed lookup datasets (admin-api.yaml). species/breeds/cities are the A2 core (round-9);
+ * health_certifications/genetic_markers are the A3 breeding dictionaries (GAP-TRACE-002) — added to the
+ * SAME registry with no shape change (the A2 extensibility proof). Code is the URL path segment `{dataset}`.
+ * Only these controlled lookups are CRUD-able reference data (rbac-matrix.md); pet soft-tags
+ * (temperament_tags/health_flags) are free text/JSONB and are intentionally NOT datasets.
  */
-export const DATASETS = ['species', 'breeds', 'cities'] as const;
+export const DATASETS = [
+  'species',
+  'breeds',
+  'cities',
+  'health_certifications',
+  'genetic_markers',
+] as const;
 export type Dataset = (typeof DATASETS)[number];
 
 const MARKETS = ['pet', 'livestock'] as const;
 const CODE = /^[a-z0-9_]+$/;
+
+/**
+ * LocalizedString {en, ru} (API_CONVENTIONS §6). Backed by the name_localized JSONB column
+ * (migration 0018). Both locales are editable by an admin; at least one must be non-empty.
+ */
+export class LocalizedStringDto {
+  @ApiProperty({ maxLength: 100, description: 'English display name' })
+  @IsString()
+  @MaxLength(100)
+  en!: string;
+
+  @ApiProperty({ maxLength: 100, description: 'Russian display name' })
+  @IsString()
+  @MaxLength(100)
+  ru!: string;
+}
 
 /** List query for GET /reference-data/{dataset} (public read; includeInactive is ADMIN-only at service layer). */
 export class ListReferenceDataQueryDto {
@@ -70,22 +98,24 @@ export class CreateReferenceDataDto {
   @Min(1)
   speciesId?: number;
 
-  @ApiProperty({ maxLength: 100, description: 'Russian display name' })
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  name_ru!: string;
-
-  @ApiProperty({ maxLength: 100, description: 'English display name' })
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  name_en!: string;
+  @ApiProperty({ type: LocalizedStringDto, description: 'Display name (LocalizedString {en, ru})' })
+  @IsObject()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => LocalizedStringDto)
+  nameLocalized!: LocalizedStringDto;
 
   @ApiPropertyOptional({ enum: MARKETS, description: 'Market (species only; default pet)' })
   @IsOptional()
   @IsIn(MARKETS)
   market?: (typeof MARKETS)[number];
+
+  @ApiPropertyOptional({ default: 0, description: 'Display ordering within the dataset (ascending)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
@@ -95,24 +125,25 @@ export class CreateReferenceDataDto {
 
 /** Partial update for PATCH /reference-data/{dataset}/{id}. code/speciesId are immutable (identity). */
 export class UpdateReferenceDataDto {
-  @ApiPropertyOptional({ maxLength: 100 })
+  @ApiPropertyOptional({ type: LocalizedStringDto, description: 'Display name (LocalizedString {en, ru})' })
   @IsOptional()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  name_ru?: string;
-
-  @ApiPropertyOptional({ maxLength: 100 })
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  name_en?: string;
+  @IsObject()
+  @IsNotEmptyObject()
+  @ValidateNested()
+  @Type(() => LocalizedStringDto)
+  nameLocalized?: LocalizedStringDto;
 
   @ApiPropertyOptional({ enum: MARKETS, description: 'Market (species only)' })
   @IsOptional()
   @IsIn(MARKETS)
   market?: (typeof MARKETS)[number];
+
+  @ApiPropertyOptional({ description: 'Display ordering within the dataset (ascending)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -120,13 +151,26 @@ export class UpdateReferenceDataDto {
   isActive?: boolean;
 }
 
-/** Wire shape of a reference-data entry (admin-api.yaml ReferenceDataEntry, round-9). */
+/** LocalizedString {en, ru} as stored in name_localized JSONB. */
+export interface LocalizedString {
+  en: string;
+  ru: string;
+}
+
+/**
+ * Wire shape of a reference-data entry (admin-api.yaml ReferenceDataEntry, A2). Per API_CONVENTIONS §6
+ * the read context decides which name field is populated: ADMIN reads carry the full `nameLocalized`
+ * (both locales); PUBLIC reads carry the resolved `name` string (Accept-Language, en fallback).
+ */
 export interface ReferenceDataEntry {
   id: number;
   code: string | null;
   speciesId: number | null;
-  name_ru: string;
-  name_en: string;
+  /** Resolved name for public reads (Accept-Language, en fallback); null on admin reads. */
+  name: string | null;
+  /** Both locales for admin/editor reads; null on public reads. */
+  nameLocalized: LocalizedString | null;
+  sortOrder: number;
   market: string | null;
   isActive: boolean;
   createdAt: Date;

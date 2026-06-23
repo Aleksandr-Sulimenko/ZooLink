@@ -170,12 +170,21 @@ sequenceDiagram
 | `email` | VARCHAR(255) | Нет | Для уведомлений (опционально) |
 | `email_verified` | BOOLEAN | Нет | True если email подтвержден через ссылку |
 | `password_hash` | VARCHAR(60) | Нет (если только OAuth) | Хеш пароля bcrypt, если используется аутентификация по телефону |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER') | Да | По умолчанию: USER |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER') | Да | По умолчанию: USER. Канон из 7 ролей согласно `docs/specs/security/rbac-matrix.md` / ADR-0011; роли аддитивны (BREEDER/FARMER/VETERINARIAN/GROOMER = USER + дополнительные возможности). `principal_type` (HUMAN\|AGENT) ортогонален `role` (ADR-0006). |
 | `is_active` | BOOLEAN | Да | True = может войти; False = деактивирован |
 | `created_at` | TIMESTAMP | Да | Время регистрации |
 | `updated_at` | TIMESTAMP | Да | Последнее обновление профиля |
 | `last_login_at` | TIMESTAMP | Нет | Для отслеживания активности |
 | `deactivated_at` | TIMESTAMP | Нет | Когда пользователь выбрал деактивацию |
+
+> **(role-canon sync, normative) — `users.role` приведён к канону из 7 ролей.**
+> **ЧТО:** Добавлены `BREEDER` и `FARMER` в enum `role`, так что identity-BR теперь перечисляет все 7 ролей
+> `{USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER}`, совпадая с `database_schema.sql` и
+> `docs/specs/security/rbac-matrix.md`.
+> **ПОЧЕМУ:** GAP-TRACE-004 — набор ролей был рассинхронизирован в трёх доках (в identity-BR отсутствовали BREEDER/FARMER).
+> Три источника правды по ролям — прямой риск для RBAC, который и есть предмет Admin-домена.
+> **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** один канон ролей (валидированный на PG) означает, что RBAC-матрица, CASL-abilities,
+> гварды и миграции опираются на одно множество; additive-модель и `principal_type ⟂ role` (ADR-0006) сохранены.
 
 ## Нефункциональные требования (специфичные для Identity)
 - **Производительность**: Аутентификация (вход/регистрация) должна завершаться в течение 2с при нормальной нагрузке.

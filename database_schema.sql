@@ -10,11 +10,16 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- ========== Reference Data (Admin Domain) ==========
+-- Lookup tables localize names via name_localized JSONB {ru,en} (localization_specification.md +
+-- API_CONVENTIONS §6 / owner-decision #3) — one source of truth, language added without a schema change.
+-- sort_order = display ordering. created_by/updated_by (provenance, nullable FK→users, agent-as-principal
+-- ready per ADR-0006) and market (ADR-0002) are added in the ALTER mirror block below, because they
+-- forward-reference users (defined later in this file). (migration 0008/0018)
 CREATE TABLE species (
     id SERIAL PRIMARY KEY,
     code VARCHAR(50) NOT NULL UNIQUE, -- e.g., 'dog', 'cattle'
-    name_ru VARCHAR(100) NOT NULL,
-    name_en VARCHAR(100) NOT NULL,
+    name_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
@@ -23,8 +28,8 @@ CREATE TABLE breeds (
     id SERIAL PRIMARY KEY,
     species_id INTEGER NOT NULL REFERENCES species(id) ON DELETE RESTRICT,
     code VARCHAR(50) NOT NULL,
-    name_ru VARCHAR(100) NOT NULL,
-    name_en VARCHAR(100) NOT NULL,
+    name_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     UNIQUE (species_id, code)
@@ -33,8 +38,8 @@ CREATE TABLE breeds (
 -- Optional: City directory for geo-search (managed by Admin)
 CREATE TABLE cities (
     id SERIAL PRIMARY KEY,
-    name_ru VARCHAR(100) NOT NULL,
-    name_en VARCHAR(100) NOT NULL,
+    name_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
@@ -609,30 +614,32 @@ END $$;
 
 -- ========== Initial Data (examples) ==========
 -- Insert core species and breeds
-INSERT INTO species (code, name_ru, name_en) VALUES
-('dog', 'Собака', 'Dog'),
-('cat', 'Кошка', 'Cat'),
-('cattle', 'Крупный рогатый скот', 'Cattle'),
-('sheep', 'Овца', 'Sheep'),
-('horse', 'Лошадь', 'Horse')
+INSERT INTO species (code, name_localized) VALUES
+('dog',    '{"ru": "Собака", "en": "Dog"}'),
+('cat',    '{"ru": "Кошка", "en": "Cat"}'),
+('cattle', '{"ru": "Крупный рогатый скот", "en": "Cattle"}'),
+('sheep',  '{"ru": "Овца", "en": "Sheep"}'),
+('horse',  '{"ru": "Лошадь", "en": "Horse"}')
 ON CONFLICT (code) DO NOTHING;
 
-INSERT INTO breeds (species_id, code, name_ru, name_en)
-SELECT s.id, 'akita', 'Акита', 'Akita' FROM species s WHERE s.code = 'dog'
+INSERT INTO breeds (species_id, code, name_localized)
+SELECT s.id, 'akita', '{"ru": "Акита", "en": "Akita"}'::jsonb FROM species s WHERE s.code = 'dog'
 UNION ALL
-SELECT s.id, 'german_shepherd', 'Немецкая овчарка', 'German Shepherd' FROM species s WHERE s.code = 'dog'
+SELECT s.id, 'german_shepherd', '{"ru": "Немецкая овчарка", "en": "German Shepherd"}'::jsonb FROM species s WHERE s.code = 'dog'
 UNION ALL
-SELECT s.id, 'persian', 'Персидская', 'Persian' FROM species s WHERE s.code = 'cat'
+SELECT s.id, 'persian', '{"ru": "Персидская", "en": "Persian"}'::jsonb FROM species s WHERE s.code = 'cat'
 UNION ALL
-SELECT s.id, 'holmstein', 'Голштинская', 'Holstein' FROM species s WHERE s.code = 'cattle'
+SELECT s.id, 'holmstein', '{"ru": "Голштинская", "en": "Holstein"}'::jsonb FROM species s WHERE s.code = 'cattle'
 ON CONFLICT (species_id, code) DO NOTHING;
 
 -- Initial cities (optional). cities has no natural unique key, so ON CONFLICT cannot dedup;
--- guard with NOT EXISTS so re-running the schema/seed stays idempotent.
-INSERT INTO cities (name_ru, name_en)
-SELECT v.name_ru, v.name_en
-FROM (VALUES ('Москва', 'Moscow'), ('Санкт-Петербург', 'Saint Petersburg')) AS v(name_ru, name_en)
-WHERE NOT EXISTS (SELECT 1 FROM cities c WHERE c.name_ru = v.name_ru);
+-- guard with NOT EXISTS so re-running the schema/seed stays idempotent (match on the ru name).
+INSERT INTO cities (name_localized)
+SELECT v.name_localized::jsonb
+FROM (VALUES ('{"ru": "Москва", "en": "Moscow"}'), ('{"ru": "Санкт-Петербург", "en": "Saint Petersburg"}')) AS v(name_localized)
+WHERE NOT EXISTS (
+    SELECT 1 FROM cities c WHERE c.name_localized->>'ru' = (v.name_localized::jsonb)->>'ru'
+);
 
 -- Initial feature toggles (MVP: everything off except core)
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) VALUES
@@ -1022,6 +1029,29 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON refresh_tokens(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
 
+-- ADR-0011 §5.3 — agent service-credential store (FORM ONLY; gated, NOT populated in MVP).
+-- A rotatable/revocable, hashed-secret store keyed to an AGENT principal (users.id). The form ships
+-- now so activating agent service-auth later (ADR-0006 P-A…P-D) needs no schema rewrite; the AGENT
+-- gate is off in MVP, so no row is created and no secret is verified. Non-negotiables enforced by the
+-- shape (ADR-0011 §C): in-monolith, rotatable (issue-new + revoke-old), revocable (mark inactive),
+-- never plaintext at rest (only secret_hash is stored). FK ON DELETE RESTRICT mirrors the
+-- agent-lifecycle = deactivate-not-delete rule (ADR-0011 §4) so credentials can't orphan.
+CREATE TABLE IF NOT EXISTS service_credentials (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    label         VARCHAR(120),            -- human-readable purpose/scope label (operability)
+    secret_hash   VARCHAR(255) NOT NULL,   -- hashed secret only; NEVER plaintext at rest
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    revoked_at    TIMESTAMP WITH TIME ZONE,
+    rotated_from  UUID REFERENCES service_credentials(id) ON DELETE SET NULL -- rotation chain (issue-new links to old)
+);
+-- Lookup of live credentials for an agent (verification path once the gate is on).
+CREATE INDEX IF NOT EXISTS idx_service_credentials_agent_active
+    ON service_credentials(agent_user_id) WHERE is_active = TRUE;
+COMMENT ON TABLE service_credentials IS
+  'ADR-0011 §5.3: rotatable/revocable hashed-secret store for AGENT-principal service-auth. FORM ONLY in MVP (gate off; not populated). In-monolith, never plaintext.';
+
 -- Animal: relaxed breed normalization + org-ownership MVP lock
 CREATE OR REPLACE FUNCTION trg_animals_immutable_and_owner()
 RETURNS TRIGGER AS $$
@@ -1119,6 +1149,94 @@ ALTER TABLE species ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT 
 ALTER TABLE breeds  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE cities  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE feature_toggles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- ========== A2: reference-data provenance + localization + INT-entity audit (migration 0018) ==========
+-- created_by/updated_by forward-reference users(id), so they are added here (after users is defined).
+-- Nullable FK → agent-as-principal ready (ADR-0006): an AGENT may own a reference-data change.
+ALTER TABLE species ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE species ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE breeds  ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE breeds  ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE cities  ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE cities  ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- Per-locale GIN indexes for localized lookup search (mirrors organizations/branches/animals).
+CREATE INDEX IF NOT EXISTS idx_species_name_localized_en ON species USING GIN ((name_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_species_name_localized_ru ON species USING GIN ((name_localized -> 'ru'));
+CREATE INDEX IF NOT EXISTS idx_breeds_name_localized_en  ON breeds  USING GIN ((name_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_breeds_name_localized_ru  ON breeds  USING GIN ((name_localized -> 'ru'));
+CREATE INDEX IF NOT EXISTS idx_cities_name_localized_en  ON cities  USING GIN ((name_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_cities_name_localized_ru  ON cities  USING GIN ((name_localized -> 'ru'));
+
+-- audit_log: INT-keyed lookup entities (species/breeds/cities) cannot use entity_id (UUID).
+-- entity_id_int carries the SERIAL id so reference-data CRUD is auditable by subject id.
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS entity_id_int INTEGER;
+COMMENT ON COLUMN audit_log.entity_id_int IS
+  'Integer entity id for INT-keyed lookup entities (species/breeds/cities). UUID entities use entity_id; INT lookups use this. Exactly one is populated per row.';
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity_int ON audit_log(entity_type, entity_id_int)
+  WHERE entity_id_int IS NOT NULL;
+
+-- ========== A3: breeding reference dictionaries (migration 0019) ==========
+-- Two INT-keyed admin-managed lookup tables in the SAME shape as species/breeds/cities (A2 canon):
+-- health_certifications + genetic_markers. Defined here (after users) because created_by/updated_by
+-- forward-reference users(id). They are managed via the SAME reference-data registry (DATASETS + CAPS) —
+-- this is the extensibility property of A2: a new dataset reuses the CRUD/audit/localization/concurrency
+-- code unchanged. FORM now (GAP-TRACE-002); marketplace FILTERING behaviour stays deferred (Фаза 2). The
+-- pet-side soft-tags (temperament_tags/health_flags) are intentionally free text/JSONB (lookup added
+-- additively in Фаза 2); animal-statuses are a state CHECK enum, not a dataset; decision-templates are
+-- deferred to the moderation contract (B10). market = ADR-0002 pet/livestock hard split.
+CREATE TABLE IF NOT EXISTS health_certifications (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) NOT NULL,
+    name_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    market VARCHAR(10) NOT NULL DEFAULT 'livestock' CHECK (market IN ('pet', 'livestock')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (market, code)
+);
+CREATE TABLE IF NOT EXISTS genetic_markers (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) NOT NULL,
+    name_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    market VARCHAR(10) NOT NULL DEFAULT 'livestock' CHECK (market IN ('pet', 'livestock')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (market, code)
+);
+CREATE INDEX IF NOT EXISTS idx_health_certifications_name_localized_en ON health_certifications USING GIN ((name_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_health_certifications_name_localized_ru ON health_certifications USING GIN ((name_localized -> 'ru'));
+CREATE INDEX IF NOT EXISTS idx_genetic_markers_name_localized_en ON genetic_markers USING GIN ((name_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_genetic_markers_name_localized_ru ON genetic_markers USING GIN ((name_localized -> 'ru'));
+-- updated_at triggers (update_updated_at_column() defined at the top of this file; naming matches
+-- the update_<tbl>_updated_at convention / migration 0013).
+DROP TRIGGER IF EXISTS update_health_certifications_updated_at ON health_certifications;
+CREATE TRIGGER update_health_certifications_updated_at BEFORE UPDATE ON health_certifications
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DROP TRIGGER IF EXISTS update_genetic_markers_updated_at ON genetic_markers;
+CREATE TRIGGER update_genetic_markers_updated_at BEFORE UPDATE ON genetic_markers
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- A3 seed (idempotent: ON CONFLICT (market, code) DO NOTHING) — mirrors migration 0019.
+INSERT INTO health_certifications (code, name_localized, market, sort_order) VALUES
+  ('tb_free',           '{"ru": "Свободно от туберкулёза", "en": "TB-free"}'::jsonb,            'livestock', 10),
+  ('brucellosis_free',  '{"ru": "Свободно от бруцеллёза",  "en": "Brucellosis-free"}'::jsonb,   'livestock', 20),
+  ('johnes_negative',   '{"ru": "Йоне-негативный",          "en": "Johnes-negative"}'::jsonb,    'livestock', 30),
+  ('vq_status',         '{"ru": "VQ-статус",                "en": "VQ-status"}'::jsonb,           'livestock', 40)
+ON CONFLICT (market, code) DO NOTHING;
+INSERT INTO genetic_markers (code, name_localized, market, sort_order) VALUES
+  ('polled',             '{"ru": "Комолость (polled)",          "en": "Polled"}'::jsonb,                    'livestock', 10),
+  ('horned',             '{"ru": "Рогатость",                    "en": "Horned"}'::jsonb,                     'livestock', 20),
+  ('coat_color',         '{"ru": "Ген окраса шерсти",            "en": "Coat-colour gene"}'::jsonb,           'livestock', 30),
+  ('disease_resistance', '{"ru": "Маркер устойчивости к болезни","en": "Disease-resistance marker"}'::jsonb,  'livestock', 40)
+ON CONFLICT (market, code) DO NOTHING;
 
 -- ========== Round-5 operations (moderation queue / identity language / notification delivery; migration 0009) ==========
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_enqueued_at TIMESTAMP WITH TIME ZONE;

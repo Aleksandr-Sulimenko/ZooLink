@@ -7,6 +7,11 @@ import { JwtAuthGuard } from '../../lib/auth/jwt-auth.guard';
 import { RolesGuard } from '../../lib/auth/roles.guard';
 import { PoliciesGuard } from '../../lib/auth/policies.guard';
 import { AbilityFactory } from '../../lib/auth/ability.factory';
+import { BearerJwtAuthenticator } from '../../lib/auth/bearer-jwt.authenticator';
+import {
+  REQUEST_AUTHENTICATORS,
+  type RequestAuthenticator,
+} from '../../lib/auth/request-authenticator';
 import { TokenService } from './token.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuthService } from './auth.service';
@@ -37,6 +42,15 @@ import { AuthController } from './auth.controller';
     RefreshTokenService,
     AuthService,
     AbilityFactory,
+    // ADR-0011 §5: ordered authenticator chain consumed by JwtAuthGuard (source-agnostic principal).
+    // BearerJwt is the only link today; AgentServiceToken slots in additively later (gated). Order =
+    // priority (first non-null principal wins).
+    BearerJwtAuthenticator,
+    {
+      provide: REQUEST_AUTHENTICATORS,
+      inject: [BearerJwtAuthenticator],
+      useFactory: (bearer: BearerJwtAuthenticator): RequestAuthenticator[] => [bearer],
+    },
     // Global guard chain (registration order = execution order): authenticate, then coarse role
     // gate, then CASL policy gate. Each is metadata-gated (no decorator → pass).
     { provide: APP_GUARD, useClass: JwtAuthGuard },

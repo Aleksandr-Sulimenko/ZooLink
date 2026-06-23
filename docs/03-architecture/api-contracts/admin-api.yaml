@@ -9,27 +9,28 @@ info:
     returns both locales), §12 sort convention, If-Match/ETag on mutating PATCH (§10).
 
 
-    Reference-data `dataset` reconciliation (round-9, normative) — aligned to the actual schema
-    (`database_schema.sql`) and rbac-matrix.md ("Reference data (species, breeds, cities)").
+    Reference-data `dataset` reconciliation (round-9 → A3, normative) — aligned to the actual schema
+    (`database_schema.sql`) and rbac-matrix.md.
 
-    WHAT: the `dataset` enum is narrowed from 8 speculative values to the **3 managed lookup tables**
-    that exist as CRUD-able admin reference data: `species`, `breeds`, `cities`.
-    The other 5 are NOT admin-managed lookup tables and are removed from the enum:
+    WHAT: the `dataset` enum is the **5 managed INT-keyed lookup tables** that exist as CRUD-able admin
+    reference data: `species`, `breeds`, `cities`, `health_certifications`, `genetic_markers`.
+    The last two were added in A3 (ADMIN_PHASE_ACTION_PLAN) as **form-now / behaviour-later** breeding
+    dictionaries (livestock health-certs & genetic markers): the managed lookup form + CRUD exists now,
+    while their marketplace **filtering** is deferred (Фаза 2) — anti-rewrite per IMPLEMENTATION_PLAYBOOK §5.
+    NOT admin-managed datasets (excluded from the enum):
       - `listing-types`  → fixed DB CHECK enum on `listings.listing_type`
-                           ('sale','breeding','show','adoption','stud_service'); changing it is a
-                           schema/ADR change, not row CRUD.
-      - `animal-statuses`→ fixed DB CHECK enums on `listings.status` / `animals` lifecycle; same as above.
-      - `traits`         → no table; deferred (Animal/breeding domain not yet built — Фаза 2).
-      - `health-certifications` → no table; health data is JSONB on animals; deferred (Фаза 2).
-      - `genetic-markers`→ no table; gated behind `feature_toggles.genetics_portal` (off) — deferred (Фаза 2).
+                           ('sale','breeding','show','adoption','stud_service'); schema/ADR change, not CRUD.
+      - `animal-statuses`→ fixed DB CHECK lifecycle enums on `listings.status` / `animals`; same as above.
+      - `traits` / `temperament_tags` / `health_flags` → free text/JSONB soft tags, not controlled lookups;
+                           a lookup table can be added additively in Фаза 2 without a rewrite.
 
-    WHY: only species/breeds/cities are INT-keyed managed lookups in the schema; the contract listed
-    datasets with no backing managed table, which would let clients call endpoints that cannot exist
-    and contradicts the RBAC matrix (CRUD scope = species, breeds, cities only).
+    WHY: species/breeds/cities/health_certifications/genetic_markers are the INT-keyed managed lookups in
+    the schema (= code `DATASETS`); the contract must neither list datasets with no backing managed table
+    (404/handler drift) nor omit ones that now exist (code↔contract drift).
 
-    WHY BETTER: the contract now matches the source of truth (schema + RBAC), prevents 404/handler
-    drift, keeps MVP scope honest (no Фаза-2 leakage), and leaves a documented path to re-add a
-    dataset once it has a real managed table (then extend this enum + add the slice).
+    WHY BETTER: the contract matches the source of truth (schema + RBAC + code DATASETS), keeps MVP scope
+    honest (form now, filtering behaviour gated), and the dataset registry absorbs new lookups without
+    changing the CRUD/audit/localization shape.
 
     Also (round-9): reference-data entry `id` is an **integer** (SERIAL lookup keys per the id-type
     convention: lookups=INT, entities=UUID), not a UUID; and list responses use the standard
@@ -49,12 +50,17 @@ paths:
     get:
       summary: Get all active entries in a reference dataset
       operationId: getReferenceData
-      x-required-roles: [ADMIN]
+      description: >-
+        Public read (security opt-out per API_CONVENTIONS §3): reference data is reference-grade public
+        content (rbac-matrix.md "Reference data = R/R/CRUD" + §3 public-endpoint list). PUBLIC reads return
+        the resolved `name` (Accept-Language); an authenticated ADMIN/editor read returns `nameLocalized`
+        (§6). `includeInactive=true` is honoured for ADMIN only.
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: query
           name: includeInactive
@@ -85,8 +91,6 @@ paths:
                     items: { $ref: '#/components/schemas/ReferenceDataEntry' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
         '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create new reference data entry
@@ -96,7 +100,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: header
           name: Idempotency-Key
@@ -127,7 +131,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
       responses:
         '200':
@@ -143,12 +147,16 @@ paths:
     get:
       summary: Get specific reference data entry by ID
       operationId: getReferenceDataById
-      x-required-roles: [ADMIN]
+      description: >-
+        Public read (security opt-out per API_CONVENTIONS §3): reference data is public content
+        (rbac-matrix.md "Reference data = R/R/CRUD"). PUBLIC reads return the resolved `name`
+        (Accept-Language); an authenticated ADMIN/editor read returns `nameLocalized` (§6).
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
@@ -165,8 +173,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     patch:
@@ -178,7 +184,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
@@ -222,7 +228,7 @@ paths:
         - in: path
           name: dataset
           required: true
-          schema: { type: string, enum: [species, breeds, cities] }
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
@@ -633,17 +639,21 @@ components:
         detail: { type: string }
         instance: { type: string }
         errors: { type: array, items: { type: object } }
-    # round-9 / B0: reconciled to database_schema.sql. Lookup tables (species/breeds/cities) carry a
-    # bilingual name as nameLocalized {en, ru} (both present) — a single LocalizedString, not flat
-    # name_ru/name_en. Admin returns BOTH locales (editor). `code` is present only on species/breeds
+    # round-9 / B0 / A2: reconciled to database_schema.sql (migration 0018). Lookup tables
+    # (species/breeds/cities) localize the name via name_localized JSONB {ru,en} — a single
+    # LocalizedString, not flat name_ru/name_en. Per API_CONVENTIONS §6 the read shape depends on
+    # context: an ADMIN/editor read returns the full `nameLocalized` (both locales); a PUBLIC read
+    # returns the resolved `name` string for Accept-Language (en fallback). Both fields are declared;
+    # exactly the context-appropriate one is populated. `code` is present only on species/breeds
     # (UNIQUE: species globally, breeds per-species); cities have no code. `speciesId` is REQUIRED for
-    # breeds (FK → species). No description/version/deactivated_at columns; soft-delete = isActive boolean.
+    # breeds (FK → species). `sortOrder` is the display ordering (migration 0018). No
+    # description/version/deactivated_at columns; soft-delete = isActive boolean.
     ReferenceDataEntry:
       type: object
       required:
         - id
-        - nameLocalized
         - isActive
+        - sortOrder
         - createdAt
         - updatedAt
       properties:
@@ -661,9 +671,21 @@ components:
           minimum: 1
           nullable: true
           description: Parent species id (breeds only; null otherwise)
+        name:
+          type: string
+          nullable: true
+          description: >-
+            Resolved display name for the requested Accept-Language (en fallback). Populated on PUBLIC
+            reads (API_CONVENTIONS §6); null on ADMIN reads (use nameLocalized instead).
         nameLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Display name (LocalizedString {en, ru}; admin returns both locales)
+          nullable: true
+          description: >-
+            Display name as LocalizedString {en, ru} (both locales). Populated on ADMIN/editor reads;
+            null on PUBLIC reads (use the resolved `name` instead).
+        sortOrder:
+          type: integer
+          description: Display ordering within the dataset (ascending; default 0)
         market:
           type: string
           enum: [pet, livestock]
@@ -700,6 +722,10 @@ components:
           type: string
           enum: [pet, livestock]
           description: Market (species only; defaults to 'pet' when omitted)
+        sortOrder:
+          type: integer
+          default: 0
+          description: Display ordering within the dataset (ascending)
         isActive:
           type: boolean
           default: true
@@ -717,6 +743,9 @@ components:
           type: string
           enum: [pet, livestock]
           description: Market (species only)
+        sortOrder:
+          type: integer
+          description: Display ordering within the dataset (ascending)
         isActive:
           type: boolean
           description: Whether entry is active

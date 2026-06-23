@@ -53,10 +53,12 @@ export class ReferenceDataController {
     @Param('dataset', ParseDatasetPipe) dataset: Dataset,
     @Query() query: ListReferenceDataQueryDto,
     @CurrentUser() actor: AuthPrincipal | undefined,
+    @Headers('accept-language') acceptLanguage: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ items: ReferenceDataEntry[]; meta: unknown }> {
-    const result = await this.service.list(dataset, query, actor);
+    const result = await this.service.list(dataset, query, actor, acceptLanguage);
     res.setHeader('Cache-Control', 'public, max-age=60');
+    res.setHeader('Vary', 'Accept-Language');
     return result;
   }
 
@@ -69,14 +71,18 @@ export class ReferenceDataController {
 
   @Get(':id')
   @Public()
-  @ApiOperation({ summary: 'Get a reference data entry by id (public; +ETag)' })
+  @UseGuards(OptionalJwtGuard)
+  @ApiOperation({ summary: 'Get a reference data entry by id (public resolved name; ADMIN gets nameLocalized; +ETag)' })
   async getById(
     @Param('dataset', ParseDatasetPipe) dataset: Dataset,
     @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() actor: AuthPrincipal | undefined,
+    @Headers('accept-language') acceptLanguage: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<ReferenceDataEntry> {
-    const { entry, etag } = await this.service.getById(dataset, id);
+    const { entry, etag } = await this.service.getById(dataset, id, actor, acceptLanguage);
     res.setHeader('ETag', etag);
+    res.setHeader('Vary', 'Accept-Language');
     return entry;
   }
 
