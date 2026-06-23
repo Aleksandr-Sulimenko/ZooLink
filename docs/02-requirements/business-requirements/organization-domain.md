@@ -84,6 +84,7 @@ Handles the modeling of legal entities (organizations) and their physical locati
 ### 9. Analytics and Reporting
 - Organizations can view aggregated statistics for all their listings (views, contacts shown, etc.) across all branches.
 - Branch-specific analytics are also available.
+- **Contract status (B9, GAP-011)**: the org aggregate endpoint `GET /organizations/{id}/analytics` is **defined as a contract** (`organization-api.yaml`, `OrganizationAnalytics`) — counts now (`totalListings`, `countsByStatus`, `countsByMarket` per ADR-0002, `totalViews`, `totalContactReveals`) with a **series-ready** `series` field (`x-phase:2`, additive). Implementation is scheduled for the frontend phase (form now, behaviour later — owner-decision #6). See `API_CONVENTIONS.md` §16.
 
 ## Non-Functional Requirements
 - **Performance**: Retrieving an organization with its branches and affiliated users should be <300ms.

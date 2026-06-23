@@ -195,6 +195,22 @@ together — a HUMAN reversal references the superseded decision; the original a
   present regardless of the display choice).
 > Query filters that select by actor take the scalar `actorId` (you filter by id, not by the object).
 
+## 16. Analytics envelope (counts now, series-ready) — owner-locked (decision #6, 2026-06-24)
+Analytics responses are **counts-snapshots now** with a **series-ready** shape: every analytics schema is a
+flat counts object (e.g. `views`, `contactReveals`, `totalListings`, `countsByStatus`, `countsByMarket`) **plus
+an optional `series`** array (`nullable: true`, `x-phase: 2`) of per-day points. In MVP `series` is **absent or
+empty**; time-series is added **additively in Фаза 2 without a contract change**.
+- **WHAT:** seller (`GET /listings/{id}/analytics`) and org (`GET /organizations/{id}/analytics`) analytics
+  return counts now; the `series` time-series field exists in the contract but is `x-phase:2`/nullable.
+  **Do not remove the `series` field** to "clean up" MVP — keeping it is what makes the form additive.
+- **WHY:** GAP-011 — the BR/UC promise "Views: 15, Contacts shown: 3" and an org aggregate, but no contract
+  existed; the owner locked the form as counts + series-ready (decision #6) so the contract can ship before the
+  frontend without re-deciding the shape when time-series arrives.
+- **WHY-BETTER-for-the-whole-project:** a single analytics envelope serves both the MVP counts dashboard and the
+  later time-series view with zero contract churn (a consumer ignoring `series` keeps working); markets are split
+  per ADR-0002 (`countsByMarket`), and the form is owner-scoped (seller / org-admin) so authz stays consistent
+  with rbac-matrix.md. Implementation is deferred to the frontend phase — this is **form now, behaviour later**.
+
 ## Conformance status (B0 — contract conformance gate, 2026-06-23)
 B0 brought all 12 contracts onto this document: camelCase bodies (§0), `{items, meta: PageMeta}` (§5, offset
 removed from `matching-api`), RFC7807 `Problem` on every non-2xx (§4), `LocalizedString {en, ru}` (§6, flat
@@ -205,3 +221,7 @@ is applied to moderation/audit/admin actor-bearing responses — `moderation-api
 `actorRole`/`supersedesDecisionId`/`isHumanOverride`, `ContentReport.resolvedBy`) and `admin-api`
 (`AuditLogEntry.actor`, `ModerationLogEntry.actor`, `ModerationActionResponse.actor`, `SystemSetting.updatedBy`).
 `API_CONVENTIONS.md` is the single normative source.
+**B9 done (2026-06-24, decision #6):** the analytics envelope (§16, counts + series-ready) is applied —
+`listings-api` (`GET /listings/{id}/analytics`, `ListingAnalytics`) and `organization-api`
+(`GET /organizations/{id}/analytics`, `OrganizationAnalytics`). `series` is `x-phase:2`/nullable (form now,
+implementation deferred to the frontend phase). GAP-011 closed at the contract level.

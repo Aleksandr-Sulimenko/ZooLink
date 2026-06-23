@@ -226,6 +226,39 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /organizations/{id}/analytics:
+    get:
+      summary: Get aggregated analytics for an organization (across branches)
+      operationId: getOrganizationAnalytics
+      description: >
+        Org-admin aggregate analytics across all branches (BR organization-domain §9). Access is
+        org-scoped: an OWNER/ADMIN of the organization (object-level ownership enforced at the service
+        layer per rbac-matrix.md). Markets are split per ADR-0002 (pet vs livestock). Counts-snapshot
+        now; series-ready (§16) — the optional `series` time-series is x-phase:2 and absent/empty in MVP.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: Organization ID
+      responses:
+        '200':
+          description: Organization analytics snapshot (aggregated across branches)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator for conditional reads (§13)
+            Cache-Control:
+              schema: { type: string }
+              description: Caching directive for the analytics snapshot (§13)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationAnalytics' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organizations/{orgId}/users:
     get:
       summary: List users affiliated with an organization
@@ -721,6 +754,73 @@ components:
           type: string
           format: date
           description: Date when user joined the organization
+    AnalyticsSeriesPoint:
+      type: object
+      description: One time-series data point (x-phase:2, series-ready form — §16).
+      required: [date]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Calendar day (UTC) the metrics aggregate over
+        totalViews:
+          type: integer
+          description: Aggregated views on this day
+        totalContactReveals:
+          type: integer
+          description: Aggregated contact reveals on this day
+    OrganizationAnalytics:
+      type: object
+      description: >
+        Org-admin aggregate analytics across all branches. Counts-snapshot now; `series` is x-phase:2
+        and additive (absent/empty in MVP) — adopting the field now avoids a contract break when
+        time-series ships (§16). Markets split per ADR-0002 (pet vs livestock).
+      required:
+        - organizationId
+        - totalListings
+        - countsByStatus
+        - countsByMarket
+        - totalViews
+        - totalContactReveals
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+          description: Organization this snapshot describes
+        totalListings:
+          type: integer
+          description: Total listings across all branches
+        countsByStatus:
+          type: object
+          description: >
+            Listing counts keyed by lifecycle status (DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED,
+            SOLD, DEACTIVATED). Powers operator/owner skeleton dashboards.
+          additionalProperties: { type: integer }
+        countsByMarket:
+          type: object
+          description: Listing counts keyed by market (pet, livestock) per ADR-0002.
+          properties:
+            pet: { type: integer }
+            livestock: { type: integer }
+        totalViews:
+          type: integer
+          description: Total views aggregated across all branches' listings
+        totalContactReveals:
+          type: integer
+          description: Total contact reveals aggregated across all branches' listings
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the most recent activity across the organization (null if none)
+        series:
+          type: array
+          nullable: true
+          x-phase: 2
+          description: >
+            Optional time-series (per-day aggregated points). Series-ready form (§16) — absent/empty
+            in MVP, added additively in Фаза 2 without a contract change. Do not remove this field.
+          items: { $ref: '#/components/schemas/AnalyticsSeriesPoint' }
   responses:
     Problem:
       description: RFC7807 problem (application/problem+json)

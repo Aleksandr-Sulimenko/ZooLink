@@ -252,6 +252,40 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/analytics:
+    get:
+      summary: Получить аналитику по объявлению (доступ продавцу)
+      operationId: getListingAnalytics
+      description: >
+        Аналитика по одному объявлению для продавца (BR pet-marketplace §5 «Просмотры: 15, Показано
+        контактов: 3»). Доступ ограничен владельцем: продавец объявления ИЛИ org-admin организации
+        объявления (object-level ownership проверяется на сервисном слое по rbac-matrix.md). Сейчас —
+        снимок-счётчики; форма series-ready (§16) — опциональный временной ряд `series` помечен x-phase:2
+        и в MVP отсутствует/пуст. Применяются конвенции публичного чтения (weak ETag + Cache-Control, §13).
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID объявления
+      responses:
+        '200':
+          description: Снимок аналитики объявления
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Слабый валидатор для условных чтений (§13)
+            Cache-Control:
+              schema: { type: string }
+              description: Директива кэширования для снимка аналитики (§13)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListingAnalytics' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/conversations:
     get:
       summary: Получить переписки по объявлению
@@ -593,6 +627,52 @@ components:
           type: integer
           default: 0
           description: Индекс порядка отображения
+    AnalyticsSeriesPoint:
+      type: object
+      description: Одна точка временного ряда (x-phase:2, форма series-ready — §16).
+      required: [date]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Календарный день (UTC), по которому агрегируются метрики
+        views:
+          type: integer
+          description: Просмотры за этот день
+        contactReveals:
+          type: integer
+          description: Показы контактов за этот день
+    ListingAnalytics:
+      type: object
+      description: >
+        Аналитика по объявлению для продавца. Сейчас — снимок-счётчики; `series` помечен x-phase:2 и
+        аддитивен (в MVP отсутствует/пуст) — принятие поля сейчас исключает слом контракта при появлении
+        временного ряда (§16).
+      required: [listingId, views, contactReveals]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Объявление, которое описывает снимок
+        views:
+          type: integer
+          description: Сколько раз объявление показано/просмотрено (BR `view_count`)
+        contactReveals:
+          type: integer
+          description: Всего показов контактов (BR `contact_shown_count`; источник — `contact_reveals`)
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время последней активности (просмотр/показ контактов); null, если активности нет
+        series:
+          type: array
+          nullable: true
+          x-phase: 2
+          description: >
+            Опциональный временной ряд (точки по дням). Форма series-ready (§16) — в MVP отсутствует/пуст,
+            добавляется аддитивно в Фазе 2 без смены контракта. Не удалять это поле.
+          items: { $ref: '#/components/schemas/AnalyticsSeriesPoint' }
     Conversation:
       type: object
       deprecated: true

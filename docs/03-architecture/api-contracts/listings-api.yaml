@@ -252,6 +252,40 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/analytics:
+    get:
+      summary: Get analytics for a listing (seller-owned)
+      operationId: getListingAnalytics
+      description: >
+        Seller-facing analytics for one listing (BR pet-marketplace §5 "Views: 15, Contacts shown: 3").
+        Access is owner-scoped: the listing's seller, OR an org-admin of the listing's organization
+        (object-level ownership enforced at the service layer per rbac-matrix.md). Counts-snapshot now;
+        series-ready (§16) — the optional `series` time-series is x-phase:2 and absent/empty in MVP.
+        Public read conventions apply (weak ETag + Cache-Control, §13).
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: Listing ID
+      responses:
+        '200':
+          description: Listing analytics snapshot
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator for conditional reads (§13)
+            Cache-Control:
+              schema: { type: string }
+              description: Caching directive for the analytics snapshot (§13)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListingAnalytics' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/conversations:
     get:
       summary: Get conversations for a listing
@@ -593,6 +627,51 @@ components:
           type: integer
           default: 0
           description: Display order index
+    AnalyticsSeriesPoint:
+      type: object
+      description: One time-series data point (x-phase:2, series-ready form — §16).
+      required: [date]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Calendar day (UTC) the metrics aggregate over
+        views:
+          type: integer
+          description: Views on this day
+        contactReveals:
+          type: integer
+          description: Contact reveals on this day
+    ListingAnalytics:
+      type: object
+      description: >
+        Seller-facing per-listing analytics. Counts-snapshot now; `series` is x-phase:2 and additive
+        (absent/empty in MVP) — adopting the field now avoids a contract break when time-series ships (§16).
+      required: [listingId, views, contactReveals]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Listing this snapshot describes
+        views:
+          type: integer
+          description: Total times the listing appeared/was viewed (BR `view_count`)
+        contactReveals:
+          type: integer
+          description: Total contact reveals (BR `contact_shown_count`; sourced from `contact_reveals`)
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the most recent view/contact-reveal activity (null if none)
+        series:
+          type: array
+          nullable: true
+          x-phase: 2
+          description: >
+            Optional time-series (per-day points). Series-ready form (§16) — absent/empty in MVP,
+            added additively in Фаза 2 without a contract change. Do not remove this field.
+          items: { $ref: '#/components/schemas/AnalyticsSeriesPoint' }
     Conversation:
       type: object
       deprecated: true

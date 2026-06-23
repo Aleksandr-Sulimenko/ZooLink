@@ -226,6 +226,39 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /organizations/{id}/analytics:
+    get:
+      summary: Получить агрегированную аналитику организации (по всем филиалам)
+      operationId: getOrganizationAnalytics
+      description: >
+        Агрегированная аналитика org-admin по всем филиалам (BR organization-domain §9). Доступ ограничен
+        организацией: OWNER/ADMIN организации (object-level ownership проверяется на сервисном слое по
+        rbac-matrix.md). Рынки разделены по ADR-0002 (pet vs livestock). Сейчас — снимок-счётчики; форма
+        series-ready (§16) — опциональный временной ряд `series` помечен x-phase:2 и в MVP отсутствует/пуст.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID организации
+      responses:
+        '200':
+          description: Снимок аналитики организации (агрегат по всем филиалам)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Слабый валидатор для условных чтений (§13)
+            Cache-Control:
+              schema: { type: string }
+              description: Директива кэширования для снимка аналитики (§13)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationAnalytics' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organizations/{orgId}/users:
     get:
       summary: Список пользователей, связанных с организацией
@@ -721,6 +754,73 @@ components:
           type: string
           format: date
           description: Дата вступления пользователя в организацию
+    AnalyticsSeriesPoint:
+      type: object
+      description: Одна точка временного ряда (x-phase:2, форма series-ready — §16).
+      required: [date]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Календарный день (UTC), по которому агрегируются метрики
+        totalViews:
+          type: integer
+          description: Агрегированные просмотры за этот день
+        totalContactReveals:
+          type: integer
+          description: Агрегированные показы контактов за этот день
+    OrganizationAnalytics:
+      type: object
+      description: >
+        Агрегированная аналитика org-admin по всем филиалам. Сейчас — снимок-счётчики; `series` помечен
+        x-phase:2 и аддитивен (в MVP отсутствует/пуст) — принятие поля сейчас исключает слом контракта при
+        появлении временного ряда (§16). Рынки разделены по ADR-0002 (pet vs livestock).
+      required:
+        - organizationId
+        - totalListings
+        - countsByStatus
+        - countsByMarket
+        - totalViews
+        - totalContactReveals
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+          description: Организация, которую описывает снимок
+        totalListings:
+          type: integer
+          description: Всего объявлений по всем филиалам
+        countsByStatus:
+          type: object
+          description: >
+            Счётчики объявлений по статусу жизненного цикла (DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED,
+            SOLD, DEACTIVATED). Питает skeleton-дашборды оператора/владельца.
+          additionalProperties: { type: integer }
+        countsByMarket:
+          type: object
+          description: Счётчики объявлений по рынку (pet, livestock) по ADR-0002.
+          properties:
+            pet: { type: integer }
+            livestock: { type: integer }
+        totalViews:
+          type: integer
+          description: Всего просмотров по объявлениям всех филиалов
+        totalContactReveals:
+          type: integer
+          description: Всего показов контактов по объявлениям всех филиалов
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время последней активности по организации (null, если активности нет)
+        series:
+          type: array
+          nullable: true
+          x-phase: 2
+          description: >
+            Опциональный временной ряд (агрегированные точки по дням). Форма series-ready (§16) — в MVP
+            отсутствует/пуст, добавляется аддитивно в Фазе 2 без смены контракта. Не удалять это поле.
+          items: { $ref: '#/components/schemas/AnalyticsSeriesPoint' }
   responses:
     Problem:
       description: Проблема RFC7807 (application/problem+json)

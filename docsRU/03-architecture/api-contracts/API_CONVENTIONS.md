@@ -163,6 +163,22 @@ moderation decide, payment confirm — сохраняют guard-based `409`.)
 Устаревшие операции/схемы помечаются `deprecated: true`, сервер шлёт `Deprecation` + `Sunset`. Схемы чата
 (`Conversation`/сообщения) депрекированы в MVP (Фаза 2+, ADR-0005) и должны быть помечены.
 
+## 16. Конверт аналитики (счётчики сейчас, series-ready) — зафиксировано владельцем (решение #6, 2026-06-24)
+Ответы аналитики — это **снимки-счётчики сейчас** с формой **series-ready**: каждая схема аналитики — плоский
+объект счётчиков (напр. `views`, `contactReveals`, `totalListings`, `countsByStatus`, `countsByMarket`) **плюс
+опциональный массив `series`** (`nullable: true`, `x-phase: 2`) точек по дням. В MVP `series` **отсутствует или
+пуст**; временной ряд добавляется **аддитивно в Фазе 2 без смены контракта**.
+- **ЧТО:** аналитика продавца (`GET /listings/{id}/analytics`) и организации (`GET /organizations/{id}/analytics`)
+  возвращают счётчики сейчас; поле временного ряда `series` присутствует в контракте, но помечено `x-phase:2`/nullable.
+  **Не удалять поле `series`** ради «чистоты» MVP — именно оно делает форму аддитивной.
+- **ПОЧЕМУ:** GAP-011 — BR/UC обещают «Просмотры: 15, Показано контактов: 3» и org-агрегат, но контракта не было;
+  владелец зафиксировал форму как счётчики + series-ready (решение #6), чтобы контракт можно было выпустить до
+  фронтенда без пересмотра формы при появлении временного ряда.
+- **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** единый конверт аналитики обслуживает и MVP-дашборд счётчиков, и более
+  поздний вид с временным рядом без слома контракта (потребитель, игнорирующий `series`, продолжает работать);
+  рынки разделены по ADR-0002 (`countsByMarket`), форма owner-scoped (продавец / org-admin), поэтому авторизация
+  согласуется с rbac-matrix.md. Реализация отложена до фронтенд-фазы — это **форма сейчас, поведение потом**.
+
 ## Статус соответствия (B0 — contract conformance gate, 2026-06-23)
 B0 привёл все 12 контрактов к этому документу: camelCase-тела (§0), `{items, meta: PageMeta}` (§5, offset убран из
 `matching-api`), RFC7807 `Problem` на каждом non-2xx (§4), `LocalizedString {en, ru}` (§6, плоские `name_ru/name_en`
@@ -171,5 +187,9 @@ B0 привёл все 12 контрактов к этому документу:
 **Отложено (B0.6, блокировано ADR-0011):** форма актёра в ответе `{ actorId, principalType }` (agent-badge) на
 ответах moderation/audit **пока не** применена — трекается в `ADMIN_PHASE_ACTION_PLAN.md` B0.6.
 `API_CONVENTIONS.md` — единый нормативный источник.
+**B9 выполнено (2026-06-24, решение #6):** конверт аналитики (§16, счётчики + series-ready) применён —
+`listings-api` (`GET /listings/{id}/analytics`, `ListingAnalytics`) и `organization-api`
+(`GET /organizations/{id}/analytics`, `OrganizationAnalytics`). `series` помечен `x-phase:2`/nullable (форма сейчас,
+реализация отложена до фронтенд-фазы). GAP-011 закрыт на уровне контракта.
 
 🌐 EN: [docs/03-architecture/api-contracts/API_CONVENTIONS.md](../../../docs/03-architecture/api-contracts/API_CONVENTIONS.md)
