@@ -43,6 +43,16 @@ SMS: SMS.RU vs SMSC vs MTS Exolve; и т.д.). Решение фиксирует
 | **CDN** | CloudFront, Cloudflare | **Yandex Cloud CDN** | VK Cloud CDN, Selectel CDN, Ngenix | MVP |
 | **Мониторинг / APM** | Datadog, New Relic | **Prometheus + Grafana** | VictoriaMetrics, Yandex Monitoring | MVP |
 | **Трекинг ошибок** | — | **Sentry (self-hosted)** | GlitchTip | MVP |
+| **KMS / управление ключами** | AWS KMS, GCP KMS, Azure Key Vault | **Yandex KMS** (dev = локальный ключ) | VK Cloud KMS, HashiCorp Vault (self-hosted) | Фаза 2+ (форма в MVP по ADR-0012; поведение gated) |
+
+> **ЧТО:** добавлена строка возможности **KMS / управление ключами** в матрицу провайдеров — default
+> Yandex KMS, alt VK Cloud KMS / self-hosted Vault, dev = локальный ключ.
+> **ПОЧЕМУ:** ADR-0012 ввёл порт `CryptoService` с swap-point master-key `LocalMasterKey`→RF-KMS;
+> провайдер KMS — внешний поставщик, и по правилу этого ADR каждый внешний поставщик должен иметь
+> РФ-приемлемый канон за интерфейсом (AWS/GCP/Azure KMS заблокированы в РФ, как и прочие SaaS здесь).
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** канон провайдера ключей зафиксирован в одном месте (эта матрица), а не размазан
+> по ADR-0012; форма (адаптер) живёт в MVP, поведение (подключение KMS) gated — переписывания нет, и
+> РФ-комплаенс (ФЗ-152: данные/ключи в РФ-инфраструктуре) сохранён.
 
 ## Последствия
 
@@ -71,6 +81,7 @@ SMS: SMS.RU vs SMSC vs MTS Exolve; и т.д.). Решение фиксирует
 
 - [ADR-0001](0001-tech-stack.md): назвал исходные (заблокированные в РФ) дефолты и принцип абстракции.
 - [ADR-0009](0009-mvp-vs-target-architecture.md): топология инфраструктуры MVP, где живут эти провайдеры.
+- [ADR-0012](0012-pii-at-rest-encryption.md): добавил строку возможности **KMS** как отложенный swap-point для master-ключа PII (`CryptoService`).
 
 ## Ссылки
 

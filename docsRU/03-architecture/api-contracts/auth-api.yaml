@@ -385,6 +385,35 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /auth/dev-token:
+    post:
+      summary: '[только dev] Выпуск сессии для существующего user id'
+      operationId: devToken
+      security: []
+      description: >-
+        ТОЛЬКО для DEV: выпуск сессии для сквозного тестирования аутентификации против
+        засиженного пользователя, пока полная поверхность входа (phone OTP + OAuth) не готова.
+        **Отключён в production**: при `NODE_ENV=production` эндпоинт отвечает `404 Not Found`
+        (RFC7807) — он не входит в production-поверхность продукта. Не для клиента/UI; не зависеть.
+      x-internal: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DevTokenRequest' }
+      responses:
+        '200':
+          description: Сессия выпущена (только окружения dev/test)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: Не найдено — также возвращается для самого эндпоинта в production
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -600,6 +629,27 @@ components:
         refreshToken:
           type: string
           description: Refresh-токен, полученный при входе/регистрации
+    DevTokenRequest:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: ID существующего пользователя для выпуска сессии (только dev/test)
+    TokenPairResponse:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+      properties:
+        accessToken:
+          type: string
+          description: JWT access-токен (истекает через 15 мин; refresh TTL 7 д — spec 01 round-4)
+        refreshToken:
+          type: string
+          description: Refresh-токен для получения новых access-токенов
     LogoutRequest:
       type: object
       properties:

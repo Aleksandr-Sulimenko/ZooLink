@@ -7,6 +7,11 @@ info:
     Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
     ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), LocalizedString (§6),
     ограничение скорости (§8).
+    **Объём MVP (spec 05):** подбор — это *stateless eligible-set* поиск: кандидат пригоден тогда и
+    только тогда, когда выполнены все жёсткие предикаты (тот же вид, противоположный пол, оба INTACT,
+    оба видимы в поиске разведения, оба активны, разные владельцы, в пределах радиуса). Скоринг
+    совместимости, scoreBreakdown, персистенция матчей, история и обратная связь — **Фаза 2+**
+    (помечено `x-phase: 2`; null/отсутствует в MVP).
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -67,8 +72,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}:
     get:
-      summary: Получить детали конкретного подбора по ID
+      summary: '[Фаза 2] Получить детали конкретного подбора по ID'
       operationId: getMatchById
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** Подбор в MVP — это **stateless eligible-set** поиск (spec 05): нет
+        персистируемых записей `matches`/`match_history`/`match_feedback`, поэтому нет `id` подбора
+        для выборки и нет балла совместимости. Этот эндпоинт (и его scored-ответ) вычисляется в
+        Фазе 2; отсутствует в MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -88,8 +99,12 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/history:
     get:
-      summary: История просмотров/действий пользователя по подборам
+      summary: '[Фаза 2] История просмотров/действий пользователя по подборам'
       operationId: getMatchingHistory
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** Подбор в MVP stateless (нет таблицы `match_history` по spec 05), поэтому нет
+        истории действий для возврата. Вычисляется в Фазе 2; отсутствует в MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
@@ -123,8 +138,12 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}/feedback:
     post:
-      summary: Отправить отзыв о качестве подбора
+      summary: '[Фаза 2] Отправить отзыв о качестве подбора'
       operationId: submitMatchFeedback
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** Отзыв питает контур скоринга совместимости (в MVP нет таблицы
+        `match_feedback` по spec 05). Вычисляется в Фазе 2; отсутствует в MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -193,7 +212,13 @@ components:
         ineligibilityReason:
           type: string
           nullable: true
-          description: Стабильный машинный код причины недопустимости (null если допустимо)
+          enum: [SPECIES_MISMATCH, BREED_RULE, NOT_BREEDING_VISIBLE, REPRODUCTIVE_STATUS, SELF, INACTIVE, GEO_OUT_OF_RANGE]
+          description: >-
+            Стабильный машинный код причины недопустимости (null если допустимо). Соответствует
+            жёстким предикатам MVP из spec 05 §"Breeding eligibility": SPECIES_MISMATCH (тот же вид),
+            BREED_RULE (правило по породе), NOT_BREEDING_VISIBLE
+            (is_visible_in_breeding_search=false), REPRODUCTIVE_STATUS (не INTACT),
+            SELF (тот же владелец / self-match), INACTIVE (не активно), GEO_OUT_OF_RANGE (вне радиуса).
         species:
           $ref: '#/components/schemas/SpeciesSummary'
         breed:
@@ -382,7 +407,10 @@ components:
           minimum: 0
           maximum: 100
           default: 60
-          description: Порог минимального балла совместимости (0-100)
+          x-phase: 2
+          description: >-
+            Порог минимального балла совместимости (0-100). **Фаза 2+ фильтр; игнорируется в MVP**
+            (eligible-set поиск без скоринга — spec 05).
         maxResults:
           type: integer
           minimum: 1
@@ -406,7 +434,9 @@ components:
         matches:
           type: array
           items: { $ref: '#/components/schemas/MatchSummary' }
-          description: Список потенциальных пар, отсортированный по баллу совместимости
+          description: >-
+            MVP: **eligible-set** (животные, прошедшие жёсткие предикаты spec 05), без ранжирования.
+            **Фаза 2+:** отсортировано по баллу совместимости.
         searchParameters:
           $ref: '#/components/schemas/SearchParametersUsed'
         totalFound:
@@ -438,7 +468,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -457,10 +486,16 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Общий балл совместимости (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Общий балл совместимости (0-100). **Вычисляется в Фазе 2; null/отсутствует в MVP** —
+            MVP возвращает eligible-set (жёсткие предикаты spec 05), а не ранжирование.
         scoreBreakdown:
           allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
-          description: Детальная разбивка балла по категориям факторов
+          nullable: true
+          x-phase: 2
+          description: Детальная разбивка балла по категориям факторов. **Вычисляется в Фазе 2; null/отсутствует в MVP.**
         matchReasons:
           type: array
           items: { type: string }
@@ -489,6 +524,10 @@ components:
           description: Когда подбор устаревает (по умолчанию 7 дней с создания)
     ScoreBreakdown:
       type: object
+      x-phase: 2
+      description: >-
+        **Артефакт ранжирования Фазы 2+.** Все суб-баллы вычисляются в Фазе 2; весь объект
+        null/отсутствует в MVP (eligible-set поиск без скоринга). См. spec 05.
       properties:
         geneticScore:
           type: integer
@@ -533,7 +572,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -552,10 +590,16 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Общий балл совместимости (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Общий балл совместимости (0-100). **Вычисляется в Фазе 2; null/отсутствует в MVP** —
+            MVP возвращает eligible-set (жёсткие предикаты spec 05), а не ранжирование.
         scoreBreakdown:
           allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
-          description: Детальная разбивка балла по категориям факторов
+          nullable: true
+          x-phase: 2
+          description: Детальная разбивка балла по категориям факторов. **Вычисляется в Фазе 2; null/отсутствует в MVP.**
         matchReasons:
           type: array
           items: { type: string }

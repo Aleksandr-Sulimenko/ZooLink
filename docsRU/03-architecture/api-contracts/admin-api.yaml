@@ -250,8 +250,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/queue:
     get:
-      summary: Получить объявления, ожидающие модерации
+      summary: '[SUPERSEDED] Очередь модерации — использовать moderation-api'
       operationId: getModerationQueue
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Модерация принадлежит **moderation-api.yaml**, где
+        живёт единый словарь решений (APPROVED / REJECTED / CHANGES_REQUESTED), claim/lock, SLA и
+        модель actor-as-principal. Этот блок модерации в admin-api оставлен лишь как deprecated-
+        указатель, чтобы не было второго расходящегося контракта модерации (DIV-2/3).
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
@@ -311,8 +317,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
-      summary: Получить детали объявления для ревью модерации
+      summary: '[SUPERSEDED] Детали объявления для модерации — использовать moderation-api'
       operationId: getListingForModeration
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** Модерация принадлежит moderation-api.yaml (единый словарь решений + actor-модель). Оставлено лишь как deprecated-указатель.'
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -332,9 +340,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
-      summary: Выполнить действие модерации над объявлением (approve/reject/flag)
+      summary: '[SUPERSEDED] Действие модерации — использовать moderation-api'
       operationId: performModerationAction
-      description: Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10).
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Канонический эндпоинт действия модерации живёт в
+        **moderation-api.yaml**; единый словарь решений — APPROVED / REJECTED / CHANGES_REQUESTED
+        (устаревший глагол FLAG выведен из обращения). Оставлено лишь как deprecated-указатель.
+        Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10).
       x-required-roles: [MODERATOR, ADMIN]
       requestBody:
         required: true
@@ -354,8 +367,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/log/{listing_id}:
     get:
-      summary: Получить историю модерации объявления
+      summary: '[SUPERSEDED] История модерации — использовать moderation-api'
       operationId: getModerationLog
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** История модерации принадлежит moderation-api.yaml. Оставлено лишь как deprecated-указатель.'
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -377,8 +392,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/ban-user:
     post:
-      summary: Забанить пользователя с причиной и длительностью
+      summary: '[SUPERSEDED] Бан пользователя — использовать moderation-api'
       operationId: banUser
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** Бан пользователя как действие модерации принадлежит moderation-api.yaml (единый словарь решений + actor-модель). Оставлено лишь как deprecated-указатель.'
       x-required-roles: [ADMIN]
       requestBody:
         required: true
@@ -551,9 +568,16 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /users/{id}/role:
     patch:
-      summary: Изменить роль пользователя
+      summary: '[SUPERSEDED] Смена роли — использовать auth-api PATCH /admin/users/{userId}/role'
       operationId: changeUserRole
-      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Канонический, *реализованный* эндпоинт смены роли —
+        `PATCH /admin/users/{userId}/role` (`adminSetUserRole`) в **auth-api.yaml**, владеющий
+        процессом повышения роли (7-ролевой enum, аудит, снимок actor-as-principal). Этот дубль в
+        admin-api оставлен лишь как deprecated-указатель, чтобы не было двух расходящихся контрактов
+        одной операции (DIV-2/3). Оптимистичная конкуренция (§10) — требует If-Match с ETag из
+        предыдущего GET.
       x-required-roles: [ADMIN]
       parameters:
         - in: path

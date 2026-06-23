@@ -160,4 +160,4 @@ per-column rotation jobs — all behind the form above.
 - `docs/specs/data-governance.md` §1 (PII inventory), §erase_user
 - `docs/specs/security/security_specification.md` (data-at-rest, field-level encryption, key management)
 - `docs/specs/01-identity-domain.md` (phone_hash HMAC; email recovery lookup)
-- 🌐 RU mirror: `docsRU/04-decisions/0012-pii-at-rest-encryption.md` (to be created by doc-keeper)
+- 🌐 RU mirror: `docsRU/04-decisions/0012-pii-at-rest-encryption.md`

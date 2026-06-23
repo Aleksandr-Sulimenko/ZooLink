@@ -249,8 +249,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/queue:
     get:
-      summary: Get pending listings for moderation
+      summary: '[SUPERSEDED] Get pending listings — use moderation-api'
       operationId: getModerationQueue
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** Moderation is owned by **moderation-api.yaml**, which
+        holds the single decision vocabulary (APPROVED / REJECTED / CHANGES_REQUESTED), claim/lock,
+        SLA and the agent-as-principal actor model. This admin-api moderation block is kept only as
+        a deprecated pointer to prevent a divergent second moderation contract (DIV-2/3).
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
@@ -310,8 +316,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
-      summary: Get listing details for moderation review
+      summary: '[SUPERSEDED] Get listing for moderation — use moderation-api'
       operationId: getListingForModeration
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** Moderation is owned by moderation-api.yaml (single decision vocabulary + actor model). Kept only as a deprecated pointer.'
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -331,9 +339,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
-      summary: Perform moderation action on listing (approve/reject/flag)
+      summary: '[SUPERSEDED] Perform moderation action — use moderation-api'
       operationId: performModerationAction
-      description: State-transition endpoint — keeps guard-based 409 (API_CONVENTIONS §10).
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** The canonical moderation action endpoint lives in
+        **moderation-api.yaml**; the single decision vocabulary is APPROVED / REJECTED /
+        CHANGES_REQUESTED (the legacy FLAG verb is retired). Kept only as a deprecated pointer.
+        State-transition endpoint — keeps guard-based 409 (API_CONVENTIONS §10).
       x-required-roles: [MODERATOR, ADMIN]
       requestBody:
         required: true
@@ -353,8 +366,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/log/{listing_id}:
     get:
-      summary: Get moderation history for a listing
+      summary: '[SUPERSEDED] Get moderation history — use moderation-api'
       operationId: getModerationLog
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** Moderation history is owned by moderation-api.yaml. Kept only as a deprecated pointer.'
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -376,8 +391,10 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /moderation/ban-user:
     post:
-      summary: Ban user with reason and duration
+      summary: '[SUPERSEDED] Ban user — use moderation-api'
       operationId: banUser
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** User-ban as a moderation action is owned by moderation-api.yaml (single decision vocabulary + actor model). Kept only as a deprecated pointer.'
       x-required-roles: [ADMIN]
       requestBody:
         required: true
@@ -550,9 +567,16 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /users/{id}/role:
     patch:
-      summary: Change user role
+      summary: '[SUPERSEDED] Change user role — use auth-api PATCH /admin/users/{userId}/role'
       operationId: changeUserRole
-      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** The canonical, *implemented* role-change endpoint is
+        `PATCH /admin/users/{userId}/role` (`adminSetUserRole`) in **auth-api.yaml**, which owns
+        the role-elevation flow (7-role enum, audit, agent-as-principal actor snapshot). This
+        admin-api duplicate is kept only as a deprecated pointer to avoid two divergent contracts
+        for the same operation (DIV-2/3). Optimistic concurrency (§10) — requires If-Match
+        carrying the ETag from a prior GET.
       x-required-roles: [ADMIN]
       parameters:
         - in: path

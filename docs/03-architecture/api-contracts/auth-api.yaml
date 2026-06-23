@@ -386,6 +386,35 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /auth/dev-token:
+    post:
+      summary: '[dev only] Mint a session for an existing user id'
+      operationId: devToken
+      security: []
+      description: >-
+        DEV-ONLY session minting. Bridges auth end-to-end testing against a seeded user until the
+        full login surface (phone OTP + OAuth) is live. **Disabled in production**: when
+        `NODE_ENV=production` the endpoint responds `404 Not Found` (RFC7807) — it is not part of
+        the production product surface. Not for any client/UI; do not depend on it.
+      x-internal: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DevTokenRequest' }
+      responses:
+        '200':
+          description: Session minted (dev/test environments only)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: Not found — also returned for the endpoint itself in production
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -601,6 +630,27 @@ components:
         refreshToken:
           type: string
           description: Refresh token obtained during login/registration
+    DevTokenRequest:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: Existing user id to mint a session for (dev/test only)
+    TokenPairResponse:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
+        refreshToken:
+          type: string
+          description: Refresh token for obtaining new access tokens
     LogoutRequest:
       type: object
       properties:

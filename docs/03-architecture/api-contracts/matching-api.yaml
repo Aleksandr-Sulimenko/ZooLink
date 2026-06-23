@@ -7,6 +7,10 @@ info:
     Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
     RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), LocalizedString (§6),
     rate limiting (§8).
+    **MVP scope (spec 05):** matching is a *stateless eligible-set* search — a candidate is eligible
+    iff all hard predicates hold (same species, opposite sex, both INTACT, both breeding-visible,
+    both active, different owners, within radius). Compatibility scoring, scoreBreakdown, match
+    persistence, history and feedback are **Фаза 2+** (marked `x-phase: 2`; null/absent in MVP).
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -67,8 +71,14 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}:
     get:
-      summary: Get specific match details by ID
+      summary: '[Фаза 2] Get specific match details by ID'
       operationId: getMatchById
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** MVP matching is a **stateless eligible-set** search (spec 05 §"Breeding
+        eligibility"): there are no persisted `matches`/`match_history`/`match_feedback` records,
+        so there is no match `id` to fetch and no compatibility score. This endpoint (and its
+        scored response) is computed in Фаза 2; absent in MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -88,8 +98,12 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/history:
     get:
-      summary: Get user's past match views/engagements
+      summary: "[Фаза 2] Get user's past match views/engagements"
       operationId: getMatchingHistory
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** MVP matching is stateless (no `match_history` table per spec 05), so there is
+        no engagement history to return. Computed in Фаза 2; absent in MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
@@ -123,8 +137,12 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}/feedback:
     post:
-      summary: Submit feedback on match quality
+      summary: '[Фаза 2] Submit feedback on match quality'
       operationId: submitMatchFeedback
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** Feedback feeds the compatibility-scoring loop (no `match_feedback` table in
+        MVP per spec 05). Computed in Фаза 2; absent in MVP.
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -193,7 +211,13 @@ components:
         ineligibilityReason:
           type: string
           nullable: true
-          description: Stable machine code for ineligibility (null if eligible)
+          enum: [SPECIES_MISMATCH, BREED_RULE, NOT_BREEDING_VISIBLE, REPRODUCTIVE_STATUS, SELF, INACTIVE, GEO_OUT_OF_RANGE]
+          description: >-
+            Stable machine code for ineligibility (null if eligible). Maps to the MVP hard
+            predicates in spec 05 §"Breeding eligibility": SPECIES_MISMATCH (same species),
+            BREED_RULE (breed-level rule), NOT_BREEDING_VISIBLE
+            (is_visible_in_breeding_search=false), REPRODUCTIVE_STATUS (not INTACT),
+            SELF (same owner / self-match), INACTIVE (not active), GEO_OUT_OF_RANGE (outside radius).
         species:
           $ref: '#/components/schemas/SpeciesSummary'
         breed:
@@ -382,7 +406,10 @@ components:
           minimum: 0
           maximum: 100
           default: 60
-          description: Minimum compatibility score threshold (0-100)
+          x-phase: 2
+          description: >-
+            Minimum compatibility score threshold (0-100). **Фаза 2+ filter; ignored in MVP**
+            (eligible-set search is unscored — spec 05).
         maxResults:
           type: integer
           minimum: 1
@@ -406,7 +433,9 @@ components:
         matches:
           type: array
           items: { $ref: '#/components/schemas/MatchSummary' }
-          description: List of potential matches sorted by compatibility score
+          description: >-
+            MVP: the **eligible set** (animals passing the spec 05 hard predicates), unranked.
+            **Фаза 2+:** sorted by compatibility score.
         searchParameters:
           $ref: '#/components/schemas/SearchParametersUsed'
         totalFound:
@@ -438,7 +467,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -457,10 +485,16 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Overall compatibility score (0-100). **Computed in Фаза 2; null/absent in MVP** —
+            MVP returns an eligible set (hard predicates of spec 05), not a ranking.
         scoreBreakdown:
           allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
-          description: Detailed score breakdown by factor category
+          nullable: true
+          x-phase: 2
+          description: Detailed score breakdown by factor category. **Computed in Фаза 2; null/absent in MVP.**
         matchReasons:
           type: array
           items: { type: string }
@@ -489,6 +523,10 @@ components:
           description: When match becomes stale (default 7 days from creation)
     ScoreBreakdown:
       type: object
+      x-phase: 2
+      description: >-
+        **Фаза 2+ ranking artifact.** All sub-scores are computed in Фаза 2; the whole object is
+        null/absent in MVP (eligible-set search has no scoring). See spec 05.
       properties:
         geneticScore:
           type: integer
@@ -533,7 +571,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -552,10 +589,16 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Overall compatibility score (0-100). **Computed in Фаза 2; null/absent in MVP** —
+            MVP returns an eligible set (hard predicates of spec 05), not a ranking.
         scoreBreakdown:
           allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
-          description: Detailed score breakdown by factor category
+          nullable: true
+          x-phase: 2
+          description: Detailed score breakdown by factor category. **Computed in Фаза 2; null/absent in MVP.**
         matchReasons:
           type: array
           items: { type: string }

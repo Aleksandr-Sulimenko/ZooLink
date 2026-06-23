@@ -134,7 +134,7 @@ CREATE TABLE listings (
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
     metadata JSONB DEFAULT '{}'::jsonb,
-    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
+    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing')), -- 'leasing' = ФОРМА сейчас (значение enum, миграция 0021); правила/поведение лизинга — Фаза 2
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     price_cents BIGINT, -- деньги в минорных единицах (копейках) как BIGINT, никогда FLOAT/INTEGER: INTEGER переполняется на сделках масштаба livestock
@@ -158,7 +158,11 @@ CREATE TABLE listings (
 - Продавец всегда пользователь (даже для организационных объявлений)
 - Опциональная привязка к организации/филиалу
 - Геопространственная позиция для поиска по радиусу
-- Различные типы объявлений через ограничение CHECK
+- Различные типы объявлений через ограничение CHECK. Набор — `sale, breeding, show, adoption,
+  stud_service, leasing` (миграция 0021). `leasing` — **форма сейчас / поведение Фаза 2** (B3):
+  значение enum существует, чтобы тип был выбираем и не требовал последующего переписывания схемы,
+  но правила/флоу лизинга (условия, возврат, модель ценообразования) отложены на Фазу 2 — см.
+  `business-requirements/livestock-marketplace.md`. Триггеры объявлений не хардкодят набор типов.
 - Ограничение собственности: либо личное объявление, либо организационное
 
 ### Таблица users (Контекст идентичности)
@@ -202,6 +206,25 @@ CREATE TABLE users (
 - Право на забвение (ФЗ-152): `erase_user()` анонимизирует PII на месте, освобождает идентификаторы
   (phone_hash/oauth_*/email), отзывает сессии и ставит `erased_at`; UUID сохраняется, чтобы строки
   FK RESTRICT остались валидными (data-governance.md §2)
+
+### Таблица refresh_tokens (трекинг сессий/устройств)
+
+`refresh_tokens` — хранилище ротируемых refresh-токенов, обеспечивающее модель сессии
+15-мин access / 7-дн refresh (`nfr/security.md` §Session Management, spec 01). Помимо уже имевшихся
+колонок ротации/семейства (`device_label`, `family_id`), миграция 0020 (B2) добавила колонки
+**контекста сессии**, чтобы пользователь видел и отзывал отдельные сессии, а security-ревью имело
+провенанс:
+
+| Колонка | Тип | Примечания |
+|---|---|---|
+| `ip_address` | `INET` | IP клиента на момент выпуска (безопасность/аудит; редактируется в логах по `nfr/observability.md`) |
+| `user_agent` | `TEXT` | Строка UA клиента на момент выпуска (UX списка устройств) |
+| `last_used_at` | `TIMESTAMPTZ` | Обновляется при каждой ротации; питает "активные сессии" / детекцию простоя |
+| `revoked_reason` | `VARCHAR` | Почему токен инвалидирован (logout / ротация / смена роли / erase / админ) |
+
+**Колонка-плейсхолдер MFA не добавляется**: MFA отложена на Фазу 2 (GAP-013), а спекулятивная пустая
+колонка была бы мёртвой схемой (IMPLEMENTATION_PLAYBOOK §5 — добавляем форму только когда она и есть
+необратимый артефакт). См. исправление по MFA в `nfr/security.md`.
 
 ## Связи и ограничения
 

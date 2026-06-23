@@ -134,7 +134,7 @@ CREATE TABLE listings (
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
     metadata JSONB DEFAULT '{}'::jsonb,
-    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
+    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing')), -- 'leasing' = FORM now (enum value, migration 0021); leasing rules/behaviour are Фаза 2
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     price_cents BIGINT, -- money is stored in minor units (kopecks) as BIGINT, never FLOAT/INTEGER: INTEGER overflows on livestock-scale deals
@@ -158,7 +158,11 @@ CREATE TABLE listings (
 - The seller is always a user (even for organizational listings)
 - Optional association with an organization/branch
 - Geospatial position for radius search
-- Various listing types through a CHECK constraint
+- Various listing types through a CHECK constraint. The set is `sale, breeding, show, adoption,
+  stud_service, leasing` (migration 0021). `leasing` is **form now / behaviour Фаза 2** (B3): the
+  enum value exists so the type is selectable and not a later schema rewrite, but leasing-specific
+  rules/flow (terms, return, pricing model) are deferred to Фаза 2 — see
+  `business-requirements/livestock-marketplace.md`. Listing triggers do not hard-code the type set.
 - Ownership constraint: either a personal listing or an organizational listing
 
 ### users Table (Identity Context)
@@ -202,6 +206,24 @@ CREATE TABLE users (
 - Right-to-erasure (ФЗ-152): `erase_user()` anonymises PII in place, releases identifiers
   (phone_hash/oauth_*/email), revokes sessions and stamps `erased_at`; the UUID is retained so
   FK RESTRICT rows stay valid (data-governance.md §2)
+
+### refresh_tokens Table (session/device tracking)
+
+`refresh_tokens` is the rotating-refresh-token store backing the 15-min access / 7-day refresh
+session model (`nfr/security.md` §Session Management, spec 01). Beyond the rotation/family columns
+already present (`device_label`, `family_id`), migration 0020 (B2) added **session-context** columns
+so a user can see and revoke individual sessions and so security review has provenance:
+
+| Column | Type | Notes |
+|---|---|---|
+| `ip_address` | `INET` | Client IP captured at issue (security/audit; redacted in logs per `nfr/observability.md`) |
+| `user_agent` | `TEXT` | Client UA string at issue (device-list UX) |
+| `last_used_at` | `TIMESTAMPTZ` | Updated on each rotation; powers "active sessions" / idle detection |
+| `revoked_reason` | `VARCHAR` | Why a token was invalidated (logout / rotation / role-change / erase / admin) |
+
+**No MFA placeholder column** is added: MFA is deferred to Фаза 2 (GAP-013), and a speculative
+empty column would be dead schema (IMPLEMENTATION_PLAYBOOK §5 — add the form only when it is the
+irreversible artifact). See the MFA correction in `nfr/security.md`.
 
 ## Relationships and Constraints
 

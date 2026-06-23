@@ -8,7 +8,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
   - `SALE`: Transfer of ownership for compensation (breeding stock, feeder animals, slaughter animals)
   - `MATING`: Offering breeding services (stud animals, AI services) or seeking a mate
   - `AUCTION`: Listing for timed or live auction (not implemented on MVP, placeholder for Фаза 2+)
-  - `LEASING`: Temporary transfer of use (e.g., dairy cow lease, stud lease)
+  - `LEASING`: Temporary transfer of use (e.g., dairy cow lease, stud lease). **Form now / behaviour Фаза 2 (B3):** `leasing` is a selectable `listings.listing_type` enum value (migration 0021) so the type need not be retro-fitted later, but leasing-specific rules/flow (lease terms, return, purchase-option, pricing model) are deferred to Фаза 2 — only the type form exists in MVP.
   - `EMBRYO_TRANSFER`: Sale of embryos or oocytes (placeholder for Фаза 2+)
 - **Livestock Attributes**: Characteristics relevant to productivity and breeding (conformation, production records, genetic tests, health certifications).
 - **Listing Lifecycle**: Similar to pet marketplace but with longer transaction cycles and more documentation requirements.
