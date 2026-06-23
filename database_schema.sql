@@ -76,7 +76,7 @@ CREATE TABLE organization_users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
     user_id UUID NOT NULL, -- FK to users(id) added via ALTER after users table is created (Identity Domain defined later)
-    role_in_org VARCHAR(20) NOT NULL CHECK (role_in_org IN ('OWNER', 'ADMIN', 'STAFF', 'VET', 'MODERATOR')),
+    role_in_org VARCHAR(20) NOT NULL CHECK (role_in_org IN ('OWNER', 'ADMIN', 'STAFF', 'VET')), -- ADR-0011 §7: 4-value canon; MODERATOR is a platform-operator role, NOT an org-membership role. (Effective named constraint chk_org_user_role enforces the same.)
     is_primary BOOLEAN NOT NULL DEFAULT FALSE,
     joined_at DATE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -379,11 +379,24 @@ CREATE TABLE moderation_decisions (
     decision VARCHAR(20) NOT NULL CHECK (decision IN ('APPROVED', 'REJECTED', 'CHANGES_REQUESTED')),
     reason VARCHAR(50) REFERENCES moderation_reasons(code) ON DELETE RESTRICT,
     notes TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-    -- NOTE: no updated_at — append-only. UPDATE/DELETE blocked by trigger below.
+    -- ADR-0011 §1/§2: actor snapshot at write time (append-only ledger records actor state as-of-the-action,
+    -- NOT joined-now). principal_type defaults HUMAN (MVP truth); actor_role is a free snapshot (no enum CHECK — §2).
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (actor_principal_type IN ('HUMAN', 'AGENT')),
+    actor_role VARCHAR(20),
+    -- ADR-0011 §3: human-override = NEW append-only row referencing the superseded decision (never a mutation).
+    supersedes_decision_id UUID REFERENCES moderation_decisions(id) ON DELETE RESTRICT,
+    is_human_override BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- NOTE: no updated_at — append-only. UPDATE/DELETE blocked by trigger below (covers all columns).
+    -- ADR-0011 §3 biconditional: is_human_override TRUE <=> supersedes_decision_id IS NOT NULL.
+    CONSTRAINT chk_moddec_override CHECK (
+        (is_human_override = TRUE  AND supersedes_decision_id IS NOT NULL) OR
+        (is_human_override = FALSE AND supersedes_decision_id IS NULL)
+    )
 );
 CREATE INDEX idx_moddec_entity ON moderation_decisions(entity_type, entity_id);
 CREATE INDEX idx_moddec_moderator ON moderation_decisions(moderator_id, created_at);
+CREATE INDEX idx_moddec_supersedes ON moderation_decisions(supersedes_decision_id) WHERE supersedes_decision_id IS NOT NULL;
 
 -- Immutability guard: moderation_decisions is append-only
 CREATE OR REPLACE FUNCTION trg_block_modify_append_only()
@@ -719,7 +732,7 @@ COMMENT ON COLUMN branches.updated_at IS 'Время последнего обн
 COMMENT ON COLUMN organization_users.id IS 'Первичный ключ';
 COMMENT ON COLUMN organization_users.organization_id IS 'Внешний ключ к организации';
 COMMENT ON COLUMN organization_users.user_id IS 'Внешний ключ к пользователю';
-COMMENT ON COLUMN organization_users.role_in_org IS 'Роль пользователя в организации: OWNER, ADMIN, STAFF, VET, MODERATOR';
+COMMENT ON COLUMN organization_users.role_in_org IS 'Роль пользователя в организации: OWNER, ADMIN, STAFF, VET (ADR-0011 §7 — MODERATOR не является ролью в организации)';
 COMMENT ON COLUMN organization_users.is_primary IS 'Флаг основной организации для уведомлений';
 COMMENT ON COLUMN organization_users.joined_at IS 'Дата присоединения пользователя к организации';
 COMMENT ON COLUMN organization_users.created_at IS 'Время создания записи';
@@ -1082,6 +1095,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     actor_id    UUID REFERENCES users(id) ON DELETE SET NULL,
     actor_role  VARCHAR(20),
+    -- ADR-0011 §1: actor principal_type snapshot at write time (append-only; defaults HUMAN = MVP truth).
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (actor_principal_type IN ('HUMAN', 'AGENT')),
     action      VARCHAR(100) NOT NULL,
     entity_type VARCHAR(40),
     entity_id   UUID,

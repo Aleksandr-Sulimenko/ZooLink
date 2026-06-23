@@ -243,8 +243,12 @@ erDiagram
         VARCHAR_20 decision
         VARCHAR_50 reason FK
         TEXT notes
+        VARCHAR_10 actor_principal_type
+        VARCHAR_20 actor_role
+        UUID supersedes_decision_id FK
+        BOOLEAN is_human_override
         TIMESTAMPTZ created_at
-        %% append-only (immutable)
+        %% append-only (immutable); ADR-0011 actor-snapshot + human-override chain (supersedes_decision_id self-ref)
     }
 
     %% Payment Domain
@@ -365,6 +369,7 @@ erDiagram
         UUID id PK
         UUID actor_id FK
         VARCHAR_20 actor_role
+        VARCHAR_10 actor_principal_type
         VARCHAR_100 action
         VARCHAR_40 entity_type
         UUID entity_id
@@ -442,6 +447,7 @@ erDiagram
     %% Moderation / Payment / Notification Relationships
     users ||..o{ moderation_decisions : "decides"
     moderation_reasons ||..o{ moderation_decisions : "categorizes"
+    moderation_decisions |o..o{ moderation_decisions : "human-override supersedes (ADR-0011)"
     users ||..o{ payment_transactions : "pays"
     payment_transactions ||..o{ refunds : "refunded by"
     payment_transactions |o..o{ listings : "settles (optional)"

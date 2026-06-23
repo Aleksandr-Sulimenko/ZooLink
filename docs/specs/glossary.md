@@ -120,6 +120,12 @@ The professional "veterinarian" appears as two tokens in two **different** role 
 **Moderator / Admin**  
 Operator roles that review content / administer the platform. May be held by a HUMAN or an AGENT (ADR-0006).
 
+**agent-service-auth**  
+The *form* (laid now, behaviour gated) by which an AGENT principal authenticates as a service: a scoped, in-monolith service credential (ADR-0009 — no separate auth service) resolved through the same authenticator chain as humans, with an env signing-secret (≥32) and a rotatable/revocable hashed-secret store keyed to the agent's `users.id` (ADR-0011 §5). No agent token is issued until the AGENT gate is on (DEFAULT HUMAN).
+
+**principal-source-agnostic**  
+The property that authorization (RBAC matrix, CASL abilities, object-level ownership, actor snapshotting) consumes a single principal abstraction `{ actor_id, principal_type, role }` **regardless of how the request authenticated** (ADR-0011 §5). Adding agents later is one additional authenticator (`AgentServiceToken`) on the chain, not an authz/guard rewrite — the authz subject is already agent-agnostic.
+
 ## Statuses & State Machines
 
 **State Machine**  
@@ -130,6 +136,9 @@ A formal model of an entity's lifecycle (states + guarded transitions). ZooLink 
 
 **Moderation status**  
 `listings.moderation_status` ∈ {PENDING, APPROVED, REJECTED, CHANGES_REQUESTED} — the review outcome, a field **separate** from the lifecycle `status`.
+
+**CHANGES_REQUESTED**  
+The **fixable** moderation outcome: the moderator/agent asks the seller to amend the listing (it returns to `DRAFT` for re-submission), as opposed to `REJECTED` (a terminal refusal). This is the canonical token — it supersedes the informal "FLAG"/"flagged" wording in admin-BR, which conflated "needs changes" with "report/flag". Recorded as a `moderation_decisions.decision` value and the `listings.moderation_status` enum (ADR-0003).
 
 **User status**  
 `users.status` ∈ {UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED}.
@@ -150,6 +159,9 @@ The workflow (ADR-0003) where a listing is not publicly visible until a moderato
 
 **ID convention**  
 Business entities use **UUID** primary keys; lookup/reference tables (`species`, `breeds`, `cities`, `supported_languages`) use **INTEGER** keys. Hence `species_id`/`breed_id`/`city_id` are INTEGER.
+
+**dataset** (reference-data)  
+A named set of reference/lookup rows managed under one admin CRUD surface (e.g. `species`, `breeds`, `cities`). The Admin reference-data registry is extensibility-first: a new dataset is added without changing the contract/registry shape. **A state-enum is NOT a dataset** — e.g. `animal-statuses` are lifecycle states (a state machine), not operator-editable reference data, so they are excluded from the registry (ADR/plan A2/A3).
 
 **Passwordless auth**  
 End-user authentication uses **phone OTP + OAuth**, never a password. `password_hash` is reserved for operator roles (ADMIN/MODERATOR) only (spec 01 round-4).

@@ -120,6 +120,12 @@ Append-only запись аудита (`moderation_decisions`) решения м
 **Moderator / Admin**  
 Операторские роли: проверка контента / администрирование площадки. Может занимать HUMAN или AGENT (ADR-0006).
 
+**agent-service-auth**  
+*Форма* (закладывается сейчас, поведение gated), которой AGENT-принципал аутентифицируется как сервис: scoped-credential внутри монолита (ADR-0009 — без отдельного auth-сервиса), резолвится через ту же цепочку authenticator'ов, что и люди, с env signing-секретом (≥32) и хранилищем хешированного секрета с ротацией/отзывом, привязанным к `users.id` агента (ADR-0011 §5). Ни один токен агента не выдаётся, пока гейт AGENT выключен (DEFAULT HUMAN).
+
+**principal-source-agnostic**  
+Свойство, при котором авторизация (RBAC-матрица, CASL-abilities, объектное владение, снапшот актёра) потребляет единую абстракцию принципала `{ actor_id, principal_type, role }` **независимо от того, как аутентифицировался запрос** (ADR-0011 §5). Добавление агентов позже = один дополнительный authenticator (`AgentServiceToken`) в цепочке, а не переписывание authz/guard — субъект авторизации уже agent-агностичен.
+
 ## Статусы и стейт-машины
 
 **State Machine (конечный автомат)**  
@@ -130,6 +136,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 
 **Moderation status**  
 `listings.moderation_status` ∈ {PENDING, APPROVED, REJECTED, CHANGES_REQUESTED} — исход проверки, поле **отдельное** от жизненного `status`.
+
+**CHANGES_REQUESTED**  
+**Исправимый** исход модерации: модератор/агент просит продавца доработать объявление (оно возвращается в `DRAFT` для повторной подачи), в отличие от `REJECTED` (терминальный отказ). Это канонический токен — он заменяет неформальное «FLAG»/«flagged» в admin-BR, где смешивались «нужны изменения» и «жалоба/флаг». Фиксируется как значение `moderation_decisions.decision` и enum `listings.moderation_status` (ADR-0003).
 
 **User status**  
 `users.status` ∈ {UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED}.
@@ -150,6 +159,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 
 **ID convention (конвенция ID)**  
 Бизнес-сущности используют **UUID** первичные ключи; lookup/справочные таблицы (`species`, `breeds`, `cities`, `supported_languages`) — **INTEGER**. Поэтому `species_id`/`breed_id`/`city_id` — INTEGER.
+
+**dataset (датасет, reference-data)**  
+Именованный набор справочных/lookup-строк под одним admin-CRUD (напр. `species`, `breeds`, `cities`). Реестр reference-data в Admin — extensibility-first: новый датасет добавляется без смены формы контракта/реестра. **State-enum НЕ является датасетом** — напр. `animal-statuses` — это состояния жизненного цикла (стейт-машина), а не редактируемые оператором справочные данные, поэтому они исключены из реестра (ADR/план A2/A3).
 
 **Passwordless auth (беспарольная аутентификация)**  
 Аутентификация конечных пользователей — **phone OTP + OAuth**, без пароля. `password_hash` зарезервирован только для операторских ролей (ADMIN/MODERATOR) (спека 01 round-4).

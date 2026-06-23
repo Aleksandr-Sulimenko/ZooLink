@@ -2,40 +2,38 @@ openapi: 3.0.3
 info:
   title: ZooLink Organization API
   version: 1.0.0
-  description: API for managing organizations, branches, and organization-user affiliations in ZooLink.
+  description: >
+    API for managing organizations, branches, and organization-user affiliations in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), LocalizedString (§6),
+    If-Match/ETag on mutating PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /organizations:
     get:
       summary: List organizations
       operationId: listOrganizations
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: name
-          schema:
-            type: string
+          schema: { type: string }
           description: Filter by organization name (case-insensitive, partial match)
         - in: query
           name: is_active
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by active status
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Number of items per page
       responses:
         '200':
@@ -47,159 +45,139 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Organization'
-                  total:
-                    type: integer
-                    description: Total number of organizations
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Organization' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a new organization
       operationId: createOrganization
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OrganizationCreate'
+            schema: { $ref: '#/components/schemas/OrganizationCreate' }
       responses:
         '201':
           description: Organization created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Organization'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organizations/{id}:
     get:
       summary: Get organization by ID
       operationId: getOrganizationById
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Organization details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Organization'
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/Organization' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update organization
       operationId: updateOrganization
-      security:
-        - bearerAuth: []
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /organizations/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OrganizationUpdate'
+            schema: { $ref: '#/components/schemas/OrganizationUpdate' }
       responses:
         '200':
           description: Organization updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Organization'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
       summary: Delete organization (soft delete)
       operationId: deleteOrganization
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Organization deleted successfully
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Organization deleted successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organizations/{id}/branches:
     get:
       summary: List branches for an organization
       operationId: listOrganizationBranches
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Organization ID
         - in: query
           name: is_headquarters
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by headquarters flag
         - in: query
           name: is_active
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by active status
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Number of items per page
       responses:
         '200':
@@ -211,94 +189,69 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Branch'
-                  total:
-                    type: integer
-                    description: Total number of branches
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Branch' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a new branch under an organization
       operationId: createBranch
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Organization ID
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BranchCreate'
+            schema: { $ref: '#/components/schemas/BranchCreate' }
       responses:
         '201':
           description: Branch created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organizations/{orgId}/users:
     get:
       summary: List users affiliated with an organization
       operationId: listOrganizationUsers
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: orgId
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Organization ID
         - in: query
           name: role
-          schema:
-            type: string
-            enum: [OWNER, ADMIN, STAFF, VET, MODERATOR]
+          schema: { type: string, enum: [OWNER, ADMIN, STAFF, VET, MODERATOR] }
           description: Filter by role in organization
         - in: query
           name: is_primary
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by primary affiliation flag
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Number of items per page
       responses:
         '200':
@@ -310,135 +263,119 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/OrganizationUser'
-                  total:
-                    type: integer
-                    description: Total number of organization users
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/OrganizationUser' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Affiliate a user with an organization
       operationId: createOrganizationUser
-      security:
-        - bearerAuth: []
+      x-required-roles: [OWNER, ADMIN]
       parameters:
         - in: path
           name: orgId
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Organization ID
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OrganizationUserCreate'
+            schema: { $ref: '#/components/schemas/OrganizationUserCreate' }
       responses:
         '201':
           description: Organization-user affiliation created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/OrganizationUser'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Organization not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/OrganizationUser' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /organization-users/{id}:
     get:
       summary: Get organization-user affiliation by ID
       operationId: getOrganizationUserById
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Organization-user affiliation details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/OrganizationUser'
-        '404':
-          description: Organization-user affiliation not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/OrganizationUser' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update organization-user affiliation
       operationId: updateOrganizationUser
-      security:
-        - bearerAuth: []
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [OWNER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /organization-users/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OrganizationUserUpdate'
+            schema: { $ref: '#/components/schemas/OrganizationUserUpdate' }
       responses:
         '200':
           description: Organization-user affiliation updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/OrganizationUser'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Organization-user affiliation not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/OrganizationUser' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
       summary: Remove organization-user affiliation
       operationId: deleteOrganizationUser
-      security:
-        - bearerAuth: []
+      x-required-roles: [OWNER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Organization-user affiliation removed successfully
-        '404':
-          description: Organization-user affiliation not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Organization-user affiliation removed successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -446,30 +383,49 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     Organization:
       type: object
       required:
         - id
         - address
-        - is_active
-        - created_at
-        - updated_at
+        - isActive
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        name_localized:
-          type: object
-          description: 'Localized names (e.g., {"en": "Name", "ru": "Название"})'
-          additionalProperties:
-            type: string
-            maxLength: 200
-        description_localized:
-          type: object
-          description: 'Localized description (e.g., {"en": "Description", "ru": "Описание"})'
-          additionalProperties:
-            type: string
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized organization name (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized description (LocalizedString {en, ru})
         inn:
           type: string
           maxLength: 20
@@ -490,7 +446,7 @@ components:
           maxLength: 255
           format: email
           description: Contact email (optional)
-        logo_url:
+        logoUrl:
           type: string
           format: uri
           description: URL to organization logo (optional)
@@ -498,14 +454,14 @@ components:
           type: object
           description: JSONB field for extensibility (subscription tier, branding preferences, etc.)
           default: {}
-        is_active:
+        isActive:
           type: boolean
           description: Active status
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
@@ -514,17 +470,12 @@ components:
       required:
         - address
       properties:
-        name_localized:
-          type: object
-          description: 'Localized names (e.g., {"en": "Name", "ru": "Название"})'
-          additionalProperties:
-            type: string
-            maxLength: 200
-        description_localized:
-          type: object
-          description: 'Localized description (e.g., {"en": "Description", "ru": "Описание"})'
-          additionalProperties:
-            type: string
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized organization name (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized description (LocalizedString {en, ru})
         inn:
           type: string
           maxLength: 20
@@ -545,7 +496,7 @@ components:
           maxLength: 255
           format: email
           description: Contact email (optional)
-        logo_url:
+        logoUrl:
           type: string
           format: uri
           description: URL to organization logo (optional)
@@ -553,21 +504,19 @@ components:
           type: object
           description: JSONB field for extensibility (subscription tier, branding preferences, etc.)
           default: {}
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
     OrganizationUpdate:
       type: object
       properties:
-        name_ru:
-          type: string
-          maxLength: 200
-          description: Russian name of the organization
-        name_en:
-          type: string
-          maxLength: 200
-          description: English name of the organization (optional)
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized organization name (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized description (LocalizedString {en, ru})
         inn:
           type: string
           maxLength: 20
@@ -588,42 +537,40 @@ components:
           maxLength: 255
           format: email
           description: Contact email (optional)
-        logo_url:
+        logoUrl:
           type: string
           format: uri
           description: URL to organization logo (optional)
         metadata:
           type: object
           description: JSONB field for extensibility (subscription tier, branding preferences, etc.)
-        is_active:
+        isActive:
           type: boolean
           description: Active status
     Branch:
       type: object
       required:
         - id
-        - organization_id
-        - city_id
-        - is_active
-        - created_at
-        - updated_at
+        - organizationId
+        - cityId
+        - isActive
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        city_id:
+        cityId:
           type: integer
           description: Foreign key to city for geo-search
-        address_localized:
-          type: object
-          description: 'Localized address (e.g., {"en": "Address", "ru": "Адрес"})'
-          additionalProperties:
-            type: string
+        addressLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized address (LocalizedString {en, ru})
         phone:
           type: string
           maxLength: 30
@@ -637,40 +584,38 @@ components:
           type: object
           description: JSONB field for extensibility (branch-specific attributes)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
           description: Flag indicating headquarters
           default: false
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
     BranchCreate:
       type: object
       required:
-        - organization_id
-        - city_id
+        - organizationId
+        - cityId
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        city_id:
+        cityId:
           type: integer
           description: Foreign key to city for geo-search
-        address_localized:
-          type: object
-          description: 'Localized address (e.g., {"en": "Address", "ru": "Адрес"})'
-          additionalProperties:
-            type: string
+        addressLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Localized address (LocalizedString {en, ru})
         phone:
           type: string
           maxLength: 30
@@ -684,11 +629,11 @@ components:
           type: object
           description: JSONB field for extensibility (branch-specific attributes)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
           description: Flag indicating headquarters
           default: false
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
@@ -696,83 +641,89 @@ components:
       type: object
       required:
         - id
-        - organization_id
-        - user_id
-        - role_in_org
-        - created_at
-        - updated_at
+        - organizationId
+        - userId
+        - roleInOrg
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        user_id:
+        userId:
           type: string
           format: uuid
           description: Foreign key to user
-        role_in_org:
+        roleInOrg:
           type: string
           enum: [OWNER, ADMIN, STAFF, VET, MODERATOR]
-          description: Role in organization
-        is_primary:
+          description: Role in organization (organization-scoped enum, separate from platform roles)
+        isPrimary:
           type: boolean
           description: Flag indicating primary organization for notifications
           default: false
-        joined_at:
+        joinedAt:
           type: string
           format: date
           description: Date when user joined the organization
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
     OrganizationUserCreate:
       type: object
       required:
-        - organization_id
-        - user_id
-        - role_in_org
-        - joined_at
+        - organizationId
+        - userId
+        - roleInOrg
+        - joinedAt
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        user_id:
+        userId:
           type: string
           format: uuid
           description: Foreign key to user
-        role_in_org:
+        roleInOrg:
           type: string
           enum: [OWNER, ADMIN, STAFF, VET, MODERATOR]
-          description: Role in organization
-        is_primary:
+          description: Role in organization (organization-scoped enum, separate from platform roles)
+        isPrimary:
           type: boolean
           description: Flag indicating primary organization for notifications
           default: false
-        joined_at:
+        joinedAt:
           type: string
           format: date
           description: Date when user joined the organization
     OrganizationUserUpdate:
       type: object
       properties:
-        role_in_org:
+        roleInOrg:
           type: string
           enum: [OWNER, ADMIN, STAFF, VET, MODERATOR]
-          description: Role in organization
-        is_primary:
+          description: Role in organization (organization-scoped enum, separate from platform roles)
+        isPrimary:
           type: boolean
           description: Flag indicating primary organization for notifications
-        joined_at:
+        joinedAt:
           type: string
           format: date
           description: Date when user joined the organization
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

@@ -258,7 +258,7 @@ contracts are specified in the linked specs. They were added per the schema audi
 | Table | Domain spec | Notes |
 |---|---|---|
 | `moderation_reasons` | `specs/12-moderation-domain.md` | Admin-configurable reason codes (lookup) |
-| `moderation_decisions` | `specs/12-moderation-domain.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger) |
+| `moderation_decisions` | `specs/12-moderation-domain.md` · `../04-decisions/0011-agent-principal-actor-model.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger). ADR-0011 actor-snapshot (`actor_principal_type` HUMAN/AGENT, `actor_role`) + human-override chain (`supersedes_decision_id` self-ref FK ON DELETE RESTRICT, `is_human_override`, biconditional `chk_moddec_override`) |
 | `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (minor units, never FLOAT); `idempotency_key` UNIQUE |
 | `refunds` | `specs/14-payment-domain.md` | Linked to `payment_transactions` |
 | `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |
@@ -314,6 +314,39 @@ Used for:
 - Timestamps: `created_at` everywhere; `updated_at` maintained by a trigger attached to exactly the tables that have the column (derived from the schema, migration 0013). Append/log tables (`outbox_events`, `audit_log`, `animal_ownership_history`, `messages`) have no `updated_at` and no such trigger
 - Audit: an append-only `audit_log` table (DB-enforced immutability) for privileged operations
 
+### Actor-Principal Model on append-only ledgers (ADR-0011)
+
+Both append-only actor ledgers — `audit_log` and `moderation_decisions` — record the acting principal
+**as a write-time snapshot**, never as a read-time join to `users` (which holds *current*, mutable
+`principal_type`/`role`). An immutable row must reflect who/what acted *at the moment of the action*.
+
+- **`actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'`** (CHECK `HUMAN|AGENT`) on both tables.
+  `DEFAULT 'HUMAN'` is the MVP truth (no agent is active); the column is present now because a missing
+  attribute on an append-only row can never be backfilled truthfully once any AGENT acts. `principal_type`
+  is **orthogonal to `role`** — no cross-column CHECK couples them (ADR-0011 §7).
+- **`moderation_decisions.actor_role VARCHAR(20)`** — free snapshot of the role the actor held when
+  deciding (nullable; intentionally **no** enum CHECK, since the role enum may evolve). Mirrors
+  `audit_log.actor_role`, which already existed.
+- **Human-override chain** — a human reversing an agent decision inserts a **new append-only row** (never a
+  mutation): `is_human_override = TRUE`, `supersedes_decision_id` → the superseded decision
+  (self-referential FK, `ON DELETE RESTRICT`). Both rows remain forever; the agent→human chain is fully
+  reconstructable. The biconditional `chk_moddec_override` enforces `is_human_override = TRUE ⇔
+  supersedes_decision_id IS NOT NULL`. A service-layer rule (not a DB CHECK, as it spans rows) requires an
+  override row's `actor_principal_type = 'HUMAN'` and its `supersedes_decision_id` to reference a decision on
+  the **same** `(entity_type, entity_id)`. Read side resolves "latest effective decision" by following
+  `supersedes_decision_id` (indexed by `idx_moddec_supersedes`).
+- **Agent service-credential store** — a forward-compatible, **gated, not-yet-created** stub
+  (ADR-0011 §5/§C): an in-monolith hashed-secret store keyed to the agent `users.id`, rotatable/revocable,
+  no plaintext at rest, no separate auth service. It is **deferred to A0b** (not part of this A0a migration);
+  the table count changes only when it actually lands.
+- **Agent lifecycle** = deactivation, never deletion (`users.status='DEACTIVATED'`), so the
+  `ON DELETE RESTRICT` FKs from the ledgers are never orphaned.
+
+`organization_users.role_in_org` canon is the **4-value** set `{OWNER, ADMIN, STAFF, VET}`
+(`chk_org_user_role`). `MODERATOR` is a platform-operator role, **not** an org-membership role
+(ADR-0011 §7); the previously contradictory inline CHECK and column comment were corrected to match the
+effective named constraint.
+
 ## Related Decisions
 
 - [ADR-0001: Technology stack selection](../04-decisions/0001-tech-stack.md)
@@ -321,6 +354,7 @@ Used for:
 - [ADR-0003: Pre-moderation workflow](../04-decisions/0003-pre-moderation-workflow.md)
 - [ADR-0004: Animal as the aggregate root](../04-decisions/0004-animal-as-aggregate.md)
 - [ADR-0005: No built-in chat in the MVP](../04-decisions/0005-no-chat-mvp.md)
+- [ADR-0011: Agent-Principal Actor Model (actor snapshot, human-override, role canon)](../04-decisions/0011-agent-principal-actor-model.md)
 
 ## ERD Diagram
 

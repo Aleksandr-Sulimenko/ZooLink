@@ -14,6 +14,7 @@
 - [ADR-0008: Матрица сторонних провайдеров под РФ](0008-rf-provider-matrix.md)
 - [ADR-0009: Архитектура MVP — модульный монолит; микросервисы/K8s — Фаза 2+](0009-mvp-vs-target-architecture.md)
 - [ADR-0010: Готовность к цифровым активам (NFT) — хуки в схеме сейчас, on-chain в Фазе 2+](0010-nft-digital-assets-hooks.md)
+- [ADR-0011: Модель актёра-агента — снапшот актёра, human-override, forward-совместимый service-auth](0011-agent-principal-actor-model.md)
 
 ## Шаблон
 

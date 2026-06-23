@@ -78,18 +78,19 @@ model animals {
 }
 
 model audit_log {
-  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  actor_id    String?  @db.Uuid
-  actor_role  String?  @db.VarChar(20)
-  action      String   @db.VarChar(100)
-  entity_type String?  @db.VarChar(40)
-  entity_id   String?  @db.Uuid
-  before_data Json?
-  after_data  Json?
-  ip_address  String?  @db.Inet
-  user_agent  String?
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  users       users?   @relation(fields: [actor_id], references: [id], onUpdate: NoAction)
+  id                   String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  actor_id             String?  @db.Uuid
+  actor_role           String?  @db.VarChar(20)
+  action               String   @db.VarChar(100)
+  entity_type          String?  @db.VarChar(40)
+  entity_id            String?  @db.Uuid
+  before_data          Json?
+  after_data           Json?
+  ip_address           String?  @db.Inet
+  user_agent           String?
+  created_at           DateTime @default(now()) @db.Timestamptz(6)
+  actor_principal_type String   @default("HUMAN") @db.VarChar(10)
+  users                users?   @relation(fields: [actor_id], references: [id], onUpdate: NoAction)
 
   @@index([actor_id, created_at], map: "idx_audit_log_actor")
   @@index([entity_type, entity_id], map: "idx_audit_log_entity")
@@ -327,16 +328,22 @@ model messages {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model moderation_decisions {
-  id                 String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  moderator_id       String              @db.Uuid
-  entity_type        String              @db.VarChar(20)
-  entity_id          String              @db.Uuid
-  decision           String              @db.VarChar(20)
-  reason             String?             @db.VarChar(50)
-  notes              String?
-  created_at         DateTime            @default(now()) @db.Timestamptz(6)
-  users              users               @relation(fields: [moderator_id], references: [id], onUpdate: NoAction)
-  moderation_reasons moderation_reasons? @relation(fields: [reason], references: [code], onDelete: Restrict, onUpdate: NoAction)
+  id                         String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  moderator_id               String                 @db.Uuid
+  entity_type                String                 @db.VarChar(20)
+  entity_id                  String                 @db.Uuid
+  decision                   String                 @db.VarChar(20)
+  reason                     String?                @db.VarChar(50)
+  notes                      String?
+  created_at                 DateTime               @default(now()) @db.Timestamptz(6)
+  actor_principal_type       String                 @default("HUMAN") @db.VarChar(10)
+  actor_role                 String?                @db.VarChar(20)
+  supersedes_decision_id     String?                @db.Uuid
+  is_human_override          Boolean                @default(false)
+  users                      users                  @relation(fields: [moderator_id], references: [id], onUpdate: NoAction)
+  moderation_reasons         moderation_reasons?    @relation(fields: [reason], references: [code], onDelete: Restrict, onUpdate: NoAction)
+  moderation_decisions       moderation_decisions?  @relation("moderation_decisionsTomoderation_decisions", fields: [supersedes_decision_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_moderation_decisions moderation_decisions[] @relation("moderation_decisionsTomoderation_decisions")
 
   @@index([entity_type, entity_id], map: "idx_moddec_entity")
   @@index([moderator_id, created_at], map: "idx_moddec_moderator")

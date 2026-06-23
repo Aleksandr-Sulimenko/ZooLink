@@ -3,6 +3,20 @@
 > Этот документ **обязателен** для каждого `*-api.yaml` в этом каталоге. Закрывает сквозные пробелы из предпроектного
 > аудита (нет стандарта ошибок, нет деклараций ролей, разнобой security/пагинации). Где контракт молчит — действуют эти правила.
 
+## 0. Регистр JSON (тела запросов и ответов) — **camelCase** (зафиксировано владельцем 2026-06-23)
+Имена полей **тел** API (тела запросов, тела ответов, ключи свойств схем) — **camelCase**
+(`animalId`, `isActive`, `createdAt`, `priceCents`, `nameLocalized`). **БД остаётся `snake_case`**
+(SQL-канон ADR-0007); прикладной слой мапит БД↔API. Исключения, остающиеся `snake_case`:
+**query-параметры** sort/filter из §12 (напр. `sort=created_at:desc`, `species_id`) — они именуют колонки БД,
+а не поля тела — и имена колонок БД в тексте `description:`.
+- **ЧТО:** унифицировать все 12 контрактов на camelCase в телах; привести snake_case-контракты (listings,
+  organization, matching и любые др.) и запретить смешанный регистр.
+- **ПОЧЕМУ:** pre-codegen conformance gate (B0) нашёл смешанный регистр (snake_case в listings/organization/
+  matching, camelCase в остальных) — единый клиент/codegen-таргет был невозможен.
+- **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** единый канон регистра убирает сюрпризы на контракт для фронтенда
+  (Фаза 2) и любого OpenAPI-codegen, предотвращает тихий дрейф док↔код при генерации DTO и оставляет БД
+  свободной быть `snake_case` (ADR-0007) без протечки регистра колонок в публичный контракт.
+
 ## 1. Базовый путь и версионирование
 Все эндпоинты под `/api/v1`. Ломающие изменения → `/api/v2`. `servers: [{ url: /api/v1 }]`, `version: 1.0.0`.
 
@@ -29,6 +43,11 @@ paths:
 ```
 Нормативное соответствие роль→ресурс→действие — **[security/rbac-matrix.md](../../specs/security/rbac-matrix.md)**.
 Объектное владение (напр. редактировать своё животное может только владелец) применяется в сервис-слое по той матрице.
+- **Enum ролей (канон, 7 ролей):** `USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER`. Любой
+  `x-required-roles`, фильтр по роли или схема смены роли (напр. `admin-api.yaml`) использует именно этот набор.
+  `principal_type (HUMAN|AGENT)` **ортогонален** роли (ADR-0006/ADR-0011) — роль может держать ИИ-агент; не
+  смешивать. Роли в рамках организации (`role_in_org`) — **отдельный** enum в `organization-api.yaml`, не входят
+  в платформенный набор ролей.
 
 ## 4. Стандартный конверт ошибок (RFC 7807)
 Все non-2xx ответы используют `application/problem+json` с этой схемой (определить один раз, `$ref` везде):
@@ -53,15 +72,38 @@ Problem:
 ## 5. Пагинация (list-эндпоинты)
 Query-параметры `page` (с 1, по умолчанию 1) и `limit` (по умолчанию 20, макс 100). Конверт ответа:
 ```yaml
-PageMeta: { type: object, properties: { page: {type: integer}, limit: {type: integer}, total: {type: integer}, totalPages: {type: integer} } }
+PageMeta:
+  type: object
+  properties:
+    page:       { type: integer }
+    limit:      { type: integer }
+    total:      { type: integer }
+    totalPages: { type: integer }
+    nextCursor: { type: string, nullable: true }   # опционально, cursor-ready (аддитивно); в page-режиме отсутствует
 # list-ответы: { items: [...], meta: PageMeta }
 ```
-`offset`-пагинация **не** используется — привести matching-api к `page`/`limit`.
+`offset`-пагинация **не** используется — `matching-api` приведён с `offset`/`hasMore` к `page`/`limit`.
+- **ЧТО:** каждый list-эндпоинт возвращает `{ items, meta: PageMeta }`; offset/hasMore убраны.
+- **ПОЧЕМУ:** аудит нашёл `offset`/`hasMore` в `matching-api`, расходящийся с остальными; высокочастотным
+  операторским очередям (модерация) позже понадобится cursor-пагинация без слома контракта.
+- **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** единый конверт `{items, meta}` **cursor-ready** — `meta.nextCursor`
+  аддитивен (клиенты, его игнорирующие, продолжают работать), поэтому мы не переформируем list-ответы, когда
+  операторская очередь переключится с page-режима на keyset-пагинацию. Одна форма для всех потребителей и codegen.
 
 ## 6. Локализация
 - Локализованные поля используют общую схему `LocalizedString`: `{ type: object, properties: { en: {type: string}, ru: {type: string} } }`.
-- Клиент может слать `Accept-Language: ru|en`; API возвращает локализованную прозу на этом языке с **фолбэком на en**,
-  либо полный объект `LocalizedString` для редактируемых ресурсов. Документировать заголовок на read-эндпоинтах.
+  Плоские поля по языкам (`name_ru`/`name_en`) и freeform-`additionalProperties`-string JSONB-карты в контрактах
+  **не** используются — они сворачиваются в одно поле `LocalizedString` (напр. `nameLocalized`, `titleLocalized`).
+- **Admin / редактор справочников** возвращают **полный объект `LocalizedString`** (обе локали — оператор правит
+  все языки). **Публичные** read-эндпоинты возвращают **резолвленную строку** на запрошенный `Accept-Language`
+  (с **фолбэком на en**). Документировать заголовок на read-эндпоинтах.
+- **ЧТО:** каждое локализованное поле — единый `LocalizedString {en, ru}`; admin отдаёт обе локали, публичные —
+  резолвленную строку.
+- **ПОЧЕМУ:** аудит нашёл три сосуществующие формы (плоские `name_ru/name_en`, freeform-JSONB-карты и
+  `LocalizedString`) — клиент не мог понять, какую ждать.
+- **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** одна форма локализации обслуживает и операторский редактор, и
+  публичные чтения, совпадает с миграцией БД `name_localized` JSONB (owner-decision #3) и позволяет добавить язык
+  без изменения контракта (резолвер просто получает новый ключ).
 
 ## 7. Деньги и валюта
 Денежные поля — целые **минорные единицы** (копейки), `format: int64` (BIGINT). Используются два синонимичных
@@ -79,6 +121,8 @@ ISO 4217: `{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` 
 `payment-api.yaml` гейтится `feature_toggles.payments` (Фаза 2+).
 
 ## Чек-лист соответствия (на файл контракта)
+- [ ] все имена полей тел — **camelCase** (§0); только sort/filter query-параметры §12 остаются snake_case
+- [ ] локализованные поля — `LocalizedString {en, ru}` (§6); без плоских `name_ru/name_en` и freeform-JSONB-карт
 - [ ] глобальный `security` + явный `security: []` на публичных
 - [ ] `x-required-roles` на каждой непубличной (соответствует rbac-matrix.md)
 - [ ] все ошибки `$ref` `Problem`
@@ -119,9 +163,13 @@ moderation decide, payment confirm — сохраняют guard-based `409`.)
 Устаревшие операции/схемы помечаются `deprecated: true`, сервер шлёт `Deprecation` + `Sunset`. Схемы чата
 (`Conversation`/сообщения) депрекированы в MVP (Фаза 2+, ADR-0005) и должны быть помечены.
 
-## Статус соответствия (раунд 5)
-Сейчас §2–§7 inline применяет только `favorites-api.yaml`; остальные 11 контрактов нужно привести к этому документу
-(глобальный `security` + public opt-out, `x-required-roles`, `Problem`, `PageMeta`, `*_minor`, §10–§14). Это
-механический проход, трекается как pre-implementation задача — `API_CONVENTIONS.md` — единый нормативный источник.
+## Статус соответствия (B0 — contract conformance gate, 2026-06-23)
+B0 привёл все 12 контрактов к этому документу: camelCase-тела (§0), `{items, meta: PageMeta}` (§5, offset убран из
+`matching-api`), RFC7807 `Problem` на каждом non-2xx (§4), `LocalizedString {en, ru}` (§6, плоские `name_ru/name_en`
+и freeform-JSONB-карты убраны), `If-Match`/`ETag` (§10) на мутирующих admin/moderation PATCH, и 7-ролевой enum (§3)
+в `admin-api`. `favorites-api.yaml` получил RU-зеркало.
+**Отложено (B0.6, блокировано ADR-0011):** форма актёра в ответе `{ actorId, principalType }` (agent-badge) на
+ответах moderation/audit **пока не** применена — трекается в `ADMIN_PHASE_ACTION_PLAN.md` B0.6.
+`API_CONVENTIONS.md` — единый нормативный источник.
 
 🌐 EN: [docs/03-architecture/api-contracts/API_CONVENTIONS.md](../../../docs/03-architecture/api-contracts/API_CONVENTIONS.md)

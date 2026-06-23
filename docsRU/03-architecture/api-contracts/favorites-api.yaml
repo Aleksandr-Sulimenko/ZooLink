@@ -3,8 +3,9 @@ info:
   title: ZooLink Favorites API
   version: 1.0.0
   description: >
-    User favorites (saved listings). Conforms to API_CONVENTIONS.md: bearer auth required,
-    RFC7807 Problem errors, page/limit pagination. Backed by the `favorites` table (UNIQUE user_id+listing_id).
+    Избранное пользователя (сохранённые объявления). Соответствует API_CONVENTIONS.md: camelCase-тела (§0),
+    обязательная bearer-auth, ошибки RFC7807 Problem, пагинация page/limit. Подкреплено таблицей
+    `favorites` (UNIQUE user_id+listing_id).
 servers:
   - url: /api/v1
 security:
@@ -12,14 +13,14 @@ security:
 paths:
   /favorites:
     get:
-      summary: List the current user's favorite listings
+      summary: Список избранных объявлений текущего пользователя
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - { in: query, name: page,  schema: { type: integer, default: 1, minimum: 1 } }
         - { in: query, name: limit, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
       responses:
         "200":
-          description: Page of favorites
+          description: Страница избранного
           content:
             application/json:
               schema:
@@ -33,18 +34,18 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     post:
-      summary: Add a listing to favorites (idempotent)
+      summary: Добавить объявление в избранное (идемпотентно)
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       responses:
-        "201": { description: Added (or already present) }
+        "201": { description: Добавлено (или уже присутствует) }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
     delete:
-      summary: Remove a listing from favorites (idempotent)
+      summary: Удалить объявление из избранного (идемпотентно)
       x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       responses:
-        "204": { description: Removed (or was absent) }
+        "204": { description: Удалено (или отсутствовало) }
         "401": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 components:
@@ -75,7 +76,7 @@ components:
         detail: { type: string }
   responses:
     Problem:
-      description: RFC7807 problem
+      description: Проблема RFC7807
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }

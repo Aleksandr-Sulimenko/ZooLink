@@ -2,155 +2,147 @@ openapi: 3.0.3
 info:
   title: ZooLink Auth API
   version: 1.0.0
-  description: API for user authentication, authorization, and profile management in ZooLink.
+  description: >-
+    API for user authentication, authorization, and profile management in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth with public opt-out (§2),
+    x-required-roles (§3), RFC7807 Problem errors (§4), 7-role enum (§3), rate limiting (§8),
+    If-Match/ETag on mutating PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /auth/register/phone:
     post:
       summary: Register user via phone/SMS — sends an OTP (passwordless, OTP-first)
       operationId: registerPhone
+      security: []
       description: >-
-        (round-4/Phase-2, normative) Creates the account in PENDING_VERIFICATION and sends a
-        6-digit SMS OTP. No tokens are issued here — the session is minted by /auth/verify-phone
-        after the code is confirmed.
+        Public (security opt-out). (round-4/Phase-2, normative) Creates the account in
+        PENDING_VERIFICATION and sends a 6-digit SMS OTP. No tokens are issued here — the session is
+        minted by /auth/verify-phone after the code is confirmed.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterPhoneRequest'
+            schema: { $ref: '#/components/schemas/RegisterPhoneRequest' }
       responses:
         '202':
           description: OTP sent; phone verification required
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RegisterPhoneResponse'
-        '400':
-          description: Bad request (validation error)
-        '409':
-          description: Conflict (phone already registered)
-        '429':
-          description: Too Many Requests (rate limit / resend cooldown)
+              schema: { $ref: '#/components/schemas/RegisterPhoneResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/register/oauth/{provider}:
     post:
       summary: Register/Login user via OAuth provider
       operationId: registerOAuth
+      security: []
+      description: Public (security opt-out).
       parameters:
         - in: path
           name: provider
           required: true
-          schema:
-            type: string
-            enum: [google, apple, telegram, vk]
-            description: OAuth provider name
+          schema: { type: string, enum: [google, apple, telegram, vk] }
+          description: OAuth provider name
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OAuthRequest'
+            schema: { $ref: '#/components/schemas/OAuthRequest' }
       responses:
         '200':
           description: User logged in successfully (existing user)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
+              schema: { $ref: '#/components/schemas/AuthResponse' }
         '201':
           description: User registered successfully (new user)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized (invalid OAuth code/token)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/verify-phone:
     post:
       summary: Verify phone with SMS code — activates the account and issues a session
       operationId: verifyPhone
+      security: []
       description: >-
-        (round-4/Phase-2, normative) Validates the OTP, transitions the user to ACTIVE and returns
-        the session (access + refresh) plus the profile. 5 failed attempts → 15-min lockout.
+        Public (security opt-out). (round-4/Phase-2, normative) Validates the OTP, transitions the user
+        to ACTIVE and returns the session (access + refresh) plus the profile. 5 failed attempts →
+        15-min lockout.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/VerifyPhoneRequest'
+            schema: { $ref: '#/components/schemas/VerifyPhoneRequest' }
       responses:
         '200':
           description: Phone verified; session issued
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Bad request (invalid or expired code)
-        '429':
-          description: Too Many Requests (too many attempts / locked out)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/recover/email/request:
     post:
       summary: Request account recovery via a verified email (sends an OTP)
       operationId: recoverEmailRequest
+      security: []
       description: >-
-        (Slice-4, normative) Account recovery for a user who lost access to the phone/OAuth they
-        registered with but has a VERIFIED email on file. Sends a 6-digit OTP to that email.
-        For privacy this ALWAYS returns 202 even if no account/verified-email matches (no account
-        enumeration). The OTP only activates a recovery session when /auth/recover/email/verify is
-        called with a real code. If the account is DEACTIVATED within the 30-day grace, a successful
+        Public (security opt-out). (Slice-4, normative) Account recovery for a user who lost access to
+        the phone/OAuth they registered with but has a VERIFIED email on file. Sends a 6-digit OTP to
+        that email. For privacy this ALWAYS returns 202 even if no account/verified-email matches (no
+        account enumeration). The OTP only activates a recovery session when /auth/recover/email/verify
+        is called with a real code. If the account is DEACTIVATED within the 30-day grace, a successful
         recovery also reactivates it.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RecoverEmailRequest'
+            schema: { $ref: '#/components/schemas/RecoverEmailRequest' }
       responses:
         '202':
           description: If a recoverable account with that verified email exists, an OTP was sent
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RecoverEmailRequestResponse'
-        '400':
-          description: Bad request (validation error)
-        '429':
-          description: Too Many Requests (rate limit / resend cooldown)
+              schema: { $ref: '#/components/schemas/RecoverEmailRequestResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/recover/email/verify:
     post:
       summary: Verify the email recovery OTP — issues a session
       operationId: recoverEmailVerify
+      security: []
       description: >-
-        (Slice-4, normative) Validates the recovery OTP sent to the verified email and returns a
-        fresh session (access + refresh) plus the profile. 5 failed attempts → 15-min lockout.
-        SUSPENDED accounts cannot be recovered (operator action required). A DEACTIVATED account
-        within grace is reactivated; past grace it cannot be recovered.
+        Public (security opt-out). (Slice-4, normative) Validates the recovery OTP sent to the verified
+        email and returns a fresh session (access + refresh) plus the profile. 5 failed attempts →
+        15-min lockout. SUSPENDED accounts cannot be recovered (operator action required). A DEACTIVATED
+        account within grace is reactivated; past grace it cannot be recovered.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RecoverEmailVerifyRequest'
+            schema: { $ref: '#/components/schemas/RecoverEmailVerifyRequest' }
       responses:
         '200':
           description: Recovery verified; session issued
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Bad request (invalid or expired code)
-        '403':
-          description: Forbidden (account not recoverable — SUSPENDED or grace elapsed)
-        '429':
-          description: Too Many Requests (too many attempts / locked out)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /admin/users/{userId}/role:
     patch:
       summary: '[ADMIN] Grant/change a user role (role-elevation)'
@@ -159,8 +151,6 @@ paths:
         (Slice-4, normative) USER → BREEDER/FARMER/VETERINARIAN/GROOMER (and operator roles) is
         ADMIN-granted, never self-claimed. Audit-logged; a role change revokes ALL refresh-token
         families for the target user (round-4 "role change → revoke all families").
-      security:
-        - bearerAuth: []
       x-required-roles: [ADMIN]
       parameters:
         - $ref: '#/components/parameters/UserIdParam'
@@ -168,23 +158,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SetRoleRequest'
+            schema: { $ref: '#/components/schemas/SetRoleRequest' }
       responses:
         '200':
           description: Role updated; target sessions revoked
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '400':
-          description: Bad request (invalid role)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (caller is not ADMIN)
-        '404':
-          description: User not found
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /admin/users/{userId}/rebind:
     post:
       summary: '[ADMIN] Re-bind a user phone/OAuth identifier (assisted recovery)'
@@ -194,8 +179,6 @@ paths:
         identifier for a user who lost access and has no verified email. No silent takeover — the
         action is attributed to the ADMIN in audit_log. Re-binding revokes ALL of the target's
         sessions. Exactly one identifier (newPhone OR oauth provider+id, or a clear) per call.
-      security:
-        - bearerAuth: []
       x-required-roles: [ADMIN]
       parameters:
         - $ref: '#/components/parameters/UserIdParam'
@@ -203,25 +186,19 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RebindRequest'
+            schema: { $ref: '#/components/schemas/RebindRequest' }
       responses:
         '200':
           description: Identifier re-bound; target sessions revoked
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '400':
-          description: Bad request (validation — not exactly one identifier, bad phone)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (caller is not ADMIN)
-        '404':
-          description: User not found
-        '409':
-          description: Conflict (the new identifier is already in use by another account)
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /admin/users/{userId}/erase:
     post:
       summary: '[ADMIN] Erase (anonymise-in-place) a user — ФЗ-152 right-to-erasure'
@@ -233,81 +210,71 @@ paths:
         NULL avatar_url. Append-only audit_log/moderation_decisions are RETAINED under legal hold.
         Idempotent — erasing an already-erased account is a no-op 200. Status becomes DEACTIVATED
         with an `erased_at` marker.
-      security:
-        - bearerAuth: []
       x-required-roles: [ADMIN]
       parameters:
         - $ref: '#/components/parameters/UserIdParam'
       responses:
-        '200':
-          description: User erased (or already erased — idempotent)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (caller is not ADMIN)
-        '404':
-          description: User not found
+        '200': { description: User erased (or already erased — idempotent) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/erase:
     post:
       summary: Request erasure of the current account (ФЗ-152)
       operationId: eraseMe
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       description: >-
         (Slice-4, normative) Self-service right-to-erasure. Per data-governance.md §2 the canonical
         path is deactivate → 30-day grace → erase. This endpoint deactivates immediately if the
         account is still ACTIVE, then schedules/executes erasure. In the MVP (no scheduler for the
         grace job) it deactivates and records the erasure request; the actual anonymisation is run
         by the retention job / an ADMIN after grace. See Open Questions.
-      security:
-        - bearerAuth: []
       responses:
         '202':
           description: Erasure requested; account deactivated, anonymisation scheduled after grace
-        '401':
-          description: Unauthorized
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/refresh:
     post:
       summary: Refresh access token using refresh token
       operationId: refreshToken
+      security: []
+      description: Public (security opt-out).
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RefreshTokenRequest'
+            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
       responses:
         '200':
           description: Token refreshed successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '401':
-          description: Unauthorized (invalid or expired refresh token)
-        '403':
-          description: Forbidden (refresh token reused or revoked)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/logout:
     post:
       summary: Logout user (invalidate tokens)
       operationId: logout
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/LogoutRequest'
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
       responses:
-        '200':
-          description: Logged out successfully
-        '401':
-          description: Unauthorized
+        '200': { description: Logged out successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me:
     get:
       summary: Get current user profile
       operationId: getMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         '200':
           description: Current user profile (returns a weak ETag for optimistic concurrency)
@@ -317,20 +284,18 @@ paths:
               description: Weak validator to send back as If-Match on PATCH
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
+              schema: { $ref: '#/components/schemas/UserProfile' }
         '304':
           description: Not Modified (If-None-Match matched)
-        '401':
-          description: Unauthorized
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update current user profile
       operationId: updateMe
       description: >-
         Optimistic concurrency (API_CONVENTIONS §10): requires the If-Match header carrying the
         ETag from a prior GET /me.
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: If-Match
@@ -341,46 +306,40 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateProfileRequest'
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
       responses:
         '200':
           description: Profile updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '412':
-          description: Precondition Failed (stale ETag — re-fetch and retry)
-        '428':
-          description: Precondition Required (If-Match header missing)
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Deactivate current user account
       operationId: deactivateMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
-        '200':
-          description: Account deactivated successfully
-        '401':
-          description: Unauthorized
+        '200': { description: Account deactivated successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/reactivate:
     post:
       summary: Reactivate deactivated user account
       operationId: reactivateMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
-        '200':
-          description: Account reactivated successfully
-        '400':
-          description: Bad request (account not deactivated or other error)
-        '401':
-          description: Unauthorized
+        '200': { description: Account reactivated successfully }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/whoami:
     get:
       summary: '[internal] Return the authenticated principal (auth self-check)'
@@ -390,17 +349,15 @@ paths:
         authenticated principal so the JwtAuthGuard can be exercised end-to-end (smoke/health of
         the auth chain). No data is mutated.
       x-internal: true
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         '200':
           description: The authenticated principal
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthPrincipal'
-        '401':
-          description: Unauthorized
+              schema: { $ref: '#/components/schemas/AuthPrincipal' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/operator-check:
     get:
       summary: '[internal] Verify operator AuthZ end-to-end (role + policy)'
@@ -410,8 +367,7 @@ paths:
         MODERATOR role plus a `read ModerationQueue` policy, so it exercises both the RolesGuard
         and the CASL PoliciesGuard in one call. No data is mutated.
       x-internal: true
-      security:
-        - bearerAuth: []
+      x-required-roles: [MODERATOR, ADMIN]
       responses:
         '200':
           description: Operator authorization succeeded
@@ -427,10 +383,9 @@ paths:
                   role:
                     type: string
                     description: The caller's role (operator role on success)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (lacks the operator role or policy)
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -447,6 +402,17 @@ components:
         format: uuid
       description: Target user id (users.id)
   schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     AuthPrincipal:
       type: object
       description: The authenticated actor attached to a request after JwtAuthGuard succeeds.
@@ -774,3 +740,9 @@ components:
           type: string
           enum: [ru, en]
           description: Preferred language (supported_languages.code)
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

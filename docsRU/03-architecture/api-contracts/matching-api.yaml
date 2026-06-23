@@ -2,183 +2,152 @@ openapi: 3.0.3
 info:
   title: ZooLink Matching API
   version: 1.0.0
-  description: API for finding compatible mates for breeding purposes in ZooLink.
+  description: >
+    API подбора совместимых партнёров для вязки/разведения в ZooLink.
+    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
+    ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), LocalizedString (§6),
+    ограничение скорости (§8).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /matching/new-target/{animal_id}:
     get:
-      summary: Get targeting animal verification for matching
+      summary: Проверка целевого животного для подбора
       operationId: getMatchingTarget
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: animal_id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: ID of the animal for which to find matches
+          schema: { type: string, format: uuid }
+          description: ID животного, для которого ищем пары
         - in: query
           name: includeSuggestions
-          schema:
-            type: boolean
-            default: false
-          description: Whether to include initial match suggestions
-      security:
-        - bearerAuth: []
+          schema: { type: boolean, default: false }
+          description: Включать ли начальные предложения подбора
       responses:
         '200':
-          description: Animal verification and optional initial matches
+          description: Проверка животного и опциональные начальные подборы
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchingTargetResponse'
-        '400':
-          description: Bad request (invalid animal ID)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions or animal not eligible for matching)
-        '404':
-          description: Animal not found
+              schema: { $ref: '#/components/schemas/MatchingTargetResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/find-matches:
     post:
-      summary: Find matches for target animal with preferences
+      summary: Найти пары для целевого животного с предпочтениями
       operationId: findMatches
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/FindMatchesRequest'
+            schema: { $ref: '#/components/schemas/FindMatchesRequest' }
       responses:
         '200':
-          description: List of potential matches with scores and explanations
+          description: Список потенциальных пар с баллами и пояснениями
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/FindMatchesResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/FindMatchesResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}:
     get:
-      summary: Get specific match details by ID
+      summary: Получить детали конкретного подбора по ID
       operationId: getMatchById
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Match ID
-      security:
-        - bearerAuth: []
+          schema: { type: string, format: uuid }
+          description: ID подбора
       responses:
         '200':
-          description: Match details
+          description: Детали подбора
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchDetails'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Match not found
+              schema: { $ref: '#/components/schemas/MatchDetails' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/history:
     get:
-      summary: Get user's past match views/engagements
+      summary: История просмотров/действий пользователя по подборам
       operationId: getMatchingHistory
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Number of items to return
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
-          name: offset
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-          description: Number of items to skip
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Количество элементов на странице
         - in: query
           name: minScore
-          schema:
-            type: integer
-            minimum: 0
-            maximum: 100
-          description: Minimum compatibility score filter
+          schema: { type: integer, minimum: 0, maximum: 100 }
+          description: Фильтр по минимальному баллу совместимости
         - in: query
           name: fromDate
-          schema:
-            type: string
-            format: date
-          description: Start date for filtering (inclusive)
+          schema: { type: string, format: date }
+          description: Начальная дата фильтра (включительно)
         - in: query
           name: toDate
-          schema:
-            type: string
-            format: date
-          description: End date for filtering (inclusive)
+          schema: { type: string, format: date }
+          description: Конечная дата фильтра (включительно)
       responses:
         '200':
-          description: Paginated matching history
+          description: Постраничная история подборов
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchingHistoryResponse'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/MatchingHistoryResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}/feedback:
     post:
-      summary: Submit feedback on match quality
+      summary: Отправить отзыв о качестве подбора
       operationId: submitMatchFeedback
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Match ID
-      security:
-        - bearerAuth: []
+          schema: { type: string, format: uuid }
+          description: ID подбора
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/MatchFeedbackRequest'
+            schema: { $ref: '#/components/schemas/MatchFeedbackRequest' }
       responses:
-        '200':
-          description: Feedback submitted successfully
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Match not found
+        '200': { description: Отзыв успешно отправлен }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -186,6 +155,30 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     MatchingTargetResponse:
       type: object
       required:
@@ -196,21 +189,20 @@ components:
           $ref: '#/components/schemas/AnimalSummary'
         eligibleForMatching:
           type: boolean
-          description: Whether animal is eligible for matching (active, mating age, etc.)
+          description: Допустимо ли животное к подбору (активно, брачный возраст и т.п.)
         ineligibilityReason:
           type: string
           nullable: true
-          description: Reason if not eligible for matching
+          description: Стабильный машинный код причины недопустимости (null если допустимо)
         species:
           $ref: '#/components/schemas/SpeciesSummary'
         breed:
           $ref: '#/components/schemas/BreedSummary'
         initialMatches:
           type: array
-          items:
-            $ref: '#/components/schemas/MatchSummary'
+          items: { $ref: '#/components/schemas/MatchSummary' }
           default: []
-          description: Initial match suggestions (if requested and available)
+          description: Начальные предложения подбора (если запрошены и доступны)
     AnimalSummary:
       type: object
       required:
@@ -223,67 +215,65 @@ components:
         id:
           type: string
           format: uuid
-          description: Animal ID
+          description: ID животного
         speciesId:
-          type: string
-          format: uuid
-          description: Species reference
+          type: integer
+          description: Ссылка на вид (INT-справочник)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Breed reference (null if custom/other)
+          description: Ссылка на породу (INT-справочник; null если кастомная/иная)
         breedText:
           type: string
           maxLength: 100
           nullable: true
-          description: Custom breed text if breedId is null
+          description: Текст кастомной породы, если breedId null
         nickname:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal nickname/display name
+          description: Кличка/отображаемое имя животного
         sex:
           type: string
           enum: [Male, Female]
-          description: Animal sex
+          description: Пол животного
         dateOfBirth:
           type: string
           format: date
-          description: Animal date of birth
+          description: Дата рождения животного
         colorCoat:
           type: string
           maxLength: 100
           nullable: true
-          description: Animal color/coat pattern
+          description: Окрас/тип шерсти животного
         microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal microchip ID
+          description: ID микрочипа животного
         tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal tattoo/brand ID (for livestock)
+          description: ID тату/тавро животного (для скота)
         isActive:
           type: boolean
-          description: Animal active status
+          description: Активность животного
         ownedSince:
           type: string
           format: date
           nullable: true
-          description: Date when current owner acquired the animal
+          description: Дата приобретения животного текущим владельцем
         motherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to mother for pedigree
+          description: Ссылка на мать для родословной
         fatherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to father for pedigree
+          description: Ссылка на отца для родословной
         healthRecords:
           type: array
           items:
@@ -291,18 +281,18 @@ components:
             properties:
               type:
                 type: string
-                description: Type of health record (vaccination, test, etc.)
+                description: Тип записи здоровья (вакцинация, тест и т.п.)
               detail:
                 type: string
-                description: Detail of health record
+                description: Детали записи здоровья
               date:
                 type: string
                 format: date
-                description: Date of health event
+                description: Дата события здоровья
               provider:
                 type: string
-                description: Provider/veterinary clinic
-          description: Animal health records
+                description: Поставщик/ветклиника
+          description: Записи здоровья животного
           default: []
         reproductiveData:
           type: array
@@ -311,78 +301,63 @@ components:
             properties:
               event:
                 type: string
-                description: Event type (heat_start, mating, etc.)
+                description: Тип события (heat_start, mating и т.п.)
               date:
                 type: string
                 format: date
-                description: Date of event
+                description: Дата события
               partnerId:
                 type: string
                 format: uuid
                 nullable: true
-                description: Partner animal ID (if applicable)
-          description: Animal reproductive data (for females)
+                description: ID животного-партнёра (если применимо)
+          description: Репродуктивные данные животного (для самок)
           default: []
         photos:
           type: array
           items:
             type: string
             format: uri
-          description: Animal photo URLs
+          description: URL фотографий животного
           default: []
     SpeciesSummary:
       type: object
       required:
         - id
         - code
-        - name
+        - nameLocalized
       properties:
         id:
-          type: string
-          format: uuid
-          description: Species ID
+          type: integer
+          description: ID вида (INT-справочник)
         code:
           type: string
           maxLength: 50
-          description: Species code (e.g., 'dog', 'cattle')
-        name:
-          type: string
-          maxLength: 100
-          description: Species name (Russian)
-        nameEn:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Species name (English)
+          description: Код вида (напр. 'dog', 'cattle')
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Название вида (LocalizedString {en, ru})
     BreedSummary:
       type: object
       required:
         - id
         - code
-        - name
+        - nameLocalized
         - speciesId
       properties:
         id:
-          type: string
-          format: uuid
-          description: Breed ID
+          type: integer
+          description: ID породы (INT-справочник)
         code:
           type: string
           maxLength: 50
-          description: Breed code
-        name:
-          type: string
-          maxLength: 100
-          description: Breed name (Russian)
-        nameEn:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Breed name (English)
+          description: Код породы
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Название породы (LocalizedString {en, ru})
         speciesId:
-          type: string
-          format: uuid
-          description: Reference to species
+          type: integer
+          description: Ссылка на вид (INT-справочник)
     FindMatchesRequest:
       type: object
       required:
@@ -391,38 +366,37 @@ components:
         targetAnimalId:
           type: string
           format: uuid
-          description: ID of the animal for which to find matches
+          description: ID животного, для которого ищем пары
         maxDistanceKm:
           type: integer
           minimum: 1
           maximum: 100
           default: 50
-          description: Maximum distance in kilometers for search
+          description: Максимальное расстояние поиска в километрах
         breedingGoals:
           type: array
-          items:
-            type: string
-          description: Specific breeding goals to prioritize (e.g., ['milk_production', 'temperament'])
+          items: { type: string }
+          description: Конкретные цели разведения для приоритизации (напр. ['milk_production', 'temperament'])
         minScore:
           type: integer
           minimum: 0
           maximum: 100
           default: 60
-          description: Minimum compatibility score threshold (0-100)
+          description: Порог минимального балла совместимости (0-100)
         maxResults:
           type: integer
           minimum: 1
           maximum: 100
           default: 20
-          description: Maximum number of results to return
+          description: Максимальное число возвращаемых результатов
         excludePreviouslyMatched:
           type: boolean
           default: true
-          description: Exclude animals user has previously matched with
+          description: Исключать животных, с которыми пользователь уже подбирался
         includeDetails:
           type: boolean
           default: false
-          description: Include full animal details in results (for performance, default false)
+          description: Включать полные детали животного в результаты (для перфа, по умолчанию false)
     FindMatchesResponse:
       type: object
       required:
@@ -431,17 +405,16 @@ components:
       properties:
         matches:
           type: array
-          items:
-            $ref: '#/components/schemas/MatchSummary'
-          description: List of potential matches sorted by compatibility score
+          items: { $ref: '#/components/schemas/MatchSummary' }
+          description: Список потенциальных пар, отсортированный по баллу совместимости
         searchParameters:
           $ref: '#/components/schemas/SearchParametersUsed'
         totalFound:
           type: integer
-          description: Total number of matches found (before pagination/limits)
+          description: Общее число найденных пар (до пагинации/лимитов)
         searchDurationMs:
           type: integer
-          description: Time taken to compute matches in milliseconds
+          description: Время вычисления подборов в миллисекундах
     SearchParametersUsed:
       type: object
       properties:
@@ -452,8 +425,7 @@ components:
           type: integer
         breedingGoals:
           type: array
-          items:
-            type: string
+          items: { type: string }
         minScore:
           type: integer
         maxResults:
@@ -472,51 +444,49 @@ components:
         id:
           type: string
           format: uuid
-          description: Match instance ID
+          description: ID экземпляра подбора
         targetAnimalId:
           type: string
           format: uuid
-          description: Target animal ID
+          description: ID целевого животного
         candidateAnimalId:
           type: string
           format: uuid
-          description: Candidate animal ID
+          description: ID животного-кандидата
         compatibilityScore:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          description: Общий балл совместимости (0-100)
         scoreBreakdown:
-          $ref: '#/components/schemas/ScoreBreakdown'
-          description: Detailed score breakdown by factor category
+          allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
+          description: Детальная разбивка балла по категориям факторов
         matchReasons:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 5
-          description: Top positive factors contributing to match
+          description: Топ положительных факторов подбора
         matchConcerns:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 3
-          description: Potential concerns or negative factors
+          description: Возможные опасения или негативные факторы
         candidateSummary:
-          $ref: '#/components/schemas/AnimalSummary'
-          description: Summary of candidate animal (always included)
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
+          description: Сводка по животному-кандидату (всегда включается)
         targetSummary:
           type: string
           format: uuid
-          description: Reference to target animal (to avoid duplication)
+          description: Ссылка на целевое животное (во избежание дублирования)
         createdAt:
           type: string
           format: date-time
-          description: When match was generated
+          description: Когда подбор был сгенерирован
         expiresAt:
           type: string
           format: date-time
           nullable: true
-          description: When match becomes stale (default 7 days from creation)
+          description: Когда подбор устаревает (по умолчанию 7 дней с создания)
     ScoreBreakdown:
       type: object
       properties:
@@ -525,38 +495,38 @@ components:
           minimum: 0
           maximum: 100
           nullable: true
-          description: Genetic compatibility sub-score (0-100)
+          description: Подбалл генетической совместимости (0-100)
         healthScore:
           type: integer
           minimum: 0
           maximum: 100
           nullable: true
-          description: Health compatibility sub-score (0-100)
+          description: Подбалл совместимости по здоровью (0-100)
         reproductiveScore:
           type: integer
           minimum: 0
           maximum: 100
           nullable: true
-          description: Reproductive timing sub-score (0-100)
+          description: Подбалл репродуктивного тайминга (0-100)
         productionScore:
           type: integer
           minimum: 0
           maximum: 100
           nullable: true
-          description: Production/conformation sub-score (0-100)
+          description: Подбалл продуктивности/конформации (0-100)
         logisticsScore:
           type: integer
           minimum: 0
           maximum: 100
           nullable: true
-          description: Location/logistics sub-score (0-100)
+          description: Подбалл локации/логистики (0-100)
         weightsApplied:
           type: object
           additionalProperties:
             type: number
             minimum: 0
             maximum: 1
-          description: Weight applied to each factor category (sums to 1.0)
+          description: Вес каждой категории факторов (сумма = 1.0)
     MatchDetails:
       type: object
       required:
@@ -569,130 +539,116 @@ components:
         id:
           type: string
           format: uuid
-          description: Match instance ID
+          description: ID экземпляра подбора
         targetAnimalId:
           type: string
           format: uuid
-          description: Target animal ID
+          description: ID целевого животного
         candidateAnimalId:
           type: string
           format: uuid
-          description: Candidate animal ID
+          description: ID животного-кандидата
         compatibilityScore:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          description: Общий балл совместимости (0-100)
         scoreBreakdown:
-          $ref: '#/components/schemas/ScoreBreakdown'
-          description: Detailed score breakdown by factor category
+          allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
+          description: Детальная разбивка балла по категориям факторов
         matchReasons:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
-          description: All positive factors contributing to match
+          description: Все положительные факторы подбора
         matchConcerns:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
-          description: All potential concerns or negative factors
+          description: Все возможные опасения или негативные факторы
         targetAnimal:
-          $ref: '#/components/schemas/AnimalSummary'
-          description: Full target animal details
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
+          description: Полные детали целевого животного
         candidateAnimal:
-          $ref: '#/components/schemas/AnimalSummary'
-          description: Full candidate animal details
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
+          description: Полные детали животного-кандидата
         targetListings:
           type: array
-          items:
-            $ref: '#/components/schemas/ListingReference'
-          description: Active MATING/STUD_SERVICE listings for target animal
+          items: { $ref: '#/components/schemas/ListingReference' }
+          description: Активные объявления MATING/STUD_SERVICE для целевого животного
           default: []
         candidateListings:
           type: array
-          items:
-            $ref: '#/components/schemas/ListingReference'
-          description: Active MATING/STUD_SERVICE listings for candidate animal
+          items: { $ref: '#/components/schemas/ListingReference' }
+          description: Активные объявления MATING/STUD_SERVICE для животного-кандидата
           default: []
         createdAt:
           type: string
           format: date-time
-          description: When match was generated
+          description: Когда подбор был сгенерирован
         expiresAt:
           type: string
           format: date-time
           nullable: true
-          description: When match becomes stale (default 7 days from creation)
+          description: Когда подбор устаревает (по умолчанию 7 дней с создания)
         metadata:
           type: object
-          description: Species-specific or experimental data
+          description: Видоспецифичные или экспериментальные данные
           additionalProperties: true
     ListingReference:
       type: object
       required:
         - id
         - listingType
-        - title
+        - titleLocalized
         - priceCents
       properties:
         id:
           type: string
           format: uuid
-          description: Listing ID
+          description: ID объявления
         listingType:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
-          description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
+          description: Тип объявления
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Заголовок объявления (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (null for non-price listings)
+          description: Цена в минорных единицах (null для беспрайсовых объявлений)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Код валюты (ISO 4217)
         quantity:
           type: integer
           default: 1
-          description: Quantity
+          description: Количество
         isActive:
           type: boolean
-          description: Listing active status
+          description: Активность объявления
         createdAt:
           type: string
           format: date-time
-          description: Listing creation timestamp
+          description: Метка создания объявления
     MatchingHistoryResponse:
       type: object
       required:
-        - history
-        - limit
-        - offset
+        - items
+        - meta
       properties:
-        history:
+        items:
           type: array
-          items:
-            $ref: '#/components/schemas/HistoryEntry'
-          description: Array of matching history entries
-        limit:
-          type: integer
-          description: Limit parameter used for pagination
-        offset:
-          type: integer
-          description: Offset parameter used for pagination
-        total:
-          type: integer
-          description: Total number of history entries (before pagination)
-        hasMore:
-          type: boolean
-          description: Whether there are more entries available
+          items: { $ref: '#/components/schemas/HistoryEntry' }
+          description: Массив записей истории подборов
+        meta:
+          $ref: '#/components/schemas/PageMeta'
     HistoryEntry:
       type: object
       required:
@@ -706,39 +662,39 @@ components:
         id:
           type: string
           format: uuid
-          description: History entry ID
+          description: ID записи истории
         targetAnimalId:
           type: string
           format: uuid
-          description: Target animal ID
+          description: ID целевого животного
         candidateAnimalId:
           type: string
           format: uuid
-          description: Candidate animal ID
+          description: ID животного-кандидата
         compatibilityScore:
           type: integer
           minimum: 0
           maximum: 100
           nullable: true
-          description: Compatibility score for this match (if applicable)
+          description: Балл совместимости для этого подбора (если применимо)
         actionType:
           type: string
           enum: [viewed, engaged, contacted, feedback]
-          description: Type of user action with this match
+          description: Тип действия пользователя с этим подбором
         timestamp:
           type: string
           format: date-time
-          description: When the action occurred
+          description: Когда произошло действие
         userNotes:
           type: string
           maxLength: 500
           nullable: true
-          description: User notes or feedback (if actionType is 'feedback')
+          description: Заметки/отзыв пользователя (если actionType = 'feedback')
         matchId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to match record (if applicable)
+          description: Ссылка на запись подбора (если применимо)
     MatchFeedbackRequest:
       type: object
       required:
@@ -748,22 +704,27 @@ components:
           type: integer
           minimum: 1
           maximum: 5
-          description: User rating of match quality (1-5 stars)
+          description: Оценка качества подбора пользователем (1-5 звёзд)
         isUseful:
           type: boolean
-          description: Whether user found the match useful
+          description: Счёл ли пользователь подбор полезным
         feedbackText:
           type: string
           maxLength: 1000
           nullable: true
-          description: Detailed feedback on why match was useful/not useful
+          description: Детальный отзыв, почему подбор был полезен/бесполезен
         wouldRecommend:
           type: boolean
           nullable: true
-          description: Whether user would recommend this match to others
+          description: Порекомендовал бы пользователь этот подбор другим
         tags:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
-          description: Tags for categorizing feedback (e.g., ['accurate_genetics', 'poor_location'])
+          description: Теги для категоризации отзыва (напр. ['accurate_genetics', 'poor_location'])
+  responses:
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

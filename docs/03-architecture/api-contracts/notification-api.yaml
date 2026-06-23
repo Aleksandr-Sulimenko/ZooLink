@@ -7,25 +7,26 @@ info:
     delivery webhooks (spec 13, notification_state_machine). Sending itself is
     triggered internally by domain events; this API covers management, prefs,
     and delivery-status callbacks.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /notifications/templates:
     get:
       summary: List notification templates (admin)
       operationId: listNotificationTemplates
+      x-required-roles: [ADMIN]
       parameters:
         - in: query
           name: type
-          schema:
-            type: string
-            enum: [EMAIL, SMS]
+          schema: { type: string, enum: [EMAIL, SMS] }
         - in: query
           name: language
-          schema:
-            type: string
-            maxLength: 2
+          schema: { type: string, maxLength: 2 }
       responses:
         '200':
           description: Templates
@@ -33,50 +34,52 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/NotificationTemplate'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                items: { $ref: '#/components/schemas/NotificationTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a notification template (admin)
       operationId: createNotificationTemplate
+      x-required-roles: [ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/NotificationTemplateCreate'
+            schema: { $ref: '#/components/schemas/NotificationTemplateCreate' }
       responses:
         '201':
           description: Template created
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/NotificationTemplate'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/NotificationTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /notifications/logs:
     get:
       summary: List notification delivery logs (admin / own)
       operationId: listNotificationLogs
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: user_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
         - in: query
           name: status
-          schema:
-            type: string
-            enum: [SENT, DELIVERED, FAILED, BOUNCED]
+          schema: { type: string, enum: [SENT, DELIVERED, FAILED, BOUNCED] }
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: Logs page
@@ -87,65 +90,87 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/NotificationLog'
-                  page:
-                    type: integer
-                  total:
-                    type: integer
+                    items: { $ref: '#/components/schemas/NotificationLog' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/notification-preferences:
     get:
       summary: Get the current user's notification preferences
       operationId: getNotificationPreferences
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       responses:
         '200':
           description: Preferences (users.notification_prefs)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/NotificationPreferences'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update the current user's notification preferences
       operationId: updateNotificationPreferences
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/NotificationPreferences'
+            schema: { $ref: '#/components/schemas/NotificationPreferences' }
       responses:
         '200':
           description: Updated preferences
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/NotificationPreferences'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /notifications/webhook:
     post:
       summary: Provider delivery webhook
       operationId: notificationWebhook
+      x-internal: true
+      security: []
       description: >-
+        Internal/provider-only (signature-verified, not bearer auth — security opt-out).
         Idempotent delivery-status callbacks from the email/SMS provider.
         delivered -> DELIVERED; hard bounce -> BOUNCED; transient error -> FAILED (retryable).
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/NotificationWebhookEvent'
+            schema: { $ref: '#/components/schemas/NotificationWebhookEvent' }
       responses:
-        '200':
-          description: Event accepted (idempotent)
-        '400':
-          description: Invalid signature or unknown message id
+        '200': { description: Event accepted (idempotent) }
+        '400': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     NotificationTemplate:
       type: object
       properties:
@@ -157,41 +182,41 @@ components:
         type:
           type: string
           enum: [EMAIL, SMS]
-        subject_template:
+        subjectTemplate:
           type: string
           nullable: true
-        body_template:
+        bodyTemplate:
           type: string
         language:
           type: string
           maxLength: 2
           description: FK to supported_languages.code
-        is_active:
+        isActive:
           type: boolean
-        created_at:
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
     NotificationTemplateCreate:
       type: object
-      required: [name, type, body_template, language]
+      required: [name, type, bodyTemplate, language]
       properties:
         name:
           type: string
         type:
           type: string
           enum: [EMAIL, SMS]
-        subject_template:
+        subjectTemplate:
           type: string
           nullable: true
-        body_template:
+        bodyTemplate:
           type: string
         language:
           type: string
           maxLength: 2
-        is_active:
+        isActive:
           type: boolean
           default: true
     NotificationLog:
@@ -200,14 +225,14 @@ components:
         id:
           type: string
           format: uuid
-        user_id:
+        userId:
           type: string
           format: uuid
           nullable: true
         type:
           type: string
           enum: [EMAIL, SMS]
-        template_id:
+        templateId:
           type: string
           format: uuid
           nullable: true
@@ -218,10 +243,10 @@ components:
           enum: [SENT, DELIVERED, FAILED, BOUNCED]
         attempts:
           type: integer
-        created_at:
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
     NotificationPreferences:
@@ -241,7 +266,7 @@ components:
       type: object
       required: [status]
       properties:
-        provider_message_id:
+        providerMessageId:
           type: string
         status:
           type: string
@@ -251,29 +276,9 @@ components:
         data:
           type: object
           description: Raw provider payload
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-        message:
-          type: string
   responses:
-    Unauthorized:
-      description: Authentication required
+    Problem:
+      description: RFC7807 problem (application/problem+json)
       content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    Forbidden:
-      description: Caller not permitted (admin required)
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    ValidationError:
-      description: Validation failed
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
