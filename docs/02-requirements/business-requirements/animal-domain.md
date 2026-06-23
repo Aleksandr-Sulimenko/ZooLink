@@ -53,7 +53,12 @@ Manages the core entity "Animal" as an aggregate root. An animal can have multip
   - Breed (if selected from directory; custom text can be edited)
   - Sex
   - Date of birth (can be refined but not changed arbitrarily; e.g., updating from "approx 2 years" to "2023-05-12" is allowed if consistent)
-- Changing ownership is not allowed on MVP (to avoid misuse). If needed, the current owner must deactivate the animal and the new owner creates a new profile (data not transferred automatically). This limitation will be revisited in Фаза 2+ with formal transfer workflow.
+- Changing ownership **is supported** via a formal ownership-transfer workflow (NOT by creating a new profile). The current owner initiates a transfer to the recipient (user or organization); on acceptance the animal record is re-attributed and the change is recorded in `ownership_transfers` (plus `animal_ownership_history`), preserving the animal's identity, pedigree links and audit trail. The exact states and transitions are normative in `docs/specs/02-animal-domain.md` and `docs/specs/statemachines/ownership_transfer_state_machine.md`. (Manual "deactivate + re-register" is not the ownership mechanism — it would break pedigree and history.)
+
+> **(GAP-TRACE-007, normative) — ownership transfer is in MVP scope, not forbidden.**
+> **WHAT:** Replaced "changing ownership is not allowed on MVP / create a new profile" with the supported `ownership_transfers` workflow (spec 02 + ownership-transfer state machine).
+> **WHY:** GAP-TRACE-007 — this BR explicitly forbade a flow that is modelled and planned: the `ownership_transfers` table (`database_schema.sql`), its state machine, and spec 02 all treat transfer as in-scope. The BR was stale (early edition) and contradicted the higher-tier schema/spec.
+> **WHY BETTER for the whole project:** A formal transfer preserves history/pedigree and prevents the duplicate registrations the old prohibition was meant to avoid — it achieves the original intent (no disputes) without the data loss of "create a new profile". One canonical truth across BR ↔ spec ↔ schema.
 
 ### 3. Animal Deactivation/Archival
 - Owner can deactivate an animal (soft delete):

@@ -238,7 +238,7 @@ CREATE TABLE listings (
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL, -- nullable for personal listings
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL, -- nullable for personal listings or when branch not specified
     metadata JSONB DEFAULT '{}'::jsonb, -- For experimental attributes (social media links, video URL placeholder, etc.)
-    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
+    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing')), -- 'leasing' = FORM only (migration 0021); leasing behaviour/rules gated to Фаза 2
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     price_cents BIGINT, -- minor units (kopecks); BIGINT to accommodate high-value livestock. Nullable for non-price listings (e.g., breeding)
@@ -1024,7 +1024,14 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     issued_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     expires_at   TIMESTAMP WITH TIME ZONE NOT NULL,
     rotated_from UUID,
-    revoked_at   TIMESTAMP WITH TIME ZONE
+    revoked_at   TIMESTAMP WITH TIME ZONE,
+    -- Session-form columns (migration 0020) for login-history / terminate-session (UC-ID-05, spec 01).
+    -- FORM ships now; population is partial today (last_used_at on rotate) / later (ip/ua capture).
+    -- NB: no MFA placeholder column here — placeholder-under-rewrite is forbidden (PLAYBOOK §5).
+    ip_address    INET,                 -- client IP at issue/last-use (nullable; capture later)
+    user_agent    TEXT,                 -- raw UA string for device list (nullable; capture later)
+    last_used_at  TIMESTAMP WITH TIME ZONE, -- stamped on rotate; powers "active sessions" view
+    revoked_reason VARCHAR(40)          -- e.g. LOGOUT, ROTATED, REUSE_DETECTED, ROLE_CHANGE, ADMIN_TERMINATE
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON refresh_tokens(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);

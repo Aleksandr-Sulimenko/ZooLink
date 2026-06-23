@@ -100,8 +100,8 @@ ADR-0011 (agent-principal) — выход A0a, ссылается из A1/B0
 | ID | Действие | Источник | 👤 | Статус |
 |----|----------|----------|----|--------|
 | **B1** | PII-at-rest — ADR + **env/KMS-форма ключа** (`PII_ENCRYPTION_KEY≥32` или `KMS_*`, +`.env.example`); согласовать с `erase_user`/HMAC | GAP-013, OPS-02/12 | architect→devops | ⏳ |
-| **B2** | Auth/session-форма — **сверить факт** `refresh_tokens` (есть `device_label`/`family_id`; нет `ip_address`/`user_agent`/`last_used_at`/`revoked_reason`); добавить названные колонки; **MFA — без плейсхолдер-колонки** (убрать ложное «infrastructure prepared») | GAP-013, F2/F11 | architect→backend | ⏳ |
-| **B3** | LEASING — `leasing` в `listing_type` enum (DB-workflow) + гейт; проверить триггеры listings | GAP-005 | backend→doc-keeper | ⏳ |
+| **B2** | Auth/session-форма — **сверить факт** `refresh_tokens` (есть `device_label`/`family_id`; нет `ip_address`/`user_agent`/`last_used_at`/`revoked_reason`); добавить названные колонки; **MFA — без плейсхолдер-колонки** (убрать ложное «infrastructure prepared») | GAP-013, F2/F11 | architect→backend | ✅ (2026-06-24: миграция 0020 ip_address/user_agent/last_used_at/revoked_reason; PG×2; nfr MFA-claim → doc-keeper) |
+| **B3** | LEASING — `leasing` в `listing_type` enum (DB-workflow) + гейт; проверить триггеры listings | GAP-005 | backend→doc-keeper | ✅ (2026-06-24: миграция 0021; listings_listing_type_check 6 значений; триггеры не хардкодят set; spec/BR-пометка → doc-keeper) |
 | **B4** | matching — НЕ резать scoring; `x-phase:2`+nullable; MVP=hard-predicate eligible-set; `ineligibilityReason`=код; синхрон BR↔spec 05 | GAP-003 | architect→doc-keeper | ⏳ |
 | **B5** | Дубль role-change — `admin-api.yaml /users/{id}/role` + `/users/roles` → superseded; владелец admin-identity-контракта; **расширить на дубль moderation-блока** admin-api vs moderation-api (словарь решений/статусов) | DIV-2/3, ux-1 | architect→doc-keeper | ⏳ |
 | **B6** | Гигиена auth-api — `dev-token`→dev-only; `whoami`/`operator-check`→`x-internal` | DIV-1/5 | doc-keeper | ⏳ |
@@ -115,12 +115,12 @@ ADR-0011 (agent-principal) — выход A0a, ссылается из A1/B0
 ## ФАЗА C — 🟡 Batch BR doc-sync (EN↔RU; редактировать ПО ФАЙЛУ, не по фазе — C13)
 | ID | Действие | Источник | Статус |
 |----|----------|----------|--------|
-| **C1** | FLAG → CHANGES_REQUESTED (admin-BR) + glossary-запись | GAP-006 | ⏳ |
-| **C2** | ownership transfer в scope | GAP-007 | ⏳ |
-| **C3** | passwordless (пароль=operator-only) | GAP-009 | ⏳ |
-| **C4** | JWT 15m/7d + phone HMAC | GAP-010 | ⏳ |
-| **C5** | убрать «auto-purge 30 дней» (или ADR retention-job → B7) | GAP-013-sub | ⏳ |
-| **C6** | glossary EN+RU: `agent-service-auth`, `principal-source-agnostic`, `CHANGES_REQUESTED`, `dataset` (agent-* определения — architect) | C13 | ⏳ |
+| **C1** | FLAG → CHANGES_REQUESTED (admin-BR) + glossary-запись | GAP-006 | ✅ (A1-волна) |
+| **C2** | ownership transfer в scope | GAP-007 | ✅ (2026-06-24) |
+| **C3** | passwordless (пароль=operator-only) | GAP-009 | ✅ (2026-06-24) |
+| **C4** | JWT 15m/7d + phone HMAC | GAP-010 | ✅ (2026-06-24) |
+| **C5** | убрать «auto-purge 30 дней» (или ADR retention-job → B7) | GAP-013-sub | ✅ (2026-06-24) |
+| **C6** | glossary EN+RU: `agent-service-auth`, `principal-source-agnostic`, `CHANGES_REQUESTED`, `dataset` (agent-* определения — architect) | C13 | ✅ (B0-волна) |
 > 👤 doc-keeper. Все правки — синхронно EN+RU, батч по файлу (`admin-domain.md` правят A1/A2/C1/D4 — один проход).
 
 ---
