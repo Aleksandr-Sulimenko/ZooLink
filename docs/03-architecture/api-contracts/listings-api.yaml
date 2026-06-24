@@ -2,81 +2,67 @@ openapi: 3.0.3
 info:
   title: ZooLink Listings API
   version: 1.0.0
-  description: API for managing listings (sale, breeding, show, adoption) in ZooLink.
+  description: >
+    API for managing listings (sale, breeding, show, adoption) in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth with public opt-out (§2),
+    x-required-roles (§3), RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5),
+    LocalizedString (§6), minor-unit money (§7), If-Match/ETag on mutating PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /listings:
     get:
       summary: List listings with filtering
       operationId: listListings
+      description: Public for active listings (security opt-out). Filter/sort query params stay snake_case (§12).
+      security: []
       parameters:
         - in: query
           name: animal_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by animal ID
         - in: query
           name: seller_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by seller ID
         - in: query
           name: organization_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by organization ID (for organizational listings)
         - in: query
           name: branch_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by branch ID
         - in: query
           name: listing_type
-          schema:
-            type: string
-            enum: [sale, breeding, show, adoption, stud_service]
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
           description: Filter by listing type
         - in: query
           name: is_active
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by active status
         - in: query
           name: price_min
-          schema:
-            type: integer
-          description: Minimum price in cents
+          schema: { type: integer }
+          description: Minimum price in minor units
         - in: query
           name: price_max
-          schema:
-            type: integer
-          description: Maximum price in cents
+          schema: { type: integer }
+          description: Maximum price in minor units
         - in: query
           name: currency
-          schema:
-            type: string
-            maxLength: 3
-          description: Currency code (e.g., RUB, USD)
+          schema: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+          description: Currency code (ISO 4217, e.g., RUB, USD)
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Number of items per page
       responses:
         '200':
@@ -88,134 +74,121 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Listing'
-                  total:
-                    type: integer
-                    description: Total number of listings
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Listing' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a new listing
       operationId: createListing
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ListingCreate'
+            schema: { $ref: '#/components/schemas/ListingCreate' }
       responses:
         '201':
           description: Listing created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Listing'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions or validation fails)
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}:
     get:
       summary: Get listing by ID
       operationId: getListingById
+      description: Public for active listings (security opt-out). Sends a weak ETag for conditional reads (§13).
+      security: []
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Listing details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Listing'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/Listing' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update listing
       operationId: updateListing
-      security:
-        - bearerAuth: []
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /listings/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ListingUpdate'
+            schema: { $ref: '#/components/schemas/ListingUpdate' }
       responses:
         '200':
           description: Listing updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Listing'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
-      summary: Delete listing (soft delete via is_active=false or actual delete?)
+      summary: Delete listing (soft delete via isActive=false)
       operationId: deleteListing
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Listing deleted successfully
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Listing deleted successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos:
     get:
       summary: Get photos for a listing
       operationId: getListingPhotos
+      description: Public for active listings (security opt-out).
+      security: []
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Listing photos
@@ -223,89 +196,110 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ListingPhoto'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                items: { $ref: '#/components/schemas/ListingPhoto' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Add a photo to a listing
       operationId: createListingPhoto
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Listing ID
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ListingPhotoCreate'
+            schema: { $ref: '#/components/schemas/ListingPhotoCreate' }
       responses:
         '201':
           description: Photo added successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ListingPhoto'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ListingPhoto' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos/{photoId}:
     delete:
       summary: Remove a photo from a listing
       operationId: deleteListingPhoto
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Listing ID
         - in: path
           name: photoId
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Photo ID
       responses:
-        '204':
-          description: Photo removed successfully
-        '404':
-          description: Listing or photo not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-  /listings/{id}/conversations:
+        '204': { description: Photo removed successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/analytics:
     get:
-      summary: Get conversations for a listing
-      operationId: getListingConversations
+      summary: Get analytics for a listing (seller-owned)
+      operationId: getListingAnalytics
+      description: >
+        Seller-facing analytics for one listing (BR pet-marketplace §5 "Views: 15, Contacts shown: 3").
+        Access is owner-scoped: the listing's seller, OR an org-admin of the listing's organization
+        (object-level ownership enforced at the service layer per rbac-matrix.md). Counts-snapshot now;
+        series-ready (§16) — the optional `series` time-series is x-phase:2 and absent/empty in MVP.
+        Public read conventions apply (weak ETag + Cache-Control, §13).
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+          description: Listing ID
+      responses:
+        '200':
+          description: Listing analytics snapshot
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator for conditional reads (§13)
+            Cache-Control:
+              schema: { type: string }
+              description: Caching directive for the analytics snapshot (§13)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListingAnalytics' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/conversations:
+    get:
+      summary: Get conversations for a listing
+      operationId: getListingConversations
+      deprecated: true
+      description: >
+        DEPRECATED — chat is Phase 2+ and out of MVP (ADR-0005). Server sends Deprecation + Sunset headers
+        (API_CONVENTIONS §9/§14).
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Conversations for the listing
@@ -313,14 +307,11 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/Conversation'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                items: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -328,36 +319,60 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     Listing:
       type: object
       required:
         - id
-        - animal_id
-        - seller_id
-        - listing_type
-        - title
-        - is_active
-        - created_at
-        - updated_at
+        - animalId
+        - sellerId
+        - listingType
+        - titleLocalized
+        - isActive
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        animal_id:
+        animalId:
           type: string
           format: uuid
           description: Foreign key to animal
-        seller_id:
+        sellerId:
           type: string
           format: uuid
           description: Foreign key to user (seller)
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           nullable: true
           description: Foreign key to organization (nullable for personal listings)
-        branch_id:
+        branchId:
           type: string
           format: uuid
           nullable: true
@@ -366,43 +381,41 @@ components:
           type: object
           description: JSONB field for extensibility (social media links, video URL placeholder, etc.)
           default: {}
-        listing_type:
+        listingType:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title_localized:
-          type: object
-          description: 'Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})'
-          additionalProperties:
-            type: string
-            maxLength: 255
-        description_localized:
-          type: object
-          description: 'Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})'
-          additionalProperties:
-            type: string
-        price_cents:
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing description (LocalizedString {en, ru})
+        priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (nullable for non-price listings e.g., breeding)
+          description: Price in minor units (nullable for non-price listings e.g., breeding)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
           description: Currency code (ISO 4217)
         quantity:
           type: integer
           default: 1
           description: Quantity (number of items/animals)
-        location_point:
+        locationPoint:
           type: object
           description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
-        search_radius_m:
+        searchRadiusM:
           type: integer
           nullable: true
           description: Search radius in meters for geo-search
-        is_active:
+        isActive:
           type: boolean
           description: Active status (legacy boolean; lifecycle is tracked by `status`)
         status:
@@ -410,22 +423,22 @@ components:
           enum: [DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED, SOLD, DEACTIVATED]
           default: DRAFT
           description: Lifecycle state (see specs/statemachines/listing_state_machine.md). Only ACTIVE listings appear in public search.
-        moderation_status:
+        moderationStatus:
           type: string
           enum: [PENDING, APPROVED, REJECTED, CHANGES_REQUESTED]
           default: PENDING
           description: Moderation review outcome (separate field from lifecycle `status`)
-        published_at:
+        publishedAt:
           type: string
           format: date-time
           nullable: true
           description: Set when `status` transitions to ACTIVE
-        sold_at:
+        soldAt:
           type: string
           format: date-time
           nullable: true
           description: Set when `status` transitions to SOLD
-        transaction_id:
+        transactionId:
           type: string
           format: uuid
           nullable: true
@@ -440,41 +453,41 @@ components:
           format: double
           nullable: true
           description: Longitude (MVP-primary geo storage; -180..180)
-        expires_at:
+        expiresAt:
           type: string
           format: date-time
           nullable: true
           description: Expiration date/time for the listing
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
     ListingCreate:
       type: object
       required:
-        - animal_id
-        - seller_id
-        - listing_type
-        - title
+        - animalId
+        - sellerId
+        - listingType
+        - titleLocalized
       properties:
-        animal_id:
+        animalId:
           type: string
           format: uuid
           description: Foreign key to animal
-        seller_id:
+        sellerId:
           type: string
           format: uuid
           description: Foreign key to user (seller)
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           nullable: true
           description: Foreign key to organization (nullable for personal listings)
-        branch_id:
+        branchId:
           type: string
           format: uuid
           nullable: true
@@ -483,47 +496,45 @@ components:
           type: object
           description: JSONB field for extensibility (social media links, video URL placeholder, etc.)
           default: {}
-        listing_type:
+        listingType:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title_localized:
-          type: object
-          description: 'Listing title - JSONB with language keys (e.g., {"en": "Title", "ru": "Название"})'
-          additionalProperties:
-            type: string
-            maxLength: 255
-        description_localized:
-          type: object
-          description: 'Listing description - JSONB with language keys (e.g., {"en": "Description", "ru": "Описание"})'
-          additionalProperties:
-            type: string
-        price_cents:
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing description (LocalizedString {en, ru})
+        priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (nullable for non-price listings e.g., breeding)
+          description: Price in minor units (nullable for non-price listings e.g., breeding)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
           description: Currency code (ISO 4217)
         quantity:
           type: integer
           default: 1
           description: Quantity (number of items/animals)
-        location_point:
+        locationPoint:
           type: object
           description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
-        search_radius_m:
+        searchRadiusM:
           type: integer
           nullable: true
           description: Search radius in meters for geo-search
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
-        expires_at:
+        expiresAt:
           type: string
           format: date-time
           nullable: true
@@ -531,36 +542,38 @@ components:
     ListingUpdate:
       type: object
       properties:
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
-        price_cents:
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing description (LocalizedString {en, ru})
+        priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (nullable for non-price listings e.g., breeding)
+          description: Price in minor units (nullable for non-price listings e.g., breeding)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           description: Currency code (ISO 4217)
         quantity:
           type: integer
           description: Quantity (number of items/animals)
-        location_point:
+        locationPoint:
           type: object
           description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
           nullable: true
-        search_radius_m:
+        searchRadiusM:
           type: integer
           nullable: true
           description: Search radius in meters for geo-search
-        is_active:
+        isActive:
           type: boolean
           description: Active status
-        expires_at:
+        expiresAt:
           type: string
           format: date-time
           nullable: true
@@ -572,15 +585,15 @@ components:
       type: object
       required:
         - id
-        - listing_id
+        - listingId
         - url
-        - created_at
+        - createdAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        listing_id:
+        listingId:
           type: string
           format: uuid
           description: Foreign key to listing
@@ -588,21 +601,21 @@ components:
           type: string
           format: uri
           description: Photo URL
-        order_index:
+        orderIndex:
           type: integer
           default: 0
           description: Display order index
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
     ListingPhotoCreate:
       type: object
       required:
-        - listing_id
+        - listingId
         - url
       properties:
-        listing_id:
+        listingId:
           type: string
           format: uuid
           description: Foreign key to listing
@@ -610,41 +623,93 @@ components:
           type: string
           format: uri
           description: Photo URL
-        order_index:
+        orderIndex:
           type: integer
           default: 0
           description: Display order index
+    AnalyticsSeriesPoint:
+      type: object
+      description: One time-series data point (x-phase:2, series-ready form — §16).
+      required: [date]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Calendar day (UTC) the metrics aggregate over
+        views:
+          type: integer
+          description: Views on this day
+        contactReveals:
+          type: integer
+          description: Contact reveals on this day
+    ListingAnalytics:
+      type: object
+      description: >
+        Seller-facing per-listing analytics. Counts-snapshot now; `series` is x-phase:2 and additive
+        (absent/empty in MVP) — adopting the field now avoids a contract break when time-series ships (§16).
+      required: [listingId, views, contactReveals]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Listing this snapshot describes
+        views:
+          type: integer
+          description: Total times the listing appeared/was viewed (BR `view_count`)
+        contactReveals:
+          type: integer
+          description: Total contact reveals (BR `contact_shown_count`; sourced from `contact_reveals`)
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the most recent view/contact-reveal activity (null if none)
+        series:
+          type: array
+          nullable: true
+          x-phase: 2
+          description: >
+            Optional time-series (per-day points). Series-ready form (§16) — absent/empty in MVP,
+            added additively in Фаза 2 without a contract change. Do not remove this field.
+          items: { $ref: '#/components/schemas/AnalyticsSeriesPoint' }
     Conversation:
       type: object
+      deprecated: true
       required:
         - id
-        - listing_id
-        - participant_a_id
-        - participant_b_id
-        - created_at
-        - updated_at
+        - listingId
+        - participantAId
+        - participantBId
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        listing_id:
+        listingId:
           type: string
           format: uuid
           description: Foreign key to listing
-        participant_a_id:
+        participantAId:
           type: string
           format: uuid
           description: Foreign key to user (participant A)
-        participant_b_id:
+        participantBId:
           type: string
           format: uuid
           description: Foreign key to user (participant B)
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

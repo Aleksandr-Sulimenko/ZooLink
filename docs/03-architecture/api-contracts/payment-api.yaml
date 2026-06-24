@@ -6,56 +6,61 @@ info:
     Payment intents, gateway webhooks, and refunds (spec 14, payment_state_machine).
     Amounts are stored as minor units (BIGINT, e.g. kopecks) — never floats.
     The whole domain is gated behind feature_toggles.payments (off until post-MVP).
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), minor-unit money (§7).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /payments:
     post:
       summary: Create a payment intent
       operationId: createPaymentIntent
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       description: >-
         Creates a PENDING payment_transactions row and a gateway intent.
-        Requires a unique idempotency_key to prevent double-charging.
+        Requires a unique idempotencyKey to prevent double-charging.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: HTTP-layer idempotency (API_CONVENTIONS §11); complements the body idempotencyKey
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/PaymentIntentRequest'
+            schema: { $ref: '#/components/schemas/PaymentIntentRequest' }
       responses:
         '201':
           description: Intent created (PENDING)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/PaymentIntentResponse'
+              schema: { $ref: '#/components/schemas/PaymentIntentResponse' }
         '200':
-          description: Existing intent returned (idempotency_key already seen)
+          description: Existing intent returned (idempotencyKey already seen)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/PaymentIntentResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-        '503':
-          description: Payments disabled (feature_toggles.payments=false) or gateway unavailable
+              schema: { $ref: '#/components/schemas/PaymentIntentResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
     get:
       summary: List the current user's payment transactions
       operationId: listPayments
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
-          schema:
-            type: string
-            enum: [PENDING, COMPLETED, FAILED, REFUNDED, DISPUTED]
+          schema: { type: string, enum: [PENDING, COMPLETED, FAILED, REFUNDED, DISPUTED] }
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: Transactions page
@@ -66,113 +71,139 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/PaymentTransaction'
-                  page:
-                    type: integer
-                  total:
-                    type: integer
+                    items: { $ref: '#/components/schemas/PaymentTransaction' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /payments/{id}:
     get:
       summary: Get a payment transaction status
       operationId: getPayment
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Transaction
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/PaymentTransaction'
-        '404':
-          $ref: '#/components/responses/NotFound'
+              schema: { $ref: '#/components/schemas/PaymentTransaction' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /payments/{id}/refund:
     post:
       summary: Process a refund for a completed transaction
       operationId: refundPayment
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RefundRequest'
+            schema: { $ref: '#/components/schemas/RefundRequest' }
       responses:
         '201':
           description: Refund created
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Refund'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          description: Transaction not COMPLETED or already refunded
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/Refund' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /payments/webhook:
     post:
       summary: Payment gateway webhook (source of truth for status)
       operationId: paymentWebhook
+      x-internal: true
+      security: []
       description: >-
-        Signature-verified, idempotently processed gateway events.
+        Internal/gateway-only (signature-verified, not bearer auth — security opt-out).
+        Idempotently processed gateway events.
         payment_succeeded -> COMPLETED; payment_failed -> FAILED;
         dispute_created -> DISPUTED. Replays must not double-transition.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/WebhookEvent'
+            schema: { $ref: '#/components/schemas/WebhookEvent' }
       responses:
-        '200':
-          description: Event accepted (idempotent)
-        '400':
-          description: Invalid or unverifiable signature
+        '200': { description: Event accepted (idempotent) }
+        '400': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     PaymentIntentRequest:
       type: object
-      required: [amount_minor, currency, purpose_type, idempotency_key]
+      required: [amountMinor, currency, purposeType, idempotencyKey]
       properties:
-        amount_minor:
+        amountMinor:
           type: integer
           format: int64
           minimum: 0
           description: Amount in minor units (e.g. kopecks); never a float
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-        purpose_type:
+        purposeType:
           type: string
           description: e.g., ListingPromotion, PremiumSubscription
-        purpose_id:
+        purposeId:
           type: string
           format: uuid
           nullable: true
           description: Entity the payment relates to (e.g., listings.id)
-        idempotency_key:
+        idempotencyKey:
           type: string
-          description: Unique key to prevent duplicate charges
+          description: Unique key to prevent duplicate charges (DB unique constraint)
     PaymentIntentResponse:
       type: object
       properties:
         transaction:
           $ref: '#/components/schemas/PaymentTransaction'
-        client_secret:
+        clientSecret:
           type: string
           description: Gateway client secret for client-side confirmation
     PaymentTransaction:
@@ -181,13 +212,13 @@ components:
         id:
           type: string
           format: uuid
-        user_id:
+        userId:
           type: string
           format: uuid
-        gateway_transaction_id:
+        gatewayTransactionId:
           type: string
           nullable: true
-        amount_minor:
+        amountMinor:
           type: integer
           format: int64
         currency:
@@ -195,23 +226,23 @@ components:
         status:
           type: string
           enum: [PENDING, COMPLETED, FAILED, REFUNDED, DISPUTED]
-        purpose_type:
+        purposeType:
           type: string
-        purpose_id:
+        purposeId:
           type: string
           format: uuid
           nullable: true
-        created_at:
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
     RefundRequest:
       type: object
-      required: [amount_minor]
+      required: [amountMinor]
       properties:
-        amount_minor:
+        amountMinor:
           type: integer
           format: int64
           minimum: 0
@@ -224,13 +255,13 @@ components:
         id:
           type: string
           format: uuid
-        payment_transaction_id:
+        paymentTransactionId:
           type: string
           format: uuid
-        gateway_refund_id:
+        gatewayRefundId:
           type: string
           nullable: true
-        amount_minor:
+        amountMinor:
           type: integer
           format: int64
         reason:
@@ -239,7 +270,7 @@ components:
         status:
           type: string
           enum: [PENDING, COMPLETED, FAILED]
-        created_at:
+        createdAt:
           type: string
           format: date-time
     WebhookEvent:
@@ -249,7 +280,7 @@ components:
         type:
           type: string
           enum: [payment_succeeded, payment_failed, dispute_created]
-        gateway_transaction_id:
+        gatewayTransactionId:
           type: string
         signature:
           type: string
@@ -257,35 +288,9 @@ components:
         data:
           type: object
           description: Raw gateway payload
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-        message:
-          type: string
   responses:
-    Unauthorized:
-      description: Authentication required
+    Problem:
+      description: RFC7807 problem (application/problem+json)
       content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    Forbidden:
-      description: Caller not permitted
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    ValidationError:
-      description: Validation failed
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

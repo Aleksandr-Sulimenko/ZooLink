@@ -28,7 +28,15 @@ Applies to all system components: backend APIs, frontend applications, databases
 - **Planned for Фаза 2+**: 
   - Optional TOTP (Google Authenticator, etc.) for all users
   - Required for ADMIN role and users with elevated privileges
-- **MVP**: Not required but infrastructure prepared (MFA field in user schema)
+- **MVP**: **No MFA** — there is **no MFA field/infrastructure in the MVP schema** (GAP-013).
+  > **ЧТО:** removed the false claim that MVP "infrastructure is prepared (MFA field in user schema)".
+  > No such column exists in `database_schema.sql` (`users` / `refresh_tokens`), and migration 0020
+  > (B2) deliberately added refresh-token session columns **without** an MFA placeholder.
+  > **ПОЧЕМУ:** the statement was a doc↔schema lie — a reader/auditor would assume an MFA seam that
+  > isn't there. **ПОЧЕМУ ТАК ЛУЧШЕ:** MFA is deferred to Фаза 2, and a speculative empty column
+  > would be dead schema (IMPLEMENTATION_PLAYBOOK §5 — add a form only when it is the irreversible
+  > artifact). When MFA lands in Фаза 2 it gets its own ADR + migration; the doc now states the true
+  > MVP posture. See `data-model.md` §refresh_tokens.
 
 ### Session Management
 - Session tokens (JWT) with short expiration: 15 minutes for access token

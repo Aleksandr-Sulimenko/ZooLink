@@ -85,6 +85,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 **Moderation Reason**  
 Настраиваемый код причины (`moderation_reasons`), выбираемый при решении/жалобе.
 
+**Decision Template**  
+Редактируемая, управляемая админом заготовленная формулировка решения (`decision_templates`, B10): оператор (HUMAN или AGENT) выбирает её по стабильному `code`, чтобы заполнить заметки решения REJECTED / CHANGES_REQUESTED. Контролируемая **таблица reference-data** (`body_localized` JSONB, `applies_to_decision`, `market`, опц. `related_reason_code`), **а не** enum — отличается от обязательной таксономии **Moderation Reason** (почему-отклонено); шаблон — это проза, которую отправляет актёр. Форма сейчас; выбор при решении приходит с доменом Moderation.
+
 **Payment Transaction / Refund**  
 Платёж (`payment_transactions`) и его возврат (`refunds`). Суммы — **минорные единицы** (BIGINT), никогда не float.
 
@@ -120,6 +123,12 @@ Append-only запись аудита (`moderation_decisions`) решения м
 **Moderator / Admin**  
 Операторские роли: проверка контента / администрирование площадки. Может занимать HUMAN или AGENT (ADR-0006).
 
+**agent-service-auth**  
+*Форма* (закладывается сейчас, поведение gated), которой AGENT-принципал аутентифицируется как сервис: scoped-credential внутри монолита (ADR-0009 — без отдельного auth-сервиса), резолвится через ту же цепочку authenticator'ов, что и люди, с env signing-секретом (≥32) и хранилищем хешированного секрета с ротацией/отзывом, привязанным к `users.id` агента (ADR-0011 §5). Ни один токен агента не выдаётся, пока гейт AGENT выключен (DEFAULT HUMAN).
+
+**principal-source-agnostic**  
+Свойство, при котором авторизация (RBAC-матрица, CASL-abilities, объектное владение, снапшот актёра) потребляет единую абстракцию принципала `{ actor_id, principal_type, role }` **независимо от того, как аутентифицировался запрос** (ADR-0011 §5). Добавление агентов позже = один дополнительный authenticator (`AgentServiceToken`) в цепочке, а не переписывание authz/guard — субъект авторизации уже agent-агностичен.
+
 ## Статусы и стейт-машины
 
 **State Machine (конечный автомат)**  
@@ -130,6 +139,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 
 **Moderation status**  
 `listings.moderation_status` ∈ {PENDING, APPROVED, REJECTED, CHANGES_REQUESTED} — исход проверки, поле **отдельное** от жизненного `status`.
+
+**CHANGES_REQUESTED**  
+**Исправимый** исход модерации: модератор/агент просит продавца доработать объявление (оно возвращается в `DRAFT` для повторной подачи), в отличие от `REJECTED` (терминальный отказ). Это канонический токен — он заменяет неформальное «FLAG»/«flagged» в admin-BR, где смешивались «нужны изменения» и «жалоба/флаг». Фиксируется как значение `moderation_decisions.decision` и enum `listings.moderation_status` (ADR-0003).
 
 **User status**  
 `users.status` ∈ {UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED}.
@@ -146,10 +158,37 @@ Append-only запись аудита (`moderation_decisions`) решения м
 **Pre-moderation (Пре-модерация)**  
 Рабочий процесс (ADR-0003), при котором объявление не видно публично до одобрения модератором/агентом (`PENDING_MODERATION` → `ACTIVE`).
 
+**Lock state (состояние блокировки, claim/lock)**  
+Состояние эксклюзивности элемента очереди модерации относительно вызывающего принципала: `FREE`, `CLAIMED_BY_ME`, `CLAIMED_BY_OTHER`, `LOCK_EXPIRED` (B10, spec 12). Модератор (HUMAN или AGENT) **захватывает** элемент, получая эксклюзивную блокировку (`assigned_to`/`locked_at`/`lock_expires_at`, TTL `MOD_LOCK_TTL` ≈ 15 мин), чтобы два принципала не решали один элемент; конкурирующий захват → `409 ALREADY_CLAIMED`. Отдаётся как фильтр/поле очереди `lockState`.
+
 ## Концепции данных и архитектуры
 
 **ID convention (конвенция ID)**  
 Бизнес-сущности используют **UUID** первичные ключи; lookup/справочные таблицы (`species`, `breeds`, `cities`, `supported_languages`) — **INTEGER**. Поэтому `species_id`/`breed_id`/`city_id` — INTEGER.
+
+**dataset (датасет, reference-data)**  
+Именованный набор справочных/lookup-строк под одним admin-CRUD (напр. `species`, `breeds`, `cities`). Реестр reference-data в Admin — extensibility-first: новый датасет добавляется без смены формы контракта/реестра. **State-enum НЕ является датасетом** — напр. `animal-statuses` — это состояния жизненного цикла (стейт-машина), а не редактируемые оператором справочные данные, поэтому они исключены из реестра (ADR/план A2/A3).
+
+**Passwordless auth (беспарольная аутентификация)**  
+Аутентификация конечных пользователей — **phone OTP + OAuth**, без пароля. `password_hash` зарезервирован только для операторских ролей (ADMIN/MODERATOR) (спека 01 round-4).
+
+**OTP (одноразовый код)**  
+6-значный SMS-код подтверждения: TTL 5 мин, cooldown повторной отправки 60 с, 5 попыток затем lockout 15 мин. Хранится только как SHA-256-дайджест в Redis (не в PG); ключ — `phone_hash`.
+
+**phone_hash (HMAC + pepper)**  
+Детерминированный `HMAC-SHA256(phone, server_pepper)` (base64url) от телефона в E.164, хранится уникально в `users`. Детерминированный (в отличие от bcrypt), чтобы телефоны были уникальны/искомы без хранения самого номера; секрет `PHONE_HASH_PEPPER` — серверный env.
+
+**Восстановление доступа (email-OTP)**  
+Самостоятельный путь для пользователя, потерявшего телефон/OAuth, но имеющего **подтверждённый email**: на него отправляется новый OTP (`/auth/recover/email/*`), и после подтверждения выдаётся новая сессия (аккаунт DEACTIVATED в пределах grace реактивируется). Без тихого захвата (spec 01 Slice-4).
+
+**Перепривязка идентификатора (admin-ассистированная)**  
+Замена `phone_hash` или `oauth_*` идентификатора пользователя только ADMIN, с аудитом (`/admin/users/{id}/rebind`), для восстановления, когда подтверждённого email нет. Отзывает сессии цели; никогда не тихий захват.
+
+**Повышение роли**  
+Изменение `users.role`, назначаемое ADMIN (`/admin/users/{id}/role`) — USER → BREEDER/FARMER/VETERINARIAN/GROOMER (или операторские роли) никогда не заявляется самим пользователем; записывается в аудит и отзывает все refresh-семейства цели (round-4).
+
+**erase_user / право на забвение (152-ФЗ)**  
+Процедура анонимизации на месте (`/admin/users/{id}/erase`, data-governance.md §2): PII → NULL/tombstone, идентификаторы (`phone_hash`/`oauth_*`/`email`) освобождаются, сессии отзываются, `notification_logs` редактируется, ставится `users.erased_at`; UUID сохраняется, чтобы строки FK RESTRICT остались валидными. Append-only аудит/модерация/финансовые записи сохраняются под юр.удержанием.
 
 **creator_id ≡ seller_id**  
 `creator_id` — бизнес-термин «пользователь, разместивший объявление (для аудита)»; соответствует канонической колонке схемы `listings.seller_id`. Одно поле; для орг-объявлений это аффилированный пользователь, создавший объявление.

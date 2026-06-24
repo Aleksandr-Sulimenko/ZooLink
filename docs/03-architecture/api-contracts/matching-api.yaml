@@ -2,183 +2,170 @@ openapi: 3.0.3
 info:
   title: ZooLink Matching API
   version: 1.0.0
-  description: API for finding compatible mates for breeding purposes in ZooLink.
+  description: >
+    API for finding compatible mates for breeding purposes in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), LocalizedString (§6),
+    rate limiting (§8).
+    **MVP scope (spec 05):** matching is a *stateless eligible-set* search — a candidate is eligible
+    iff all hard predicates hold (same species, opposite sex, both INTACT, both breeding-visible,
+    both active, different owners, within radius). Compatibility scoring, scoreBreakdown, match
+    persistence, history and feedback are **Фаза 2+** (marked `x-phase: 2`; null/absent in MVP).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /matching/new-target/{animal_id}:
     get:
       summary: Get targeting animal verification for matching
       operationId: getMatchingTarget
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: animal_id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: ID of the animal for which to find matches
         - in: query
           name: includeSuggestions
-          schema:
-            type: boolean
-            default: false
+          schema: { type: boolean, default: false }
           description: Whether to include initial match suggestions
-      security:
-        - bearerAuth: []
       responses:
         '200':
           description: Animal verification and optional initial matches
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchingTargetResponse'
-        '400':
-          description: Bad request (invalid animal ID)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions or animal not eligible for matching)
-        '404':
-          description: Animal not found
+              schema: { $ref: '#/components/schemas/MatchingTargetResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/find-matches:
     post:
       summary: Find matches for target animal with preferences
       operationId: findMatches
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/FindMatchesRequest'
+            schema: { $ref: '#/components/schemas/FindMatchesRequest' }
       responses:
         '200':
           description: List of potential matches with scores and explanations
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/FindMatchesResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/FindMatchesResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}:
     get:
-      summary: Get specific match details by ID
+      summary: '[Фаза 2] Get specific match details by ID'
       operationId: getMatchById
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** MVP matching is a **stateless eligible-set** search (spec 05 §"Breeding
+        eligibility"): there are no persisted `matches`/`match_history`/`match_feedback` records,
+        so there is no match `id` to fetch and no compatibility score. This endpoint (and its
+        scored response) is computed in Фаза 2; absent in MVP.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Match ID
-      security:
-        - bearerAuth: []
       responses:
         '200':
           description: Match details
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchDetails'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Match not found
+              schema: { $ref: '#/components/schemas/MatchDetails' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/history:
     get:
-      summary: Get user's past match views/engagements
+      summary: "[Фаза 2] Get user's past match views/engagements"
       operationId: getMatchingHistory
-      security:
-        - bearerAuth: []
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** MVP matching is stateless (no `match_history` table per spec 05), so there is
+        no engagement history to return. Computed in Фаза 2; absent in MVP.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Number of items to return
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Page number for pagination
         - in: query
-          name: offset
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-          description: Number of items to skip
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Number of items per page
         - in: query
           name: minScore
-          schema:
-            type: integer
-            minimum: 0
-            maximum: 100
+          schema: { type: integer, minimum: 0, maximum: 100 }
           description: Minimum compatibility score filter
         - in: query
           name: fromDate
-          schema:
-            type: string
-            format: date
+          schema: { type: string, format: date }
           description: Start date for filtering (inclusive)
         - in: query
           name: toDate
-          schema:
-            type: string
-            format: date
+          schema: { type: string, format: date }
           description: End date for filtering (inclusive)
       responses:
         '200':
           description: Paginated matching history
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/MatchingHistoryResponse'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/MatchingHistoryResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /matching/{id}/feedback:
     post:
-      summary: Submit feedback on match quality
+      summary: '[Фаза 2] Submit feedback on match quality'
       operationId: submitMatchFeedback
+      x-phase: 2
+      description: >-
+        **Фаза 2+.** Feedback feeds the compatibility-scoring loop (no `match_feedback` table in
+        MVP per spec 05). Computed in Фаза 2; absent in MVP.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Match ID
-      security:
-        - bearerAuth: []
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/MatchFeedbackRequest'
+            schema: { $ref: '#/components/schemas/MatchFeedbackRequest' }
       responses:
-        '200':
-          description: Feedback submitted successfully
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Match not found
+        '200': { description: Feedback submitted successfully }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -186,6 +173,30 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     MatchingTargetResponse:
       type: object
       required:
@@ -200,15 +211,20 @@ components:
         ineligibilityReason:
           type: string
           nullable: true
-          description: Reason if not eligible for matching
+          enum: [SPECIES_MISMATCH, BREED_RULE, NOT_BREEDING_VISIBLE, REPRODUCTIVE_STATUS, SELF, INACTIVE, GEO_OUT_OF_RANGE]
+          description: >-
+            Stable machine code for ineligibility (null if eligible). Maps to the MVP hard
+            predicates in spec 05 §"Breeding eligibility": SPECIES_MISMATCH (same species),
+            BREED_RULE (breed-level rule), NOT_BREEDING_VISIBLE
+            (is_visible_in_breeding_search=false), REPRODUCTIVE_STATUS (not INTACT),
+            SELF (same owner / self-match), INACTIVE (not active), GEO_OUT_OF_RANGE (outside radius).
         species:
           $ref: '#/components/schemas/SpeciesSummary'
         breed:
           $ref: '#/components/schemas/BreedSummary'
         initialMatches:
           type: array
-          items:
-            $ref: '#/components/schemas/MatchSummary'
+          items: { $ref: '#/components/schemas/MatchSummary' }
           default: []
           description: Initial match suggestions (if requested and available)
     AnimalSummary:
@@ -225,14 +241,12 @@ components:
           format: uuid
           description: Animal ID
         speciesId:
-          type: string
-          format: uuid
-          description: Species reference
+          type: integer
+          description: Species reference (INT lookup)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Breed reference (null if custom/other)
+          description: Breed reference (INT lookup; null if custom/other)
         breedText:
           type: string
           maxLength: 100
@@ -335,54 +349,39 @@ components:
       required:
         - id
         - code
-        - name
+        - nameLocalized
       properties:
         id:
-          type: string
-          format: uuid
-          description: Species ID
+          type: integer
+          description: Species ID (INT lookup)
         code:
           type: string
           maxLength: 50
           description: Species code (e.g., 'dog', 'cattle')
-        name:
-          type: string
-          maxLength: 100
-          description: Species name (Russian)
-        nameEn:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Species name (English)
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Species name (LocalizedString {en, ru})
     BreedSummary:
       type: object
       required:
         - id
         - code
-        - name
+        - nameLocalized
         - speciesId
       properties:
         id:
-          type: string
-          format: uuid
-          description: Breed ID
+          type: integer
+          description: Breed ID (INT lookup)
         code:
           type: string
           maxLength: 50
           description: Breed code
-        name:
-          type: string
-          maxLength: 100
-          description: Breed name (Russian)
-        nameEn:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Breed name (English)
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Breed name (LocalizedString {en, ru})
         speciesId:
-          type: string
-          format: uuid
-          description: Reference to species
+          type: integer
+          description: Reference to species (INT lookup)
     FindMatchesRequest:
       type: object
       required:
@@ -400,15 +399,17 @@ components:
           description: Maximum distance in kilometers for search
         breedingGoals:
           type: array
-          items:
-            type: string
+          items: { type: string }
           description: Specific breeding goals to prioritize (e.g., ['milk_production', 'temperament'])
         minScore:
           type: integer
           minimum: 0
           maximum: 100
           default: 60
-          description: Minimum compatibility score threshold (0-100)
+          x-phase: 2
+          description: >-
+            Minimum compatibility score threshold (0-100). **Фаза 2+ filter; ignored in MVP**
+            (eligible-set search is unscored — spec 05).
         maxResults:
           type: integer
           minimum: 1
@@ -431,9 +432,10 @@ components:
       properties:
         matches:
           type: array
-          items:
-            $ref: '#/components/schemas/MatchSummary'
-          description: List of potential matches sorted by compatibility score
+          items: { $ref: '#/components/schemas/MatchSummary' }
+          description: >-
+            MVP: the **eligible set** (animals passing the spec 05 hard predicates), unranked.
+            **Фаза 2+:** sorted by compatibility score.
         searchParameters:
           $ref: '#/components/schemas/SearchParametersUsed'
         totalFound:
@@ -452,8 +454,7 @@ components:
           type: integer
         breedingGoals:
           type: array
-          items:
-            type: string
+          items: { type: string }
         minScore:
           type: integer
         maxResults:
@@ -466,7 +467,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -485,24 +485,28 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Overall compatibility score (0-100). **Computed in Фаза 2; null/absent in MVP** —
+            MVP returns an eligible set (hard predicates of spec 05), not a ranking.
         scoreBreakdown:
-          $ref: '#/components/schemas/ScoreBreakdown'
-          description: Detailed score breakdown by factor category
+          allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
+          nullable: true
+          x-phase: 2
+          description: Detailed score breakdown by factor category. **Computed in Фаза 2; null/absent in MVP.**
         matchReasons:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 5
           description: Top positive factors contributing to match
         matchConcerns:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 3
           description: Potential concerns or negative factors
         candidateSummary:
-          $ref: '#/components/schemas/AnimalSummary'
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
           description: Summary of candidate animal (always included)
         targetSummary:
           type: string
@@ -519,6 +523,10 @@ components:
           description: When match becomes stale (default 7 days from creation)
     ScoreBreakdown:
       type: object
+      x-phase: 2
+      description: >-
+        **Фаза 2+ ranking artifact.** All sub-scores are computed in Фаза 2; the whole object is
+        null/absent in MVP (eligible-set search has no scoring). See spec 05.
       properties:
         geneticScore:
           type: integer
@@ -563,7 +571,6 @@ components:
         - id
         - targetAnimalId
         - candidateAnimalId
-        - compatibilityScore
         - createdAt
       properties:
         id:
@@ -582,38 +589,40 @@ components:
           type: integer
           minimum: 0
           maximum: 100
-          description: Overall compatibility score (0-100)
+          nullable: true
+          x-phase: 2
+          description: >-
+            Overall compatibility score (0-100). **Computed in Фаза 2; null/absent in MVP** —
+            MVP returns an eligible set (hard predicates of spec 05), not a ranking.
         scoreBreakdown:
-          $ref: '#/components/schemas/ScoreBreakdown'
-          description: Detailed score breakdown by factor category
+          allOf: [ { $ref: '#/components/schemas/ScoreBreakdown' } ]
+          nullable: true
+          x-phase: 2
+          description: Detailed score breakdown by factor category. **Computed in Фаза 2; null/absent in MVP.**
         matchReasons:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
           description: All positive factors contributing to match
         matchConcerns:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
           description: All potential concerns or negative factors
         targetAnimal:
-          $ref: '#/components/schemas/AnimalSummary'
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
           description: Full target animal details
         candidateAnimal:
-          $ref: '#/components/schemas/AnimalSummary'
+          allOf: [ { $ref: '#/components/schemas/AnimalSummary' } ]
           description: Full candidate animal details
         targetListings:
           type: array
-          items:
-            $ref: '#/components/schemas/ListingReference'
+          items: { $ref: '#/components/schemas/ListingReference' }
           description: Active MATING/STUD_SERVICE listings for target animal
           default: []
         candidateListings:
           type: array
-          items:
-            $ref: '#/components/schemas/ListingReference'
+          items: { $ref: '#/components/schemas/ListingReference' }
           description: Active MATING/STUD_SERVICE listings for candidate animal
           default: []
         createdAt:
@@ -634,7 +643,7 @@ components:
       required:
         - id
         - listingType
-        - title
+        - titleLocalized
         - priceCents
       properties:
         id:
@@ -645,19 +654,21 @@ components:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (null for non-price listings)
+          description: Price in minor units (null for non-price listings)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Currency code (ISO 4217)
         quantity:
           type: integer
           default: 1
@@ -672,27 +683,15 @@ components:
     MatchingHistoryResponse:
       type: object
       required:
-        - history
-        - limit
-        - offset
+        - items
+        - meta
       properties:
-        history:
+        items:
           type: array
-          items:
-            $ref: '#/components/schemas/HistoryEntry'
+          items: { $ref: '#/components/schemas/HistoryEntry' }
           description: Array of matching history entries
-        limit:
-          type: integer
-          description: Limit parameter used for pagination
-        offset:
-          type: integer
-          description: Offset parameter used for pagination
-        total:
-          type: integer
-          description: Total number of history entries (before pagination)
-        hasMore:
-          type: boolean
-          description: Whether there are more entries available
+        meta:
+          $ref: '#/components/schemas/PageMeta'
     HistoryEntry:
       type: object
       required:
@@ -763,7 +762,12 @@ components:
           description: Whether user would recommend this match to others
         tags:
           type: array
-          items:
-            type: string
+          items: { type: string }
           maxItems: 10
           description: Tags for categorizing feedback (e.g., ['accurate_genetics', 'poor_location'])
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

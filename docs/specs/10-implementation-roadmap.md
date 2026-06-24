@@ -1,11 +1,18 @@
 ---
-version: "1.2"
-lastUpdated: "2026-05-28"
+version: "1.3"
+lastUpdated: "2026-06-19"
 author: "System Analyst"
 status: "Approved"
 ---
 
 # Spec: Implementation Roadmap
+
+> **Implementation status (non-normative, 2026-06-19):** this spec defines the *feature* roadmap
+> (MVP / Phase 2 / Phase 3). Build progress is tracked separately in
+> `BACKEND_IMPLEMENTATION_PLAN.md`. As of now the **Technical Foundation** of MVP is implemented
+> (NestJS platform skeleton + cross-cutting layer: auth, authz, providers, feature-toggle,
+> audit-log, outbox; 31 tables, migrations 0001–0014; CI with unit + e2e). MVP **domain** modules
+> (Identity → … → Matching) are the active work, starting with Identity.
 
 ## Outcome
 Provide a phased implementation plan for ZooLink that delivers value early, manages risk, and allows for learning and adaptation. The roadmap should align with the MVP scope defined in the project brief and prepare for future expansion.
@@ -120,7 +127,7 @@ This specification addresses the following Non-Functional Requirements:
    
 2. **User Experience Improvements**
    - Enhanced profile pages (show animals, listings, badges)
-   - Saved searches and favorites
+   - Saved-search **alerts** (basic favorites & saved searches ship in **MVP** — see `01-discovery/mvp-scope.md`; only new-match alerts are Фаза 2)
    - Listing promotion/boosting (simple featured listings)
    - Improved search (autocomplete, saved locations)
    - User ratings and reviews (basic)

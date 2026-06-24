@@ -3,121 +3,216 @@ info:
   title: ZooLink Moderation API
   version: 1.0.0
   description: >-
-    Pre-moderation workflow (ADR-0003) and user content reports.
-    Moderators (or AI-agent principals per ADR-0006) review listings,
-    record append-only decisions, and triage user-submitted reports.
+    Процесс премодерации (ADR-0003) и пользовательские жалобы на контент.
+    Модераторы (или ИИ-агенты-принципалы по ADR-0006) ревьюят объявления,
+    пишут append-only решения и триажат жалобы пользователей.
+    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
+    ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), LocalizedString (§6),
+    If-Match/ETag на мутирующих PATCH (§10).
+    B0.6 (сделано, ADR-0011 §6): actor-bearing-ответы несут agent-badge `{ actorId, principalType }` (общая
+    схема `Actor`). ModerationDecision отдаёт `actor` (+ снапшот `actorRole`, `supersedesDecisionId`,
+    `isHumanOverride` для цепочки human-override, ADR-0011 §2/§3); ContentReport.resolvedBy — это `Actor`.
+    B10 (форма контракта spec 12 раунд-5; ФОРМА сейчас, поведение — с доменом Moderation):
+    (1) claim/lock — ModerationQueueItem несёт assignedTo/lockedAt/lockExpiresAt/lockState; POST
+    /moderation/queue/{listingId}/claim — эксклюзивный захват (409 ALREADY_CLAIMED) с DELETE для снятия;
+    (2) SLA — waitingSeconds + slaState {ON_TRACK,BREACHED,ESCALATED} + фильтры очереди escalated/slaState;
+    эскалация идёт к ADMIN, никогда не решает автоматически;
+    (3) фильтр market + групповые счётчики meta.counts для вкладок очереди (ADR-0002);
+    (4) agent-transparency (решение владельца #5): GET /listings/{id}/moderation-result возвращает
+    OwnerModerationResult для владельца с principalType / decidedByAgent, чтобы ПРОДАВЕЦ видел «решено ИИ»;
+    (5) decision_templates — контролируемый словарь (таблица, не enum) заготовленных формулировок для
+    REJECT/CHANGES, выбираемых человеком и AGENT; GET /moderation/decision-templates. НОВАЯ таблица
+    decision_templates — МИГРАЦИЯ СХЕМЫ, ОТМЕЧЕННАЯ ДЛЯ BACKEND (не реализована в этом контракте).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /moderation/queue:
     get:
-      summary: List listings awaiting moderation
+      summary: Список объявлений, ожидающих модерации
       operationId: getModerationQueue
-      description: Returns listings with status PENDING_MODERATION, paginated.
+      description: >-
+        Возвращает объявления со статусом PENDING_MODERATION, FIFO-порядок по moderation_enqueued_at ASC
+        (spec 12 раунд-5), постранично. Фильтруется по рынку (жёсткий раздел ADR-0002), состоянию SLA и
+        флагу escalated. `meta.counts` несёт групповые счётчики по рынкам и состояниям SLA, чтобы
+        операторский UI рендерил бейджи вкладок без лишних запросов.
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
           name: market
-          schema:
-            type: string
-            enum: [pet, livestock]
-          description: Filter queue by market
+          schema: { type: string, enum: [pet, livestock] }
+          description: Фильтр очереди по рынку (ADR-0002)
+        - in: query
+          name: slaState
+          schema: { type: string, enum: [ON_TRACK, BREACHED, ESCALATED] }
+          description: Фильтр по состоянию SLA (spec 12 раунд-5)
+        - in: query
+          name: escalated
+          schema: { type: boolean }
+          description: >-
+            Если true, вернуть только элементы, эскалированные к ADMIN по таймауту SLA (slaState=ESCALATED).
+            Удобный фильтр, эквивалентный slaState=ESCALATED (spec 12 раунд-5).
+        - in: query
+          name: lockState
+          schema: { type: string, enum: [FREE, CLAIMED_BY_ME, CLAIMED_BY_OTHER, LOCK_EXPIRED] }
+          description: >-
+            Фильтр по состоянию claim/lock относительно вызывающего принципала (spec 12 раунд-5 claim/lock).
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
         - in: query
           name: limit
-          schema:
-            type: integer
-            default: 20
-            maximum: 100
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: Paginated queue items
+          description: Постраничные элементы очереди
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationQueuePage'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+              schema: { $ref: '#/components/schemas/ModerationQueuePage' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /moderation/queue/{listingId}/claim:
+    post:
+      summary: Захватить (эксклюзивно заблокировать) элемент очереди для ревью
+      operationId: claimModerationItem
+      description: >-
+        Эксклюзивный захват объявления PENDING_MODERATION для ревью (spec 12 раунд-5 «без двойной модерации»).
+        Ставит assignedTo=вызывающий принципал, lockedAt=now, lockExpiresAt=now+MOD_LOCK_TTL (по умолч. 15 мин).
+        Захват эксклюзивен: пока другой принципал держит живой lock, второй захват отклоняется с
+        409 ALREADY_CLAIMED. Lock авто-снимается по истечении (lockExpiresAt < now) — истёкший lock
+        перезахватываем кем угодно (состояние LOCK_EXPIRED). Повторный захват уже удерживаемого элемента
+        идемпотентен (обновляет lockExpiresAt) и возвращает 200. AGENT-принципал использует идентичный
+        контракт (ADR-0006, gated). Эндпоинт перехода состояния: guard-based 409 (API_CONVENTIONS §10), не If-Match.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: listingId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Элемент захвачен (или перезахват обновлён) вызывающим принципалом
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModerationLock' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: >-
+            Элемент уже захвачен другим принципалом с живым (не истёкшим) lock
+            (Problem.code = ALREADY_CLAIMED). Ответ несёт текущего держателя через
+            Problem.errors[0] = { assignedTo: Actor, lockExpiresAt }.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+    delete:
+      summary: Снять удерживаемый вами захват (разблокировать без решения)
+      operationId: releaseModerationItem
+      description: >-
+        Снимает захват вызывающего принципала с объявления (очищает assignedTo/lockedAt/lockExpiresAt),
+        возвращая его в состояние FREE без записи решения. Снять может только держатель (или ADMIN);
+        снятие не удерживаемого вами элемента → 409 NOT_LOCK_HOLDER. Идемпотентно на уже свободном элементе.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: listingId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Lock снят (или уже свободен) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Вызывающий не является текущим держателем lock (Problem.code = NOT_LOCK_HOLDER)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
-      summary: Get a listing with linked details for review
+      summary: Получить объявление со связанными деталями для ревью
       operationId: getModerationListing
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Full listing data for review (listing + animal + photos)
+          description: Полные данные объявления для ревью (объявление + животное + фото)
           content:
             application/json:
               schema:
                 type: object
-                description: Listing review payload (see listings-api.yaml Listing schema plus linked animal and photos)
-        '404':
-          $ref: '#/components/responses/NotFound'
+                description: Payload ревью объявления (см. схему Listing в listings-api.yaml плюс связанные животное и фото)
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
-      summary: Submit a moderation decision for a listing
+      summary: Отправить решение модерации по объявлению
       operationId: submitModerationAction
+      x-required-roles: [MODERATOR, ADMIN]
       description: >-
-        Records an append-only moderation_decisions row and transitions the
-        listing. APPROVE -> status=ACTIVE/moderation_status=APPROVED;
-        REJECT -> status=DEACTIVATED/moderation_status=REJECTED;
-        REQUEST_CHANGES -> status=DRAFT/moderation_status=CHANGES_REQUESTED.
+        Пишет append-only-строку moderation_decisions и переводит объявление.
+        APPROVE -> status=ACTIVE/moderationStatus=APPROVED;
+        REJECT -> status=DEACTIVATED/moderationStatus=REJECTED;
+        REQUEST_CHANGES -> status=DRAFT/moderationStatus=CHANGES_REQUESTED.
+        Контракт lock (spec 12 раунд-5): вызывающий ДОЛЖЕН держать живой захват объявления
+        (assignedTo=вызывающий, lockExpiresAt>now); действие над элементом, заблокированным другим
+        принципалом → 409 NOT_LOCK_HOLDER, действие над элементом без живого lock → 409 ITEM_NOT_CLAIMED.
+        Успешное решение снимает lock. `reason` обязателен для REJECT/REQUEST_CHANGES (spec 12 раунд-5);
+        его пропуск → 422. `templateCode` (опц.) предзаполняет/прикрепляет заготовленную формулировку
+        (decision_templates). Human-override (ADR-0011 §3): задайте supersedesDecisionId, чтобы отменить
+        раннее (обычно AGENT) решение по тому же объявлению — сервер пишет новую append-only-строку с
+        isHumanOverride=true и actor.principalType=HUMAN (никогда не мутирует переопределяемую строку).
+        Эндпоинт перехода состояния: сохраняет guard-based 409 (API_CONVENTIONS §10) вместо If-Match.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ModerationActionRequest'
+            schema: { $ref: '#/components/schemas/ModerationActionRequest' }
       responses:
         '200':
-          description: Decision recorded; listing transitioned
+          description: Решение записано; объявление переведено
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationDecision'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          description: Listing already moderated (concurrent decision) or not in PENDING_MODERATION
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/ModerationDecision' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/decisions:
     get:
-      summary: List moderation decisions (append-only audit)
+      summary: Список решений модерации (append-only аудит)
       operationId: listModerationDecisions
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
           name: entity_type
-          schema:
-            type: string
-            enum: [LISTING, ANIMAL]
+          schema: { type: string, enum: [LISTING, ANIMAL] }
         - in: query
           name: entity_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: Decisions page
+          description: Страница решений
           content:
             application/json:
               schema:
@@ -125,82 +220,163 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ModerationDecision'
-                  page:
-                    type: integer
-                  total:
-                    type: integer
+                    items: { $ref: '#/components/schemas/ModerationDecision' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/reasons:
     get:
-      summary: List configurable moderation reason codes
+      summary: Список настраиваемых кодов причин модерации
       operationId: listModerationReasons
+      x-required-roles: [MODERATOR, ADMIN]
       responses:
         '200':
-          description: Active reason codes
+          description: Активные коды причин
           content:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ModerationReason'
-  /content-reports:
-    post:
-      summary: Submit a user report/flag on content
-      operationId: createContentReport
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ContentReportCreate'
-      responses:
-        '201':
-          description: Report created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ContentReport'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+                items: { $ref: '#/components/schemas/ModerationReason' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /moderation/decision-templates:
     get:
-      summary: List content reports (moderator/admin)
-      operationId: listContentReports
+      summary: Список заготовленных формулировок решений (контролируемый словарь)
+      operationId: listModerationDecisionTemplates
+      description: >-
+        Возвращает активные decision_templates — переиспользуемые заготовленные формулировки, которые
+        модератор ИЛИ AGENT-принципал прикрепляет к решению REJECT / CHANGES_REQUESTED (spec 12 раунд-5).
+        Это reference-data (контролируемый, расширяемый админом словарь), НЕ enum: новые шаблоны
+        добавляются строками данных без изменения схемы/контракта (правило фазирования §5 — см. решение
+        ниже). Агент выбирает шаблон по его стабильному `code`. Фильтруется по применимому решению и рынку.
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
-          name: status
-          schema:
-            type: string
-            enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
+          name: appliesToDecision
+          schema: { type: string, enum: [REJECTED, CHANGES_REQUESTED, ANY] }
+          description: Вернуть только шаблоны, применимые к этому типу решения
         - in: query
-          name: entity_type
-          schema:
-            type: string
-            enum: [LISTING, ANIMAL, USER, MESSAGE]
+          name: market
+          schema: { type: string, enum: [pet, livestock] }
+          description: Вернуть только шаблоны, привязанные к этому рынку (или market-agnostic)
       responses:
         '200':
-          description: Reports list
+          description: Активные шаблоны решений (обе локали возвращаются для операторского редактора)
           content:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ContentReport'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /content-reports/{id}:
-    patch:
-      summary: Resolve a content report (moderator/admin)
-      operationId: resolveContentReport
+                items: { $ref: '#/components/schemas/DecisionTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/moderation-result:
+    get:
+      summary: Результат модерации объявления для владельца (agent-transparency, решение владельца #5)
+      operationId: getOwnerModerationResult
+      description: >-
+        Возвращает последний ДЕЙСТВУЮЩИЙ результат модерации объявления, каким его видит ВЛАДЕЛЕЦ/продавец
+        (решение владельца #5, зафиксировано 2026-06-24: «решено ИИ» показывается ВСЕМ, включая
+        конечного пользователя/продавца). Владелец видит исход решения, причину, заметки И principalType /
+        атрибуцию агента — полная прозрачность, согласовано с видением AI-run-платформы. «Действующий»
+        разрешает цепочку human-override (ADR-0011 §3): если HUMAN-override переопределяет раннее
+        AGENT-решение, владелец видит override как действующий результат, со ссылкой supersedes, чтобы
+        отмена агент→человек была прозрачна. Объектный guard: только владелец объявления (seller_id ==
+        вызывающий) ИЛИ MODERATOR/ADMIN. Возвращает 204, если по объявлению ещё нет решения (всё ещё PENDING).
+        ПРИМЕЧАНИЕ (форма сейчас, поведение с доменом): это каноническая проекция для владельца; чтение
+        объявления владельцем (listings-api) ДОЛЖНО встраивать тот же OwnerModerationResult как аддитивное
+        поле `lastModerationResult` — отмечено для backend + doc-keeper.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Последний действующий результат модерации для владельца
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OwnerModerationResult' }
+        '204': { description: Решения ещё нет (объявление всё ещё PENDING_MODERATION) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /content-reports:
+    post:
+      summary: Отправить жалобу/флаг на контент
+      operationId: createContentReport
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContentReportCreate' }
+      responses:
+        '201':
+          description: Жалоба создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+    get:
+      summary: Список жалоб на контент (модератор/админ)
+      operationId: listContentReports
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [OPEN, REVIEWED, DISMISSED, ACTIONED] }
+        - in: query
+          name: entity_type
+          schema: { type: string, enum: [LISTING, ANIMAL, USER, MESSAGE] }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Страница жалоб
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ContentReport' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /content-reports/{id}:
+    patch:
+      summary: Разрешить жалобу на контент (модератор/админ)
+      operationId: resolveContentReport
+      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего чтения жалобы
       requestBody:
         required: true
         content:
@@ -214,54 +390,188 @@ paths:
               required: [status]
       responses:
         '200':
-          description: Report updated
+          description: Жалоба обновлена
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ContentReport'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
-    ModerationQueueItem:
+    LocalizedString:
       type: object
       properties:
-        listing_id:
+        en: { type: string }
+        ru: { type: string }
+    Actor:
+      type: object
+      description: >-
+        Actor-badge: действующий принципал в любом actor-bearing-ответе (ADR-0011 §6). principalType — это
+        снапшот users.principal_type (HUMAN|AGENT) на момент действия; он позволяет потребителю отличить
+        решение человека от решения агента без второго запроса. DEFAULT HUMAN в MVP (AGENT не активен до гейта).
+      required: [actorId, principalType]
+      properties:
+        actorId:
           type: string
           format: uuid
-        title:
+          description: Действующий принципал (users.id).
+        principalType:
           type: string
+          enum: [HUMAN, AGENT]
+          description: Снапшот типа действующего принципала на момент действия (ADR-0011 §1).
+        actorDisplayName:
+          type: string
+          nullable: true
+          description: Опциональная человекочитаемая метка актёра (удобство операторского UI).
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+        counts:
+          allOf: [ { $ref: '#/components/schemas/QueueGroupCounts' } ]
+          nullable: true
+          description: >-
+            Опционально, аддитивно (дисциплина cursor-ready/аддитивности API_CONVENTIONS §5). Заполняется ТОЛЬКО
+            очередью модерации, чтобы нести групповые счётчики бейджей вкладок по рынку / состоянию SLA;
+            отсутствует (null) на всех остальных list-эндпоинтах. Клиенты, его игнорирующие, продолжают работать.
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    ModerationQueueItem:
+      type: object
+      required: [listingId, market, submittedAt, waitingSeconds, slaState, lockState]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Заголовок объявления (LocalizedString {en, ru})
         market:
           type: string
           enum: [pet, livestock]
         species:
           type: string
-        submitted_at:
+        submittedAt:
           type: string
           format: date-time
-        waiting_seconds:
+          description: Когда элемент попал в очередь (listings.moderation_enqueued_at; старт часов SLA).
+        waitingSeconds:
           type: integer
-          description: Time spent waiting in queue (for SLA)
+          description: Секунды ожидания в очереди с submittedAt (вычисляется сервером; питает slaState).
+        slaState:
+          type: string
+          enum: [ON_TRACK, BREACHED, ESCALATED]
+          description: >-
+            Состояние SLA (spec 12 раунд-5). ON_TRACK = в пределах цели; BREACHED = цель превышена, но ещё не
+            эскалировано; ESCALATED = сработал таймаут SLA, элемент эскалирован к ADMIN (событие
+            Moderation.Escalated) и ВСЁ ЕЩЁ PENDING_MODERATION — никогда не авто-одобрен/отклонён.
+        # ----- claim/lock (spec 12 раунд-5 «без двойной модерации»; колонки: listings.assigned_to/locked_at/lock_expires_at) -----
+        lockState:
+          type: string
+          enum: [FREE, CLAIMED_BY_ME, CLAIMED_BY_OTHER, LOCK_EXPIRED]
+          description: >-
+            Состояние claim/lock ОТНОСИТЕЛЬНО ВЫЗЫВАЮЩЕГО ПРИНЦИПАЛА. FREE = не захвачен; CLAIMED_BY_ME =
+            вызывающий держит живой lock; CLAIMED_BY_OTHER = другой принципал держит живой lock (вызывающий не
+            может действовать); LOCK_EXPIRED = устаревший lock после lockExpiresAt, перезахватываем кем угодно.
+        assignedTo:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          nullable: true
+          description: >-
+            Принципал, в данный момент держащий захват как {actorId, principalType} (ADR-0011 §6); null при FREE.
+            principalType позволяет UI показать, человек или AGENT его ревьюит.
+        lockedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда взят текущий захват (listings.locked_at); null при FREE.
+        lockExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Истечение захвата (listings.lock_expires_at = lockedAt + MOD_LOCK_TTL, по умолч. 15 мин). После
+            этого момента lock авто-снимается и lockState становится LOCK_EXPIRED. Null при FREE.
+    ModerationLock:
+      type: object
+      description: Результат успешного захвата/перезахвата (POST /moderation/queue/{listingId}/claim).
+      required: [listingId, assignedTo, lockedAt, lockExpiresAt, lockState]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        assignedTo:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: Принципал, теперь держащий lock (вызывающий принципал).
+        lockedAt:
+          type: string
+          format: date-time
+        lockExpiresAt:
+          type: string
+          format: date-time
+          description: lockedAt + MOD_LOCK_TTL (по умолч. 15 мин).
+        lockState:
+          type: string
+          enum: [CLAIMED_BY_ME]
+          description: Всегда CLAIMED_BY_ME при успешном захвате.
     ModerationQueuePage:
       type: object
       properties:
         items:
           type: array
-          items:
-            $ref: '#/components/schemas/ModerationQueueItem'
-        page:
-          type: integer
-        limit:
-          type: integer
-        total:
-          type: integer
+          items: { $ref: '#/components/schemas/ModerationQueueItem' }
+        meta:
+          allOf: [ { $ref: '#/components/schemas/PageMeta' } ]
+          description: >-
+            Стандартный PageMeta плюс групповые счётчики очереди модерации (counts) для бейджей вкладок —
+            итоги по ВСЕЙ отфильтрованной очереди, а не только по текущей странице.
+    QueueGroupCounts:
+      type: object
+      description: >-
+        Групповые итоги для вкладок операторской очереди (spec 12 раунд-5 задача 3). Счётчики охватывают всю
+        очередь под активными не-вкладочными фильтрами, позволяя рендерить бейджи без лишних запросов.
+      properties:
+        byMarket:
+          type: object
+          properties:
+            pet: { type: integer }
+            livestock: { type: integer }
+        bySlaState:
+          type: object
+          properties:
+            ON_TRACK: { type: integer }
+            BREACHED: { type: integer }
+            ESCALATED: { type: integer }
     ModerationActionRequest:
       type: object
-      required: [listing_id, action]
+      required: [listingId, action]
       properties:
-        listing_id:
+        listingId:
           type: string
           format: uuid
         action:
@@ -269,25 +579,50 @@ components:
           enum: [APPROVE, REJECT, REQUEST_CHANGES]
         reason:
           type: string
-          description: Reason code (FK to moderation_reasons.code); required for REJECT/REQUEST_CHANGES
+          description: Код причины (FK на moderation_reasons.code); обязателен для REJECT/REQUEST_CHANGES (422 при отсутствии)
+        templateCode:
+          type: string
+          nullable: true
+          description: >-
+            Опциональный код шаблона заготовленной формулировки (FK на decision_templates.code). Сервер
+            резолвит тело шаблона в заметки решения (в локали актёра); свободный `notes` может переопределить
+            или дополнить его. Используется и человеком, и AGENT-принципалом (агент выбирает по этому стабильному коду).
         notes:
           type: string
           nullable: true
+          description: Свободная заметка; если задан templateCode, дополняет/переопределяет тело шаблона.
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Human-override (ADR-0011 §3): id раннего решения по ТОМУ ЖЕ объявлению для отмены. При наличии
+            сервер пишет новую append-only-строку с isHumanOverride=true и actor.principalType=HUMAN; никогда
+            не мутирует переопределяемую строку. ДОЛЖЕН ссылаться на решение по тем же (entityType, entityId) —
+            иначе 422. AGENT-принципал НЕ ДОЛЖЕН задавать это (override — HUMAN-only действие) → 403/422.
     ModerationDecision:
       type: object
-      description: Append-only audit record (immutable; no update/delete)
+      description: Append-only аудит-запись (неизменяемая; без update/delete)
+      required: [id, actor, entityType, entityId, decision, isHumanOverride, createdAt]
       properties:
         id:
           type: string
           format: uuid
-        moderator_id:
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Действующий принципал как agent-badge {actorId, principalType} (ADR-0011 §6); заменяет прежний
+            плоский moderatorId. principalType — снапшот на момент записи (moderation_decisions.actor_principal_type).
+        actorRole:
           type: string
-          format: uuid
-          description: Acting principal (users.id); may be a HUMAN or AGENT (ADR-0006)
-        entity_type:
+          nullable: true
+          description: >-
+            Снапшот роли, которую держал актёр при решении (moderation_decisions.actor_role, ADR-0011 §2);
+            users.role изменяема, поэтому решение навсегда показывает роль, под которой оно было принято.
+        entityType:
           type: string
           enum: [LISTING, ANIMAL]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         decision:
@@ -299,7 +634,63 @@ components:
         notes:
           type: string
           nullable: true
-        created_at:
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Для строки human-override: переопределённое решение на той же (entityType, entityId) (ADR-0011 §3).
+            Non-null тогда и только тогда, когда isHumanOverride=true (биусловный инвариант chk_moddec_override).
+        isHumanOverride:
+          type: boolean
+          default: false
+          description: >-
+            True, когда это решение — HUMAN-переопределение более раннего (обычно AGENT) решения (ADR-0011 §3).
+            У строки-override actor.principalType ДОЛЖЕН быть HUMAN, а supersedesDecisionId — non-null.
+        createdAt:
+          type: string
+          format: date-time
+    OwnerModerationResult:
+      type: object
+      description: >-
+        Проекция последнего ДЕЙСТВУЮЩЕГО решения модерации для владельца/продавца (решение владельца #5 —
+        agent-transparency для всех). Намеренно БОЛЕЕ УЗКИЙ вид, чем ModerationDecision: опускает
+        операторские внутренние поля (actorRole, сырую идентичность модератора сверх agent-badge), но НЕСЁТ
+        principalType, чтобы продавец видел, человек или ИИ решил, плюс причину и заметки в резолвленной локали.
+        decidedByAgent — удобный boolean, производный от decidedBy.principalType.
+      required: [listingId, decision, decidedBy, decidedByAgent, decidedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED, CHANGES_REQUESTED]
+        reason:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          nullable: true
+          description: Резолвленное описание причины (из moderation_reasons.descriptionLocalized); null для APPROVED.
+        notes:
+          type: string
+          nullable: true
+          description: Заметка модератора/агента, показываемая владельцу (может происходить из шаблона решения).
+        decidedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Решающий принципал как {actorId, principalType} (ADR-0011 §6). principalType — сигнал
+            прозрачности: решение владельца #5 предписывает, что продавец может отличить решение ИИ от решения человека.
+        decidedByAgent:
+          type: boolean
+          description: Удобный флаг = (decidedBy.principalType == AGENT); питает UI-бейдж «Решено ИИ».
+        isHumanOverride:
+          type: boolean
+          description: True, если этот действующий результат — HUMAN-отмена раннего (обычно AGENT) решения (ADR-0011 §3).
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Когда isHumanOverride — решение агента, отменённое этим человеческим результатом; цепочка агент→человек остаётся видимой.
+        decidedAt:
           type: string
           format: date-time
     ModerationReason:
@@ -307,28 +698,61 @@ components:
       properties:
         code:
           type: string
-        description_localized:
-          type: object
-          additionalProperties:
-            type: string
-        applies_to:
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Описание причины (LocalizedString {en, ru})
+        appliesTo:
           type: string
           enum: [LISTING, ANIMAL, ANY]
-        is_active:
+        isActive:
+          type: boolean
+    DecisionTemplate:
+      type: object
+      description: >-
+        Контролируемая, расширяемая админом заготовленная формулировка решения (spec 12 раунд-5). Форма
+        reference-data (зеркалит moderation_reasons + конвенцию reference-data A2: code PK, тело LocalizedString,
+        market-scope по ADR-0002, sort_order, is_active, provenance). Подкреплена НОВОЙ таблицей decision_templates
+        (миграция схемы отмечена для backend — НЕ реализована здесь). Возвращается с ОБЕИМИ локалями, чтобы
+        операторский редактор мог показать/править каждую; публичные/конечно-пользовательские проекции резолвят в одну локаль.
+      required: [code, bodyLocalized, appliesToDecision, isActive]
+      properties:
+        code:
+          type: string
+          description: Стабильный идентификатор, который выбирает AGENT или человек (PK; напр. "photos_blurry_resubmit").
+        bodyLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Тело заготовленной формулировки (LocalizedString {en, ru}); может содержать плейсхолдеры.
+        appliesToDecision:
+          type: string
+          enum: [REJECTED, CHANGES_REQUESTED, ANY]
+          description: Для каких типов решения предлагается этот шаблон.
+        market:
+          type: string
+          enum: [pet, livestock]
+          nullable: true
+          description: Привязка к рынку (ADR-0002); null = market-agnostic.
+        relatedReasonCode:
+          type: string
+          nullable: true
+          description: Опциональная связь с moderation_reasons.code, который этот шаблон обычно сопровождает.
+        sortOrder:
+          type: integer
+          description: Порядок отображения в операторском пикере (конвенция reference-data A2).
+        isActive:
           type: boolean
     ContentReportCreate:
       type: object
-      required: [entity_type, entity_id, reason]
+      required: [entityType, entityId, reason]
       properties:
-        entity_type:
+        entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         reason:
           type: string
-          description: e.g., SPAM, ABUSE, FRAUD, INAPPROPRIATE
+          description: напр., SPAM, ABUSE, FRAUD, INAPPROPRIATE
         notes:
           type: string
           nullable: true
@@ -338,14 +762,14 @@ components:
         id:
           type: string
           format: uuid
-        reporter_id:
+        reporterId:
           type: string
           format: uuid
           nullable: true
-        entity_type:
+        entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         reason:
@@ -356,45 +780,21 @@ components:
         status:
           type: string
           enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
-        resolved_by:
-          type: string
-          format: uuid
+        resolvedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
           nullable: true
-        created_at:
+          description: >-
+            Разрешающий принципал как agent-badge {actorId, principalType} (ADR-0011 §6); заменяет прежний
+            плоский resolvedBy uuid. Null, пока жалоба OPEN. principalType — снапшот на момент записи.
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-        message:
-          type: string
   responses:
-    Unauthorized:
-      description: Authentication required
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
       content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    Forbidden:
-      description: Caller lacks MODERATOR/ADMIN privileges
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    ValidationError:
-      description: Validation failed
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

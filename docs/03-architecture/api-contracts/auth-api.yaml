@@ -2,203 +2,545 @@ openapi: 3.0.3
 info:
   title: ZooLink Auth API
   version: 1.0.0
-  description: API for user authentication, authorization, and profile management in ZooLink.
+  description: >-
+    API for user authentication, authorization, and profile management in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth with public opt-out (§2),
+    x-required-roles (§3), RFC7807 Problem errors (§4), 7-role enum (§3), rate limiting (§8),
+    If-Match/ETag on mutating PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /auth/register/phone:
     post:
-      summary: Register user via phone/SMS
+      summary: Register user via phone/SMS — sends an OTP (passwordless, OTP-first)
       operationId: registerPhone
+      security: []
+      description: >-
+        Public (security opt-out). (round-4/Phase-2, normative) Creates the account in
+        PENDING_VERIFICATION and sends a 6-digit SMS OTP. No tokens are issued here — the session is
+        minted by /auth/verify-phone after the code is confirmed.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterPhoneRequest'
+            schema: { $ref: '#/components/schemas/RegisterPhoneRequest' }
       responses:
-        '201':
-          description: User registered successfully
+        '202':
+          description: OTP sent; phone verification required
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Bad request (validation error)
-        '409':
-          description: Conflict (phone already registered)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/RegisterPhoneResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/register/oauth/{provider}:
     post:
       summary: Register/Login user via OAuth provider
       operationId: registerOAuth
+      security: []
+      description: Public (security opt-out).
       parameters:
         - in: path
           name: provider
           required: true
-          schema:
-            type: string
-            enum: [google, apple, telegram, vk]
-            description: OAuth provider name
+          schema: { type: string, enum: [google, apple, telegram, vk] }
+          description: OAuth provider name
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/OAuthRequest'
+            schema: { $ref: '#/components/schemas/OAuthRequest' }
       responses:
         '200':
           description: User logged in successfully (existing user)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
+              schema: { $ref: '#/components/schemas/AuthResponse' }
         '201':
           description: User registered successfully (new user)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized (invalid OAuth code/token)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/verify-phone:
     post:
-      summary: Verify phone with SMS code
+      summary: Verify phone with SMS code — activates the account and issues a session
       operationId: verifyPhone
+      security: []
+      description: >-
+        Public (security opt-out). (round-4/Phase-2, normative) Validates the OTP, transitions the user
+        to ACTIVE and returns the session (access + refresh) plus the profile. 5 failed attempts →
+        15-min lockout.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/VerifyPhoneRequest'
+            schema: { $ref: '#/components/schemas/VerifyPhoneRequest' }
       responses:
         '200':
-          description: Phone verified successfully
+          description: Phone verified; session issued
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/VerifyPhoneResponse'
-        '400':
-          description: Bad request (invalid code or expired)
-        '429':
-          description: Too Many Requests (rate limit exceeded)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/recover/email/request:
+    post:
+      summary: Request account recovery via a verified email (sends an OTP)
+      operationId: recoverEmailRequest
+      security: []
+      description: >-
+        Public (security opt-out). (Slice-4, normative) Account recovery for a user who lost access to
+        the phone/OAuth they registered with but has a VERIFIED email on file. Sends a 6-digit OTP to
+        that email. For privacy this ALWAYS returns 202 even if no account/verified-email matches (no
+        account enumeration). The OTP only activates a recovery session when /auth/recover/email/verify
+        is called with a real code. If the account is DEACTIVATED within the 30-day grace, a successful
+        recovery also reactivates it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecoverEmailRequest' }
+      responses:
+        '202':
+          description: If a recoverable account with that verified email exists, an OTP was sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoverEmailRequestResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/recover/email/verify:
+    post:
+      summary: Verify the email recovery OTP — issues a session
+      operationId: recoverEmailVerify
+      security: []
+      description: >-
+        Public (security opt-out). (Slice-4, normative) Validates the recovery OTP sent to the verified
+        email and returns a fresh session (access + refresh) plus the profile. 5 failed attempts →
+        15-min lockout. SUSPENDED accounts cannot be recovered (operator action required). A DEACTIVATED
+        account within grace is reactivated; past grace it cannot be recovered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecoverEmailVerifyRequest' }
+      responses:
+        '200':
+          description: Recovery verified; session issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/users/{userId}/role:
+    patch:
+      summary: '[ADMIN] Grant/change a user role (role-elevation)'
+      operationId: adminSetUserRole
+      description: >-
+        (Slice-4, normative) USER → BREEDER/FARMER/VETERINARIAN/GROOMER (and operator roles) is
+        ADMIN-granted, never self-claimed. Audit-logged; a role change revokes ALL refresh-token
+        families for the target user (round-4 "role change → revoke all families").
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetRoleRequest' }
+      responses:
+        '200':
+          description: Role updated; target sessions revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/users/{userId}/rebind:
+    post:
+      summary: '[ADMIN] Re-bind a user phone/OAuth identifier (assisted recovery)'
+      operationId: adminRebindIdentifier
+      description: >-
+        (Slice-4, normative) ADMIN-assisted, audit-logged re-binding of the phone or an OAuth
+        identifier for a user who lost access and has no verified email. No silent takeover — the
+        action is attributed to the ADMIN in audit_log. Re-binding revokes ALL of the target's
+        sessions. Exactly one identifier (newPhone OR oauth provider+id, or a clear) per call.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RebindRequest' }
+      responses:
+        '200':
+          description: Identifier re-bound; target sessions revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/users/{userId}/erase:
+    post:
+      summary: '[ADMIN] Erase (anonymise-in-place) a user — ФЗ-152 right-to-erasure'
+      operationId: adminEraseUser
+      description: >-
+        (Slice-4, normative) Runs the `erase_user` procedure (data-governance.md §2): anonymise
+        users PII (UUID retained so FK RESTRICT rows stay valid), release identifiers (phone_hash /
+        oauth_* / email NULLed), revoke all sessions, redact notification_logs recipient/content,
+        NULL avatar_url. Append-only audit_log/moderation_decisions are RETAINED under legal hold.
+        Idempotent — erasing an already-erased account is a no-op 200. Status becomes DEACTIVATED
+        with an `erased_at` marker.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200': { description: User erased (or already erased — idempotent) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /me/erase:
+    post:
+      summary: Request erasure of the current account (ФЗ-152)
+      operationId: eraseMe
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      description: >-
+        (Slice-4, normative) Self-service right-to-erasure. Per data-governance.md §2 the canonical
+        path is deactivate → 30-day grace → erase. This endpoint deactivates immediately if the
+        account is still ACTIVE, then schedules/executes erasure. In the MVP (no scheduler for the
+        grace job) it deactivates and records the erasure request; the actual anonymisation is run
+        by the retention job / an ADMIN after grace. See Open Questions.
+      responses:
+        '202':
+          description: Erasure requested; account deactivated, anonymisation scheduled after grace
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/refresh:
     post:
       summary: Refresh access token using refresh token
       operationId: refreshToken
+      security: []
+      description: Public (security opt-out).
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RefreshTokenRequest'
+            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
       responses:
         '200':
           description: Token refreshed successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '401':
-          description: Unauthorized (invalid or expired refresh token)
-        '403':
-          description: Forbidden (refresh token reused or revoked)
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /auth/logout:
     post:
       summary: Logout user (invalidate tokens)
       operationId: logout
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/LogoutRequest'
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
       responses:
-        '200':
-          description: Logged out successfully
-        '401':
-          description: Unauthorized
+        '200': { description: Logged out successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me:
     get:
       summary: Get current user profile
       operationId: getMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         '200':
-          description: Current user profile
+          description: Current user profile (returns a weak ETag for optimistic concurrency)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '401':
-          description: Unauthorized
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '304':
+          description: Not Modified (If-None-Match matched)
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update current user profile
       operationId: updateMe
-      security:
-        - bearerAuth: []
+      description: >-
+        Optimistic concurrency (API_CONVENTIONS §10): requires the If-Match header carrying the
+        ETag from a prior GET /me.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from GET /me
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateProfileRequest'
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
       responses:
         '200':
           description: Profile updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Deactivate current user account
       operationId: deactivateMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
-        '200':
-          description: Account deactivated successfully
-        '401':
-          description: Unauthorized
+        '200': { description: Account deactivated successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/reactivate:
     post:
       summary: Reactivate deactivated user account
       operationId: reactivateMe
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      responses:
+        '200': { description: Account reactivated successfully }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/whoami:
+    get:
+      summary: '[internal] Return the authenticated principal (auth self-check)'
+      operationId: whoami
+      description: >-
+        Internal/diagnostic endpoint, not part of the public product surface. Echoes the
+        authenticated principal so the JwtAuthGuard can be exercised end-to-end (smoke/health of
+        the auth chain). No data is mutated.
+      x-internal: true
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         '200':
-          description: Account reactivated successfully
-        '400':
-          description: Bad request (account not deactivated or other error)
-        '401':
-          description: Unauthorized
+          description: The authenticated principal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthPrincipal' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/operator-check:
+    get:
+      summary: '[internal] Verify operator AuthZ end-to-end (role + policy)'
+      operationId: operatorCheck
+      description: >-
+        Internal/diagnostic endpoint, not part of the public product surface. Requires the
+        MODERATOR role plus a `read ModerationQueue` policy, so it exercises both the RolesGuard
+        and the CASL PoliciesGuard in one call. No data is mutated.
+      x-internal: true
+      x-required-roles: [MODERATOR, ADMIN]
+      responses:
+        '200':
+          description: Operator authorization succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, role]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  role:
+                    type: string
+                    description: The caller's role (operator role on success)
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/dev-token:
+    post:
+      summary: '[dev only] Mint a session for an existing user id'
+      operationId: devToken
+      security: []
+      description: >-
+        DEV-ONLY session minting. Bridges auth end-to-end testing against a seeded user until the
+        full login surface (phone OTP + OAuth) is live. **Disabled in production**: when
+        `NODE_ENV=production` the endpoint responds `404 Not Found` (RFC7807) — it is not part of
+        the production product surface. Not for any client/UI; do not depend on it.
+      x-internal: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DevTokenRequest' }
+      responses:
+        '200':
+          description: Session minted (dev/test environments only)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: Not found — also returned for the endpoint itself in production
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    UserIdParam:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Target user id (users.id)
   schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    AuthPrincipal:
+      type: object
+      description: The authenticated actor attached to a request after JwtAuthGuard succeeds.
+      required:
+        - userId
+        - role
+        - principalType
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: users.id of the authenticated actor
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Canonical role (must match the DB CHECK on users.role)
+        principalType:
+          type: string
+          enum: [HUMAN, AGENT]
+          description: A principal may be a human or an AI agent (ADR-0006)
+    RecoverEmailRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: The VERIFIED email on file for the account to recover
+    RecoverEmailRequestResponse:
+      type: object
+      required:
+        - status
+        - expiresInSeconds
+      properties:
+        status:
+          type: string
+          enum: [VERIFICATION_REQUIRED]
+          description: Always VERIFICATION_REQUIRED — confirm via /auth/recover/email/verify
+        expiresInSeconds:
+          type: integer
+          description: OTP validity window in seconds (e.g. 300)
+    RecoverEmailVerifyRequest:
+      type: object
+      required:
+        - email
+        - code
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: The verified email the recovery OTP was sent to
+        code:
+          type: string
+          pattern: '^\\d{6}$'
+          description: 6-digit recovery code from email
+    SetRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: New role to grant (canonical 7-role set)
+    RebindRequest:
+      type: object
+      description: >-
+        Exactly one of `newPhone`, (`oauthProvider` + `oauthId`), or a clear
+        (`oauthProvider` + `clear: true`) must be provided.
+      properties:
+        newPhone:
+          type: string
+          pattern: '^\\+?[1-9]\\d{1,14}$'
+          description: New phone number (E.164) to bind (re-hashed server-side)
+        oauthProvider:
+          type: string
+          enum: [google, apple, telegram, vk]
+          description: OAuth provider whose identifier to (re)bind or clear
+        oauthId:
+          type: string
+          description: New provider-side id to bind (omit with clear=true to unbind)
+        clear:
+          type: boolean
+          description: When true with oauthProvider, unbinds that OAuth identifier
+        reason:
+          type: string
+          maxLength: 500
+          description: Operator-supplied reason (recorded in audit_log)
     RegisterPhoneRequest:
       type: object
+      # (Phase-2/round-7, normative) Aligned with spec 01 round-4: end-user auth is PASSWORDLESS
+      # (phone OTP) — `password` removed (password_hash is operator-only). `cityId` is an INTEGER
+      # lookup (id-type convention: lookups=INT) and optional (set later via PATCH /me).
       required:
         - phone
         - fullName
-        - cityId
       properties:
         phone:
           type: string
@@ -210,13 +552,8 @@ components:
           minLength: 2
           description: User's full name for display
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
-        password:
-          type: string
-          minLength: 8
-          description: Password for phone auth (required if not using OAuth-only)
+          type: integer
+          description: Reference to city (cities.id) for geo-search (optional)
         email:
           type: string
           format: email
@@ -227,12 +564,15 @@ components:
           format: uri
           maxLength: 500
           description: URL to avatar image in object storage (optional)
+        preferredLanguage:
+          type: string
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code); defaults to ru
     OAuthRequest:
       type: object
       required:
         - code
         - fullName
-        - cityId
       properties:
         code:
           type: string
@@ -243,9 +583,8 @@ components:
           minLength: 2
           description: User's full name (can be overridden by provider data)
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
+          type: integer
+          description: Reference to city (cities.id) for geo-search (optional)
         email:
           type: string
           format: email
@@ -270,19 +609,19 @@ components:
           type: string
           pattern: '^\\d{6}$'
           description: 6-digit SMS verification code
-    VerifyPhoneResponse:
+    RegisterPhoneResponse:
       type: object
+      required:
+        - status
+        - expiresInSeconds
       properties:
-        verified:
-          type: boolean
-          description: Whether phone verification was successful
-        userId:
+        status:
           type: string
-          format: uuid
-          description: User ID if phone is registered (null if new registration)
-        needsRegistration:
-          type: boolean
-          description: Whether user needs to complete registration after verification
+          enum: [VERIFICATION_REQUIRED]
+          description: Always VERIFICATION_REQUIRED — confirm via /auth/verify-phone
+        expiresInSeconds:
+          type: integer
+          description: OTP validity window in seconds (e.g. 300)
     RefreshTokenRequest:
       type: object
       required:
@@ -291,6 +630,27 @@ components:
         refreshToken:
           type: string
           description: Refresh token obtained during login/registration
+    DevTokenRequest:
+      type: object
+      required:
+        - userId
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: Existing user id to mint a session for (dev/test only)
+    TokenPairResponse:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
+        refreshToken:
+          type: string
+          description: Refresh token for obtaining new access tokens
     LogoutRequest:
       type: object
       properties:
@@ -306,7 +666,7 @@ components:
       properties:
         accessToken:
           type: string
-          description: JWT access token (expires in 24h)
+          description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
         refreshToken:
           type: string
           description: Refresh token for obtaining new access tokens
@@ -325,11 +685,8 @@ components:
           type: string
           format: uuid
           description: Unique identifier
-        phoneHash:
-          type: string
-          pattern: '^\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$'
-          nullable: true
-          description: Bcrypt hash of phone number (null if OAuth-only)
+        # (Phase-2/round-7, normative) phone_hash is a credential-derived secret and is NEVER
+        # returned in profile responses — removed from this schema.
         oauthGoogleId:
           type: string
           nullable: true
@@ -351,10 +708,9 @@ components:
           maxLength: 100
           description: Display name
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Reference to city (cities.id) for geo-search
         avatarUrl:
           type: string
           format: uri
@@ -373,11 +729,19 @@ components:
           description: True if email confirmed via link
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
-          description: User role defining permissions
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: User role defining permissions (canonical 7-role set, spec 01 round-4)
+        status:
+          type: string
+          enum: [UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED]
+          description: Lifecycle state (single source of truth; isActive is derived)
+        preferredLanguage:
+          type: string
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code)
         isActive:
           type: boolean
-          description: True = can login; False = deactivated
+          description: Derived from status (true unless SUSPENDED/DEACTIVATED)
         createdAt:
           type: string
           format: date-time
@@ -398,6 +762,8 @@ components:
           description: When user chose to deactivate (null if active)
     UpdateProfileRequest:
       type: object
+      # (Phase-2/round-7, normative) passwordless — `password` removed; cityId is INTEGER (lookup).
+      # All fields optional (partial update); at least one should be present.
       properties:
         fullName:
           type: string
@@ -405,20 +771,28 @@ components:
           minLength: 2
           description: User's full name for display
         cityId:
-          type: string
-          format: uuid
-          description: Reference to city for geo-search
+          type: integer
+          nullable: true
+          description: Reference to city (cities.id) for geo-search (null clears it)
         avatarUrl:
           type: string
           format: uri
           maxLength: 500
+          nullable: true
           description: URL to avatar image in object storage
         email:
           type: string
           format: email
           maxLength: 255
+          nullable: true
           description: Email address for notifications
-        password:
+        preferredLanguage:
           type: string
-          minLength: 8
-          description: New password (only for phone auth users)
+          enum: [ru, en]
+          description: Preferred language (supported_languages.code)
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

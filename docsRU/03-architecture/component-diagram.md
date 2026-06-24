@@ -3,6 +3,14 @@
 ## Цель
 Показывает высокоуровневые компоненты и их интерфейсы в платформе ZooLink.
 
+> ⚠️ **MVP vs Target State.** Эта диаграмма показывает **целевую архитектуру (Фаза 2+)**, а не MVP.
+> Согласно [ADR-0001](../04-decisions/0001-tech-stack.md) и [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
+> **MVP — это модульный монолит** (единый деплой NestJS) на Docker Compose.
+> **Откладывается до Фазы 2+** и **не** строится в MVP: декомпозиция на микросервисы, **gRPC** между сервисами,
+> отдельная **шина событий** (в MVP — таблица `outbox_events`, вычитываемая фоновым воркером), **SSR Web Gateway**
+> (фронт — Vite SPA/PWA), read-реплики, service mesh. **Elasticsearch** и **платёжные шлюзы** — также Фаза 2+.
+> В MVP воспринимайте блоки ниже как *логические модули внутри монолита*.
+
 ## Описание диаграммы
 ```mermaid
 graph TD
@@ -44,11 +52,11 @@ graph TD
     %% External Systems
     subgraph External_Systems
         direction TB
-        SMS_Gateway["SMS-провайдер<br/>(Twilio)"]
-        Email_Service["Email-провайдер<br/>(SendGrid)"]
+        SMS_Gateway["SMS-провайдер<br/>(SMS.RU / SMSC / MTS Exolve)"]
+        Email_Service["Email-провайдер<br/>(Unisender / Mailopost)"]
         Maps_Service["Провайдер карт<br/>(Yandex.Maps)"]
-        OAuth_Providers["Провайдеры OAuth<br/>(Google, Apple, и др.)"]
-        Payment_Gateways["Платежные шлюзы<br/>(Stripe, PayPal)"]
+        OAuth_Providers["Провайдеры OAuth<br/>(Google, Apple, Telegram, VK)"]
+        Payment_Gateways["Платежные шлюзы — Фаза 2+<br/>(ЮKassa + СБП)"]
     end
 
     %% User Interfaces
@@ -208,7 +216,7 @@ graph TD
 - **Email-провайдер**: Сервис третьей стороны для транзакционных и маркетинговых email
 - **Провайдер карт**: Сервис геокодинга и карт для функций, основанных на местоположении
 - **Провайдеры OAuth**: Сервисы третьей стороны для вариантов социального входа
-- **Платежные шлюзы**: Будущая интеграция с платежными процессорами для финансовых транзакций
+- **Платежные шлюзы**: интеграция Фазы 2+ с **доступными в РФ** процессорами (ЮKassa + СБП; см. [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)). Stripe/PayPal **не работают в РФ** и не должны предполагаться.
 
 ### Пользовательские интерфейсы
 - **Веб-приложение**: Одностраничное приложение с возможностями PWA для доступа через браузер

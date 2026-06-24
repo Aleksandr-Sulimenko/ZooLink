@@ -2,53 +2,86 @@ openapi: 3.0.3
 info:
   title: ZooLink Admin API
   version: 1.0.0
-  description: API for managing reference data, moderation workflows, and system settings in ZooLink.
+  description: >-
+    API управления справочными данными, процессами модерации и системными настройками в ZooLink.
+    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
+    ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), LocalizedString (§6, admin
+    возвращает обе локали), конвенция sort §12, If-Match/ETag на мутирующих PATCH (§10).
+
+
+    Реконсиляция `dataset` справочных данных (round-9 → A3, нормативно) — выровнено по фактической схеме
+    (`database_schema.sql`) и rbac-matrix.md.
+
+    ЧТО: enum `dataset` — это **5 управляемых INT-ключевых lookup-таблиц**, существующих как CRUD-able
+    admin-справочники: `species`, `breeds`, `cities`, `health_certifications`, `genetic_markers`.
+    Последние две добавлены в A3 (ADMIN_PHASE_ACTION_PLAN) как словари разведения **форма-сейчас /
+    поведение-потом** (livestock health-certs и генетические маркеры): управляемая lookup-форма + CRUD
+    существуют уже сейчас, тогда как их **фильтрация** в маркетплейсе отложена (Фаза 2) — анти-переписывание
+    по IMPLEMENTATION_PLAYBOOK §5.
+    НЕ admin-управляемые датасеты (исключены из enum):
+      - `listing-types`  → фиксированный DB CHECK-enum на `listings.listing_type`
+                           ('sale','breeding','show','adoption','stud_service'); смена схемы/ADR, не CRUD.
+      - `animal-statuses`→ фиксированные DB CHECK lifecycle-enum на `listings.status` / `animals`; то же.
+      - `traits` / `temperament_tags` / `health_flags` → soft-теги свободным текстом/JSONB, не управляемые
+                           lookup'ы; lookup-таблицу можно добавить аддитивно в Фазе 2 без переписывания.
+
+    ПОЧЕМУ: species/breeds/cities/health_certifications/genetic_markers — это INT-ключевые управляемые
+    lookup в схеме (= код `DATASETS`); контракт не должен ни перечислять датасеты без backing-таблицы
+    (404/дрейф хендлеров), ни опускать уже существующие (дрейф код↔контракт).
+
+    ПОЧЕМУ ЛУЧШЕ: контракт совпадает с источником истины (схема + RBAC + код DATASETS), держит MVP-scope
+    честным (форма сейчас, поведение фильтрации gated), а реестр датасетов поглощает новые lookup'ы без
+    изменения формы CRUD/audit/локализации.
+
+    Также (round-9): `id` записи справочника — **integer** (SERIAL lookup-ключи по конвенции id-типов:
+    lookups=INT, entities=UUID), не UUID; list-ответы используют стандартный конверт
+    `{ items, meta: PageMeta }` (API_CONVENTIONS.md §5).
+
+    B0.6 (сделано, ADR-0011 §6): actor-bearing-ответы несут agent-badge `{ actorId, principalType }`
+    (общая схема `Actor`). AuditLogEntry/ModerationLogEntry/ModerationActionResponse отдают `actor`
+    (заменяя плоские `performedBy`/`moderatorId`; `performedByName` сворачивается в `actor.actorDisplayName`);
+    SystemSetting.updatedBy — это `Actor`. Query-параметр аудита `actorId` заменяет `performedBy`.
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /reference-data/{dataset}:
     get:
-      summary: Get all active entries in a reference dataset
+      summary: Получить все активные записи справочного датасета
       operationId: getReferenceData
+      description: >-
+        Публичное чтение (security opt-out по API_CONVENTIONS §3): справочные данные — это публичный
+        reference-контент (rbac-matrix.md "Reference data = R/R/CRUD" + список публичных эндпоинтов §3).
+        PUBLIC-чтения возвращают разрешённое `name` (Accept-Language); аутентифицированное чтение
+        ADMIN/редактора возвращает `nameLocalized` (§6). `includeInactive=true` учитывается только для ADMIN.
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
         - in: query
           name: includeInactive
-          schema:
-            type: boolean
-            default: false
-          description: Include inactive/deactivated entries
+          schema: { type: boolean, default: false }
+          description: Включать неактивные/деактивированные записи
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Элементов на странице
         - in: query
           name: search
-          schema:
-            type: string
-            maxLength: 100
-          description: Search term for filtering (name or code)
+          schema: { type: string, maxLength: 100 }
+          description: Поисковый запрос для фильтрации (имя или код)
       responses:
         '200':
-          description: Paginated list of reference data entries
+          description: Постраничный список записей справочника
           content:
             application/json:
               schema:
@@ -56,273 +89,220 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ReferenceDataEntry'
-                  total:
-                    type: integer
-                    description: Total number of entries
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '400':
-          description: Bad request (invalid dataset)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+                    items: { $ref: '#/components/schemas/ReferenceDataEntry' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
-      summary: Create new reference data entry
+      summary: Создать новую запись справочника
       operationId: createReferenceData
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
-      security:
-        - bearerAuth: []
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ReferenceDataCreateRequest'
+            schema: { $ref: '#/components/schemas/ReferenceDataCreateRequest' }
       responses:
         '201':
-          description: Reference data entry created successfully
+          description: Запись справочника успешно создана
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (validation error or duplicate)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/new:
     get:
-      summary: Get form/template for creating new reference data entry
+      summary: Получить форму/шаблон для создания записи справочника
       operationId: getReferenceDataForm
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
-      security:
-        - bearerAuth: []
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
       responses:
         '200':
-          description: Form template for creating reference data entry
+          description: Шаблон формы для создания записи справочника
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataForm'
-        '400':
-          description: Bad request (invalid dataset)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataForm' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/{id}:
     get:
-      summary: Get specific reference data entry by ID
+      summary: Получить конкретную запись справочника по ID
       operationId: getReferenceDataById
+      description: >-
+        Публичное чтение (security opt-out по API_CONVENTIONS §3): справочные данные — публичный контент
+        (rbac-matrix.md "Reference data = R/R/CRUD"). PUBLIC-чтения возвращают разрешённое `name`
+        (Accept-Language); аутентифицированное чтение ADMIN/редактора возвращает `nameLocalized` (§6).
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: ID записи справочника (integer SERIAL; lookups=INT по конвенции id-типов)
       responses:
         '200':
-          description: Reference data entry details
+          description: Детали записи справочника
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор для отправки в If-Match на PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
-      summary: Update reference data entry
+      summary: Обновить запись справочника
       operationId: updateReferenceData
+      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: ID записи справочника (integer SERIAL; lookups=INT по конвенции id-типов)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ReferenceDataUpdateRequest'
+            schema: { $ref: '#/components/schemas/ReferenceDataUpdateRequest' }
       responses:
         '200':
-          description: Reference data entry updated successfully
+          description: Запись справочника успешно обновлена
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/{id}/toggle-active:
     patch:
-      summary: Activate or deactivate reference data entry
+      summary: Активировать или деактивировать запись справочника
       operationId: toggleReferenceDataActive
+      description: Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10) вместо If-Match.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
-          description: Reference dataset name
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: Имя справочного датасета
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: ID записи справочника (integer SERIAL; lookups=INT по конвенции id-типов)
       responses:
         '200':
-          description: Reference data entry activation status toggled successfully
+          description: Статус активности записи справочника успешно переключён
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (invalid operation)
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/queue:
     get:
-      summary: Get pending listings for moderation
+      summary: '[SUPERSEDED] Очередь модерации — использовать moderation-api'
       operationId: getModerationQueue
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Модерация принадлежит **moderation-api.yaml**, где
+        живёт единый словарь решений (APPROVED / REJECTED / CHANGES_REQUESTED), claim/lock, SLA и
+        модель actor-as-principal. Этот блок модерации в admin-api оставлен лишь как deprecated-
+        указатель, чтобы не было второго расходящегося контракта модерации (DIV-2/3).
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
-          name: listingType
-          schema:
-            type: string
-            enum: [sale, breeding, show, adoption, stud_service]
-          description: Filter by listing type
+          name: listing_type
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
+          description: Фильтр по типу объявления
         - in: query
-          name: species
-          schema:
-            type: string
-            format: uuid
-          description: Filter by species
+          name: species_id
+          schema: { type: integer }
+          description: Фильтр по виду (INT-справочник)
         - in: query
-          name: breed
-          schema:
-            type: string
-            format: uuid
-          description: Filter by breed
+          name: breed_id
+          schema: { type: integer }
+          description: Фильтр по породе (INT-справочник)
         - in: query
-          name: minPrice
-          schema:
-            type: integer
-          description: Minimum price in cents
+          name: price_min
+          schema: { type: integer }
+          description: Минимальная цена в минорных единицах
         - in: query
-          name: maxPrice
-          schema:
-            type: integer
-          description: Maximum price in cents
+          name: price_max
+          schema: { type: integer }
+          description: Максимальная цена в минорных единицах
         - in: query
-          name: location
-          schema:
-            type: string
-            format: uuid
-          description: Filter by city/region
+          name: city_id
+          schema: { type: integer }
+          description: Фильтр по городу/региону (INT-справочник)
         - in: query
-          name: radiusKm
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-          description: Search radius in kilometers from location
+          name: radius_km
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: Радиус поиска в километрах от локации
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Элементов на странице
         - in: query
-          name: sortBy
-          schema:
-            type: string
-            enum: [createdAt, price, location]
-            default: createdAt
-          description: Sort field
-        - in: query
-          name: sortOrder
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-          description: Sort order
+          name: sort
+          schema: { type: string, default: 'created_at:desc' }
+          description: 'Сортировка (§12): <field>:<asc|desc>, напр. created_at:desc | price_cents:asc'
       responses:
         '200':
-          description: Paginated list of pending listings for moderation
+          description: Постраничный список объявлений на модерации
           content:
             application/json:
               schema:
@@ -330,248 +310,209 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ModerationQueueItem'
-                  total:
-                    type: integer
-                    description: Total number of pending listings
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+                    items: { $ref: '#/components/schemas/ModerationQueueItem' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
-      summary: Get listing details for moderation review
+      summary: '[SUPERSEDED] Детали объявления для модерации — использовать moderation-api'
       operationId: getListingForModeration
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** Модерация принадлежит moderation-api.yaml (единый словарь решений + actor-модель). Оставлено лишь как deprecated-указатель.'
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Listing ID
-      security:
-        - bearerAuth: []
+          schema: { type: string, format: uuid }
+          description: ID объявления
       responses:
         '200':
-          description: Listing details for moderation
+          description: Детали объявления для модерации
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationListingDetails'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+              schema: { $ref: '#/components/schemas/ModerationListingDetails' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
-      summary: Perform moderation action on listing (approve/reject/flag)
+      summary: '[SUPERSEDED] Действие модерации — использовать moderation-api'
       operationId: performModerationAction
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Канонический эндпоинт действия модерации живёт в
+        **moderation-api.yaml**; единый словарь решений — APPROVED / REJECTED / CHANGES_REQUESTED
+        (устаревший глагол FLAG выведен из обращения). Оставлено лишь как deprecated-указатель.
+        Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10).
+      x-required-roles: [MODERATOR, ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ModerationActionRequest'
+            schema: { $ref: '#/components/schemas/ModerationActionRequest' }
       responses:
         '200':
-          description: Moderation action performed successfully
+          description: Действие модерации успешно выполнено
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationActionResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+              schema: { $ref: '#/components/schemas/ModerationActionResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/log/{listing_id}:
     get:
-      summary: Get moderation history for a listing
+      summary: '[SUPERSEDED] История модерации — использовать moderation-api'
       operationId: getModerationLog
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** История модерации принадлежит moderation-api.yaml. Оставлено лишь как deprecated-указатель.'
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: listing_id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Listing ID
-      security:
-        - bearerAuth: []
+          schema: { type: string, format: uuid }
+          description: ID объявления
       responses:
         '200':
-          description: Moderation history for listing
+          description: История модерации объявления
           content:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ModerationLogEntry'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+                items: { $ref: '#/components/schemas/ModerationLogEntry' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/ban-user:
     post:
-      summary: Ban user with reason and duration
+      summary: '[SUPERSEDED] Бан пользователя — использовать moderation-api'
       operationId: banUser
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: '**SUPERSEDED — не реализовывать.** Бан пользователя как действие модерации принадлежит moderation-api.yaml (единый словарь решений + actor-модель). Оставлено лишь как deprecated-указатель.'
+      x-required-roles: [ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BanUserRequest'
+            schema: { $ref: '#/components/schemas/BanUserRequest' }
       responses:
         '200':
-          description: User banned successfully
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+          description: Пользователь успешно забанен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BanUserResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /system/settings:
     get:
-      summary: Get current system settings
+      summary: Получить текущие системные настройки
       operationId: getSystemSettings
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       responses:
         '200':
-          description: System settings retrieved successfully
+          description: Системные настройки успешно получены
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties:
                   $ref: '#/components/schemas/SystemSetting'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /system/settings/{key}:
     patch:
-      summary: Update system setting
+      summary: Обновить системную настройку
       operationId: updateSystemSetting
-      security:
-        - bearerAuth: []
+      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: key
           required: true
-          schema:
-            type: string
-            description: Setting key to update
+          schema: { type: string }
+          description: Ключ настройки для обновления
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего чтения настройки
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SystemSettingUpdateRequest'
+            schema: { $ref: '#/components/schemas/SystemSettingUpdateRequest' }
       responses:
         '200':
-          description: System setting updated successfully
+          description: Системная настройка успешно обновлена
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SystemSetting'
-        '400':
-          description: Bad request (validation error or invalid key)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+              schema: { $ref: '#/components/schemas/SystemSetting' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /audit/log:
     get:
-      summary: Get audit trail entries
+      summary: Получить записи аудит-журнала
       operationId: getAuditLog
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       parameters:
         - in: query
           name: entityType
-          schema:
-            type: string
-            enum: [listing, user, organization, reference-data, moderation-action]
-          description: Filter by entity type
+          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action] }
+          description: Фильтр по типу сущности
         - in: query
           name: entityId
-          schema:
-            type: string
-            format: uuid
-          description: Filter by entity ID
+          schema: { type: string, format: uuid }
+          description: Фильтр по ID сущности
         - in: query
           name: actionType
-          schema:
-            type: string
-            enum: [created, updated, deleted, approved, rejected, banned, role-changed]
-          description: Filter by action type
+          schema: { type: string, enum: [created, updated, deleted, approved, rejected, banned, role-changed] }
+          description: Фильтр по типу действия
         - in: query
-          name: performedBy
-          schema:
-            type: string
-            format: uuid
-          description: Filter by user who performed the action
+          name: actorId
+          schema: { type: string, format: uuid }
+          description: Фильтр по действующему принципалу (users.id), выполнившему действие (был performedBy)
         - in: query
           name: startDate
-          schema:
-            type: string
-            format: date
-          description: Start date for filtering (inclusive)
+          schema: { type: string, format: date }
+          description: Начальная дата фильтра (включительно)
         - in: query
           name: endDate
-          schema:
-            type: string
-            format: date
-          description: End date for filtering (inclusive)
+          schema: { type: string, format: date }
+          description: Конечная дата фильтра (включительно)
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 50
-          description: Items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          description: Элементов на странице
         - in: query
-          name: sortBy
-          schema:
-            type: string
-            enum: [createdAt, entityType, actionType]
-            default: createdAt
-          description: Sort field
-        - in: query
-          name: sortOrder
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-          description: Sort order
+          name: sort
+          schema: { type: string, default: 'created_at:desc' }
+          description: 'Сортировка (§12): <field>:<asc|desc>, напр. created_at:desc'
       responses:
         '200':
-          description: Paginated audit trail entries
+          description: Постраничные записи аудит-журнала
           content:
             application/json:
               schema:
@@ -579,63 +520,40 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/AuditLogEntry'
-                  total:
-                    type: integer
-                    description: Total number of audit log entries
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+                    items: { $ref: '#/components/schemas/AuditLogEntry' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /users/roles:
     get:
-      summary: Get users with their roles
+      summary: Получить пользователей с их ролями
       operationId: getUsersWithRoles
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       parameters:
         - in: query
           name: role
-          schema:
-            type: string
-            enum: [USER, MODERATOR, ADMIN]
-          description: Filter by role
+          schema: { type: string, enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER] }
+          description: Фильтр по роли
         - in: query
           name: isActive
-          schema:
-            type: boolean
-          description: Filter by active status
+          schema: { type: boolean }
+          description: Фильтр по активности
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Элементов на странице
         - in: query
           name: search
-          schema:
-            type: string
-            maxLength: 100
-          description: Search term for filtering (full name or email)
+          schema: { type: string, maxLength: 100 }
+          description: Поисковый запрос для фильтрации (полное имя или email)
       responses:
         '200':
-          description: Paginated list of users with roles
+          description: Постраничный список пользователей с ролями
           content:
             application/json:
               schema:
@@ -643,56 +561,57 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/UserRoleInfo'
-                  total:
-                    type: integer
-                    description: Total number of users matching filters
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+                    items: { $ref: '#/components/schemas/UserRoleInfo' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /users/{id}/role:
     patch:
-      summary: Change user role
+      summary: '[SUPERSEDED] Смена роли — использовать auth-api PATCH /admin/users/{userId}/role'
       operationId: changeUserRole
+      deprecated: true
+      description: >-
+        **SUPERSEDED — не реализовывать.** Канонический, *реализованный* эндпоинт смены роли —
+        `PATCH /admin/users/{userId}/role` (`adminSetUserRole`) в **auth-api.yaml**, владеющий
+        процессом повышения роли (7-ролевой enum, аудит, снимок actor-as-principal). Этот дубль в
+        admin-api оставлен лишь как deprecated-указатель, чтобы не было двух расходящихся контрактов
+        одной операции (DIV-2/3). Оптимистичная конкуренция (§10) — требует If-Match с ETag из
+        предыдущего GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: User ID
-      security:
-        - bearerAuth: []
+          schema: { type: string, format: uuid }
+          description: ID пользователя
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего чтения пользователя
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ChangeUserRoleRequest'
+            schema: { $ref: '#/components/schemas/ChangeUserRoleRequest' }
       responses:
         '200':
-          description: User role changed successfully
+          description: Роль пользователя успешно изменена
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserRoleInfo'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
-        '404':
-          description: User not found
+              schema: { $ref: '#/components/schemas/UserRoleInfo' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -700,106 +619,161 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    Actor:
+      type: object
+      description: >-
+        Actor-badge: действующий принципал в любом actor-bearing-ответе (ADR-0011 §6). principalType — это
+        снапшот users.principal_type (HUMAN|AGENT) на момент действия; он позволяет потребителю отличить
+        решение человека от решения агента без второго запроса. DEFAULT HUMAN в MVP (AGENT не активен до гейта).
+      required: [actorId, principalType]
+      properties:
+        actorId:
+          type: string
+          format: uuid
+          description: Действующий принципал (users.id).
+        principalType:
+          type: string
+          enum: [HUMAN, AGENT]
+          description: Снапшот типа действующего принципала на момент действия (ADR-0011 §1).
+        actorDisplayName:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Опциональная человекочитаемая метка актёра (удобство операторского UI).
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    # round-9 / B0 / A2: выровнено по database_schema.sql (миграция 0018). Lookup-таблицы
+    # (species/breeds/cities) локализуют имя через name_localized JSONB {ru,en} — единый
+    # LocalizedString, не плоские name_ru/name_en. По API_CONVENTIONS §6 форма чтения зависит от
+    # контекста: чтение ADMIN/редактора возвращает полный `nameLocalized` (обе локали); PUBLIC-чтение
+    # возвращает разрешённую строку `name` для Accept-Language (фолбэк на en). Объявлены оба поля;
+    # заполняется ровно одно, подходящее по контексту. `code` присутствует только у species/breeds
+    # (UNIQUE: species глобально, breeds по виду); у cities кода нет. `speciesId` ОБЯЗАТЕЛЕН для
+    # breeds (FK → species). `sortOrder` — порядок отображения (миграция 0018). Нет колонок
+    # description/version/deactivated_at; soft-delete = isActive boolean.
     ReferenceDataEntry:
       type: object
       required:
         - id
-        - code
-        - name
         - isActive
+        - sortOrder
         - createdAt
         - updatedAt
       properties:
         id:
-          type: string
-          format: uuid
-          description: Unique identifier
+          type: integer
+          minimum: 1
+          description: Уникальный идентификатор (SERIAL; lookups=INT по конвенции id-типов)
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset (e.g., 'dog', 'labrador')
+          nullable: true
+          description: Уникальный код в датасете (только species/breeds; null для cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: ID родительского вида (только breeds; иначе null)
         name:
           type: string
-          maxLength: 100
-          description: 'Display name (localized for MVP: Russian)'
-        name_en:
-          type: string
-          maxLength: 100
           nullable: true
-          description: English name (for future phases)
-        description:
-          type: string
-          maxLength: 500
+          description: >-
+            Разрешённое отображаемое имя для запрошенного Accept-Language (фолбэк на en). Заполняется на
+            PUBLIC-чтениях (API_CONVENTIONS §6); null на ADMIN-чтениях (используйте nameLocalized).
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           nullable: true
-          description: Detailed description (optional)
+          description: >-
+            Отображаемое имя как LocalizedString {en, ru} (обе локали). Заполняется на чтениях
+            ADMIN/редактора; null на PUBLIC-чтениях (используйте разрешённое `name`).
+        sortOrder:
+          type: integer
+          description: Порядок отображения внутри датасета (по возрастанию; по умолчанию 0)
+        market:
+          type: string
+          enum: [pet, livestock]
+          nullable: true
+          description: Рынок вида (только species; ADR-0002)
         isActive:
           type: boolean
-          description: Whether entry is active (can be deactivated without deletion)
+          description: Активность (деактивация через isActive=false, не удаление)
         createdAt:
           type: string
           format: date-time
-          description: Creation timestamp
+          description: Метка создания
         updatedAt:
           type: string
           format: date-time
-          description: Last update timestamp
-        deactivatedAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: When entry was deactivated (null if active)
-        version:
-          type: integer
-          default: 1
-          description: Version number for optimistic locking
+          description: Метка последнего обновления
     ReferenceDataCreateRequest:
       type: object
       required:
-        - code
-        - name
+        - nameLocalized
       properties:
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset
-        name:
+          description: Уникальный код (обязателен для species/breeds; отклоняется для cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          description: ID родительского вида (обязателен для breeds; отклоняется для species/cities)
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Отображаемое имя (LocalizedString {en, ru})
+        market:
           type: string
-          maxLength: 100
-          description: Display name (Russian)
-        name_en:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
-          type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Рынок (только species; по умолчанию 'pet' при отсутствии)
+        sortOrder:
+          type: integer
+          default: 0
+          description: Порядок отображения внутри датасета (по возрастанию)
         isActive:
           type: boolean
           default: true
-          description: Whether entry is active upon creation
+          description: Активность при создании
     ReferenceDataUpdateRequest:
       type: object
+      description: >-
+        Частичное обновление. `code`/`speciesId` неизменяемы (идентичность lookup-строки); меняться
+        могут только отображаемое имя, market (species) и isActive.
       properties:
-        name:
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Отображаемое имя (LocalizedString {en, ru})
+        market:
           type: string
-          maxLength: 100
-          description: Display name (Russian)
-        name_en:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
-          type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Рынок (только species)
+        sortOrder:
+          type: integer
+          description: Порядок отображения внутри датасета (по возрастанию)
         isActive:
           type: boolean
-          description: Whether entry is active
+          description: Активность
     ReferenceDataForm:
       type: object
       properties:
@@ -813,7 +787,7 @@ components:
                 enum: [text, textarea, number, boolean, select, date, datetime]
               label:
                 type: string
-                description: Field label
+                description: Подпись поля
               required:
                 type: boolean
                 default: false
@@ -844,7 +818,7 @@ components:
         - animalId
         - sellerId
         - listingType
-        - title
+        - titleLocalized
         - createdAt
         - speciesId
         - breedId
@@ -852,125 +826,125 @@ components:
         id:
           type: string
           format: uuid
-          description: Unique identifier for queue entry
+          description: Уникальный идентификатор записи очереди
         listingId:
           type: string
           format: uuid
-          description: Listing ID
+          description: ID объявления
         animalId:
           type: string
           format: uuid
-          description: Animal ID associated with listing
+          description: ID животного, связанного с объявлением
         sellerId:
           type: string
           format: uuid
-          description: User ID of listing creator
+          description: ID пользователя-создателя объявления
         listingType:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
-          description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+          description: Тип объявления
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Заголовок объявления (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Описание объявления (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (null for non-price listings)
+          description: Цена в минорных единицах (null для беспрайсовых объявлений)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Код валюты (ISO 4217)
         quantity:
           type: integer
           default: 1
-          description: Quantity
+          description: Количество
         locationPoint:
           type: object
-          description: GeoPoint for location-based search
+          description: GeoPoint для гео-поиска
           nullable: true
         searchRadiusM:
           type: integer
           nullable: true
-          description: Search radius in meters
+          description: Радиус поиска в метрах
         speciesId:
-          type: string
-          format: uuid
-          description: Animal species reference
+          type: integer
+          description: Ссылка на вид животного (INT-справочник)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Animal breed reference (null if custom/other)
+          description: Ссылка на породу животного (INT-справочник; null если кастомная/иная)
         breedText:
           type: string
           maxLength: 100
           nullable: true
-          description: Custom breed text if breedId is null
+          description: Текст кастомной породы, если breedId null
         nickname:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal nickname/display name
+          description: Кличка/отображаемое имя животного
         sex:
           type: string
           enum: [Male, Female]
-          description: Animal sex
+          description: Пол животного
         dateOfBirth:
           type: string
           format: date
-          description: Animal date of birth
+          description: Дата рождения животного
         colorCoat:
           type: string
           maxLength: 100
           nullable: true
-          description: Animal color/coat pattern
+          description: Окрас/тип шерсти животного
         microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal microchip ID
+          description: ID микрочипа животного
         tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal tattoo/brand ID (for livestock)
+          description: ID тату/тавро животного (для скота)
         isActive:
           type: boolean
-          description: Listing active status
+          description: Активность объявления
         createdAt:
           type: string
           format: date-time
-          description: Listing creation timestamp
+          description: Метка создания объявления
         updatedAt:
           type: string
           format: date-time
-          description: Listing last update timestamp
+          description: Метка последнего обновления объявления
         expiresAt:
           type: string
           format: date-time
           nullable: true
-          description: Listing expiration timestamp
+          description: Метка истечения объявления
         photos:
           type: array
           items:
             type: string
             format: uri
-          description: Listing photo URLs
+          description: URL фотографий объявления
           default: []
         moderationNotes:
           type: string
           maxLength: 500
           nullable: true
-          description: Notes from previous moderation attempts
+          description: Заметки от предыдущих попыток модерации
         moderationCount:
           type: integer
           default: 0
-          description: Number of times this listing has been moderated
+          description: Сколько раз объявление модерировалось
     ModerationListingDetails:
       type: object
       required:
@@ -979,17 +953,17 @@ components:
         - animal
         - seller
         - listingType
-        - title
+        - titleLocalized
         - createdAt
       properties:
         id:
           type: string
           format: uuid
-          description: Moderation queue entry ID
+          description: ID записи очереди модерации
         listingId:
           type: string
           format: uuid
-          description: Listing ID
+          description: ID объявления
         animal:
           $ref: '#/components/schemas/AnimalSummary'
         seller:
@@ -997,63 +971,64 @@ components:
         listingType:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
-          description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+          description: Тип объявления
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Заголовок объявления (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Описание объявления (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents
+          description: Цена в минорных единицах
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Код валюты (ISO 4217)
         quantity:
           type: integer
           default: 1
-          description: Quantity
+          description: Количество
         locationPoint:
           type: object
-          description: GeoPoint for location-based search
+          description: GeoPoint для гео-поиска
           nullable: true
         searchRadiusM:
           type: integer
           nullable: true
-          description: Search radius in meters
+          description: Радиус поиска в метрах
         isActive:
           type: boolean
-          description: Listing active status
+          description: Активность объявления
         createdAt:
           type: string
           format: date-time
-          description: Listing creation timestamp
+          description: Метка создания объявления
         updatedAt:
           type: string
           format: date-time
-          description: Listing last update timestamp
+          description: Метка последнего обновления объявления
         expiresAt:
           type: string
           format: date-time
           nullable: true
-          description: Listing expiration timestamp
+          description: Метка истечения объявления
         photos:
           type: array
           items:
             type: string
             format: uri
-          description: Listing photo URLs
+          description: URL фотографий объявления
           default: []
         moderationHistory:
           type: array
-          items:
-            $ref: '#/components/schemas/ModerationLogEntry'
-          description: Previous moderation actions on this listing
+          items: { $ref: '#/components/schemas/ModerationLogEntry' }
+          description: Предыдущие действия модерации по этому объявлению
           default: []
     AnimalSummary:
       type: object
@@ -1067,67 +1042,65 @@ components:
         id:
           type: string
           format: uuid
-          description: Animal ID
+          description: ID животного
         speciesId:
-          type: string
-          format: uuid
-          description: Species reference
+          type: integer
+          description: Ссылка на вид (INT-справочник)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Breed reference (null if custom/other)
+          description: Ссылка на породу (INT-справочник; null если кастомная/иная)
         breedText:
           type: string
           maxLength: 100
           nullable: true
-          description: Custom breed text if breedId is null
+          description: Текст кастомной породы, если breedId null
         nickname:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal nickname/display name
+          description: Кличка/отображаемое имя животного
         sex:
           type: string
           enum: [Male, Female]
-          description: Animal sex
+          description: Пол животного
         dateOfBirth:
           type: string
           format: date
-          description: Animal date of birth
+          description: Дата рождения животного
         colorCoat:
           type: string
           maxLength: 100
           nullable: true
-          description: Animal color/coat pattern
+          description: Окрас/тип шерсти животного
         microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal microchip ID
+          description: ID микрочипа животного
         tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Animal tattoo/brand ID (for livestock)
+          description: ID тату/тавро животного (для скота)
         isActive:
           type: boolean
-          description: Animal active status
+          description: Активность животного
         ownedSince:
           type: string
           format: date
           nullable: true
-          description: Date when current owner acquired the animal
+          description: Дата приобретения животного текущим владельцем
         motherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to mother for pedigree
+          description: Ссылка на мать для родословной
         fatherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to father for pedigree
+          description: Ссылка на отца для родословной
         healthRecords:
           type: array
           items:
@@ -1135,18 +1108,18 @@ components:
             properties:
               type:
                 type: string
-                description: Type of health record
+                description: Тип записи здоровья
               detail:
                 type: string
-                description: Detail of health record
+                description: Детали записи здоровья
               date:
                 type: string
                 format: date
-                description: Date of health event
+                description: Дата события здоровья
               provider:
                 type: string
-                description: Provider/veterinary clinic
-          description: Animal health records
+                description: Поставщик/ветклиника
+          description: Записи здоровья животного
           default: []
         reproductiveData:
           type: array
@@ -1155,17 +1128,17 @@ components:
             properties:
               event:
                 type: string
-                description: Event type (heat_start, mating, etc.)
+                description: Тип события (heat_start, mating и т.п.)
               date:
                 type: string
                 format: date
-                description: Date of event
+                description: Дата события
               partnerId:
                 type: string
                 format: uuid
                 nullable: true
-                description: Partner animal ID (if applicable)
-          description: Animal reproductive data (for females)
+                description: ID животного-партнёра (если применимо)
+          description: Репродуктивные данные животного (для самок)
           default: []
     UserSummary:
       type: object
@@ -1178,91 +1151,91 @@ components:
         id:
           type: string
           format: uuid
-          description: User ID
+          description: ID пользователя
         fullName:
           type: string
           maxLength: 100
-          description: User's full name
+          description: Полное имя пользователя
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Ссылка на город для гео-поиска (INT-справочник)
         avatarUrl:
           type: string
           format: uri
           nullable: true
           maxLength: 500
-          description: URL to avatar in object storage
+          description: URL аватара в объектном хранилище
         email:
           type: string
           format: email
           nullable: true
           maxLength: 255
-          description: Email address for notifications
+          description: Email для уведомлений
         emailVerified:
           type: boolean
           default: false
-          description: True if email confirmed via link
+          description: True, если email подтверждён по ссылке
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
-          description: User role
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Роль пользователя
         isActive:
           type: boolean
-          description: True = can login; False = deactivated
+          description: True = может логиниться; False = деактивирован
         createdAt:
           type: string
           format: date-time
-          description: Registration timestamp
+          description: Метка регистрации
         updatedAt:
           type: string
           format: date-time
-          description: Last profile update
+          description: Последнее обновление профиля
         lastLoginAt:
           type: string
           format: date-time
           nullable: true
-          description: Last login timestamp
+          description: Метка последнего входа
         deactivatedAt:
           type: string
           format: date-time
           nullable: true
-          description: When user chose to deactivate (null if active)
+          description: Когда пользователь решил деактивироваться (null если активен)
     ModerationLogEntry:
       type: object
       required:
         - id
         - listingId
-        - moderatorId
+        - actor
         - action
         - createdAt
       properties:
         id:
           type: string
           format: uuid
-          description: Unique identifier
+          description: Уникальный идентификатор
         listingId:
           type: string
           format: uuid
-          description: Listing ID
-        moderatorId:
-          type: string
-          format: uuid
-          description: Moderator user ID
+          description: ID объявления
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Действующий принципал как agent-badge {actorId, principalType} (ADR-0011 §6); заменяет прежний
+            плоский moderatorId. principalType — снапшот на момент записи (moderation_decisions.actor_principal_type).
         action:
           type: string
           enum: [approved, rejected, flagged]
-          description: Moderation action taken
+          description: Выполненное действие модерации
         reason:
           type: string
           maxLength: 500
           nullable: true
-          description: Reason for rejection (required for rejected action)
+          description: Причина отклонения (обязательна для rejected)
         createdAt:
           type: string
           format: date-time
-          description: Timestamp of moderation action
+          description: Метка времени действия модерации
     ModerationActionRequest:
       type: object
       required:
@@ -1272,48 +1245,49 @@ components:
         listingId:
           type: string
           format: uuid
-          description: Listing ID to moderate
+          description: ID объявления для модерации
         action:
           type: string
           enum: [approve, reject, flag]
-          description: Moderation action to perform
+          description: Действие модерации для выполнения
         reason:
           type: string
           maxLength: 500
-          description: Reason for rejection (required when action is 'reject')
+          description: Причина отклонения (обязательна при action 'reject')
     ModerationActionResponse:
       type: object
       required:
         - listingId
         - action
-        - moderatorId
+        - actor
         - processedAt
       properties:
         listingId:
           type: string
           format: uuid
-          description: Listing ID that was moderated
+          description: ID объявления, прошедшего модерацию
         action:
           type: string
           enum: [approved, rejected, flagged]
-          description: Moderation action that was performed
+          description: Выполненное действие модерации
         reason:
           type: string
           maxLength: 500
           nullable: true
-          description: Reason for rejection (if applicable)
-        moderatorId:
-          type: string
-          format: uuid
-          description: Moderator user ID who performed the action
+          description: Причина отклонения (если применимо)
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Действующий принципал как agent-badge {actorId, principalType} (ADR-0011 §6); заменяет прежний
+            плоский moderatorId. principalType — снапшот на момент записи (moderation_decisions.actor_principal_type).
         processedAt:
           type: string
           format: date-time
-          description: Timestamp when action was processed
+          description: Метка времени обработки действия
         listingStatus:
           type: string
           enum: [draft, pending, published, rejected]
-          description: Resulting listing status after moderation
+          description: Результирующий статус объявления после модерации
     BanUserRequest:
       type: object
       required:
@@ -1324,20 +1298,20 @@ components:
         userId:
           type: string
           format: uuid
-          description: User ID to ban
+          description: ID пользователя для бана
         reason:
           type: string
           maxLength: 500
-          description: Reason for banning
+          description: Причина бана
         durationDays:
           type: integer
           minimum: 1
           maximum: 365
-          description: Ban duration in days (null for permanent ban)
+          description: Длительность бана в днях (null для постоянного бана)
         isPermanent:
           type: boolean
           default: false
-          description: Whether ban is permanent (overrides durationDays if true)
+          description: Постоянный ли бан (перекрывает durationDays при true)
     BanUserResponse:
       type: object
       required:
@@ -1348,23 +1322,23 @@ components:
         userId:
           type: string
           format: uuid
-          description: User ID that was banned
+          description: ID забаненного пользователя
         reason:
           type: string
           maxLength: 500
-          description: Reason for banning
+          description: Причина бана
         bannedAt:
           type: string
           format: date-time
-          description: Timestamp when ban was applied
+          description: Метка времени применения бана
         expiresAt:
           type: string
           format: date-time
           nullable: true
-          description: When ban expires (null for permanent ban)
+          description: Когда бан истекает (null для постоянного)
         isPermanent:
           type: boolean
-          description: Whether ban is permanent
+          description: Постоянный ли бан
     SystemSetting:
       type: object
       required:
@@ -1374,24 +1348,25 @@ components:
       properties:
         key:
           type: string
-          description: Setting key
+          description: Ключ настройки
         value:
           type: string
-          description: Setting value (JSON string for complex values)
+          description: Значение настройки (JSON-строка для сложных значений)
         description:
           type: string
           maxLength: 500
           nullable: true
-          description: Setting description
+          description: Описание настройки
         updatedAt:
           type: string
           format: date-time
-          description: Last update timestamp
+          description: Метка последнего обновления
         updatedBy:
-          type: string
-          format: uuid
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
           nullable: true
-          description: User ID who last updated the setting
+          description: >-
+            Действующий принципал, последним обновивший настройку, как agent-badge {actorId, principalType}
+            (ADR-0011 §6); заменяет прежний плоский updatedBy uuid. Null, если никогда не обновлялась.
     SystemSettingUpdateRequest:
       type: object
       required:
@@ -1399,12 +1374,12 @@ components:
       properties:
         value:
           type: string
-          description: New setting value
+          description: Новое значение настройки
         description:
           type: string
           maxLength: 500
           nullable: true
-          description: Updated setting description
+          description: Обновлённое описание настройки
     AuditLogEntry:
       type: object
       required:
@@ -1412,54 +1387,51 @@ components:
         - entityType
         - entityId
         - actionType
-        - performedBy
+        - actor
         - createdAt
       properties:
         id:
           type: string
           format: uuid
-          description: Unique identifier
+          description: Уникальный идентификатор
         entityType:
           type: string
           enum: [listing, user, organization, reference-data, moderation-action]
-          description: Type of entity that was acted upon
+          description: Тип сущности, над которой выполнено действие
         entityId:
           type: string
           format: uuid
           nullable: true
-          description: ID of entity that was acted upon (null for system-wide actions)
+          description: ID сущности (null для системных действий)
         actionType:
           type: string
           enum: [created, updated, deleted, approved, rejected, banned, role-changed, login, logout]
-          description: Type of action performed
-        performedBy:
-          type: string
-          format: uuid
-          description: User ID who performed the action
-        performedByName:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Name of user who performed the action (for display)
+          description: Тип выполненного действия
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Действующий принципал как agent-badge {actorId, principalType} (ADR-0011 §6); заменяет прежний
+            плоский performedBy uuid. principalType — снапшот на момент записи (audit_log.actor_principal_type);
+            отображаемое имя (прежний performedByName) несётся как actor.actorDisplayName.
         details:
           type: string
           maxLength: 1000
           nullable: true
-          description: Additional details about the action (JSON string)
+          description: Дополнительные детали действия (JSON-строка)
         ipAddress:
           type: string
           pattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
           nullable: true
-          description: IP address where action originated
+          description: IP-адрес, откуда инициировано действие
         userAgent:
           type: string
           maxLength: 500
           nullable: true
-          description: User agent string of client
+          description: User agent клиента
         createdAt:
           type: string
           format: date-time
-          description: Timestamp when action was logged
+          description: Метка времени логирования действия
     UserRoleInfo:
       type: object
       required:
@@ -1472,53 +1444,52 @@ components:
         id:
           type: string
           format: uuid
-          description: User ID
+          description: ID пользователя
         fullName:
           type: string
           maxLength: 100
-          description: User's full name
+          description: Полное имя пользователя
         email:
           type: string
           format: email
           nullable: true
           maxLength: 255
-          description: Email address for notifications
+          description: Email для уведомлений
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
-          description: User role
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Роль пользователя
         isActive:
           type: boolean
-          description: True = can login; False = deactivated
+          description: True = может логиниться; False = деактивирован
         createdAt:
           type: string
           format: date-time
-          description: Registration timestamp
+          description: Метка регистрации
         updatedAt:
           type: string
           format: date-time
-          description: Last profile update
+          description: Последнее обновление профиля
         lastLoginAt:
           type: string
           format: date-time
           nullable: true
-          description: Last login timestamp
+          description: Метка последнего входа
         deactivatedAt:
           type: string
           format: date-time
           nullable: true
-          description: When user chose to deactivate (null if active)
+          description: Когда пользователь решил деактивироваться (null если активен)
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Ссылка на город для гео-поиска (INT-справочник)
         avatarUrl:
           type: string
           format: uri
           nullable: true
           maxLength: 500
-          description: URL to avatar in object storage
+          description: URL аватара в объектном хранилище
     ChangeUserRoleRequest:
       type: object
       required:
@@ -1526,5 +1497,11 @@ components:
       properties:
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
-          description: New role for user
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
+          description: Новая роль для пользователя
+  responses:
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

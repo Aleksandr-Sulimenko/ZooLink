@@ -6,55 +6,145 @@ info:
     Pre-moderation workflow (ADR-0003) and user content reports.
     Moderators (or AI-agent principals per ADR-0006) review listings,
     record append-only decisions, and triage user-submitted reports.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), LocalizedString (§6),
+    If-Match/ETag on mutating PATCH (§10).
+    B0.6 (done, ADR-0011 §6): actor-bearing responses carry the `{ actorId, principalType }` agent-badge (the
+    shared `Actor` schema). ModerationDecision exposes `actor` (+ `actorRole` snapshot, `supersedesDecisionId`,
+    `isHumanOverride` for the human-override chain, ADR-0011 §2/§3); ContentReport.resolvedBy is an `Actor`.
+    B10 (spec 12 round-5 contract-shape; FORM now, behavior with the Moderation domain):
+    (1) claim/lock — ModerationQueueItem carries assignedTo/lockedAt/lockExpiresAt/lockState; POST
+    /moderation/queue/{listingId}/claim is an exclusive claim (409 ALREADY_CLAIMED) with DELETE to release;
+    (2) SLA — waitingSeconds + slaState {ON_TRACK,BREACHED,ESCALATED} + escalated/slaState queue filters;
+    escalation goes to ADMIN, never auto-decides;
+    (3) market filter + meta.counts group totals for queue tabs (ADR-0002);
+    (4) agent-transparency (Owner-decision #5): GET /listings/{id}/moderation-result returns the owner-facing
+    OwnerModerationResult carrying principalType / decidedByAgent so the SELLER sees "decided by AI";
+    (5) decision_templates — controlled dictionary (table, not enum) of canned notes for REJECT/CHANGES,
+    selectable by human and AGENT; GET /moderation/decision-templates. NEW decision_templates table is a
+    SCHEMA MIGRATION FLAGGED FOR BACKEND (not implemented in this contract).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /moderation/queue:
     get:
       summary: List listings awaiting moderation
       operationId: getModerationQueue
-      description: Returns listings with status PENDING_MODERATION, paginated.
+      description: >-
+        Returns listings with status PENDING_MODERATION, FIFO-ordered by moderation_enqueued_at ASC
+        (spec 12 round-5), paginated. Filterable by market (ADR-0002 hard split), SLA state, and the
+        escalated flag. `meta.counts` carries per-market and per-SLA-state group totals so the operator
+        UI can render tab badges without extra round-trips.
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
           name: market
-          schema:
-            type: string
-            enum: [pet, livestock]
-          description: Filter queue by market
+          schema: { type: string, enum: [pet, livestock] }
+          description: Filter queue by market (ADR-0002)
+        - in: query
+          name: slaState
+          schema: { type: string, enum: [ON_TRACK, BREACHED, ESCALATED] }
+          description: Filter by SLA state (spec 12 round-5)
+        - in: query
+          name: escalated
+          schema: { type: boolean }
+          description: >-
+            When true, return only items escalated to ADMIN on SLA timeout (slaState=ESCALATED).
+            Convenience filter equivalent to slaState=ESCALATED (spec 12 round-5).
+        - in: query
+          name: lockState
+          schema: { type: string, enum: [FREE, CLAIMED_BY_ME, CLAIMED_BY_OTHER, LOCK_EXPIRED] }
+          description: >-
+            Filter by claim/lock state relative to the calling principal (spec 12 round-5 claim/lock).
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
         - in: query
           name: limit
-          schema:
-            type: integer
-            default: 20
-            maximum: 100
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: Paginated queue items
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationQueuePage'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+              schema: { $ref: '#/components/schemas/ModerationQueuePage' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /moderation/queue/{listingId}/claim:
+    post:
+      summary: Claim (exclusively lock) a queue item for review
+      operationId: claimModerationItem
+      description: >-
+        Exclusive claim of a PENDING_MODERATION listing for review (spec 12 round-5 "no double moderation").
+        Sets assignedTo=callingPrincipal, lockedAt=now, lockExpiresAt=now+MOD_LOCK_TTL (default 15 min).
+        A claim is exclusive: while another principal holds a live lock the second claim is rejected with
+        409 ALREADY_CLAIMED. A lock auto-releases on expiry (lockExpiresAt < now) — an expired lock is
+        re-claimable by anyone (LOCK_EXPIRED state). Re-claiming an item you already hold is idempotent
+        (refreshes lockExpiresAt) and returns 200. An AGENT principal uses the identical contract
+        (ADR-0006, gated). State-transition endpoint: guard-based 409 (API_CONVENTIONS §10), not If-Match.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: listingId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Item claimed (or re-claim refreshed) by the calling principal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModerationLock' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: >-
+            Item already claimed by another principal with a live (non-expired) lock
+            (Problem.code = ALREADY_CLAIMED). The response carries the current lock holder via
+            Problem.errors[0] = { assignedTo: Actor, lockExpiresAt }.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+    delete:
+      summary: Release a claim you hold (unlock without deciding)
+      operationId: releaseModerationItem
+      description: >-
+        Releases the calling principal's claim on a listing (clears assignedTo/lockedAt/lockExpiresAt),
+        returning it to the FREE state without recording a decision. Only the holder (or ADMIN) may
+        release; releasing an item you do not hold → 409 NOT_LOCK_HOLDER. Idempotent on an already-free item.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: listingId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Lock released (or already free) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Caller is not the current lock holder (Problem.code = NOT_LOCK_HOLDER)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
       summary: Get a listing with linked details for review
       operationId: getModerationListing
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Full listing data for review (listing + animal + photos)
@@ -63,58 +153,63 @@ paths:
               schema:
                 type: object
                 description: Listing review payload (see listings-api.yaml Listing schema plus linked animal and photos)
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
       summary: Submit a moderation decision for a listing
       operationId: submitModerationAction
+      x-required-roles: [MODERATOR, ADMIN]
       description: >-
         Records an append-only moderation_decisions row and transitions the
-        listing. APPROVE -> status=ACTIVE/moderation_status=APPROVED;
-        REJECT -> status=DEACTIVATED/moderation_status=REJECTED;
-        REQUEST_CHANGES -> status=DRAFT/moderation_status=CHANGES_REQUESTED.
+        listing. APPROVE -> status=ACTIVE/moderationStatus=APPROVED;
+        REJECT -> status=DEACTIVATED/moderationStatus=REJECTED;
+        REQUEST_CHANGES -> status=DRAFT/moderationStatus=CHANGES_REQUESTED.
+        Lock contract (spec 12 round-5): the caller MUST hold a live claim on the listing
+        (assignedTo=caller, lockExpiresAt>now); acting on an item locked by another principal →
+        409 NOT_LOCK_HOLDER, acting on an item with no live lock → 409 ITEM_NOT_CLAIMED. A successful
+        decision releases the lock. `reason` is mandatory for REJECT/REQUEST_CHANGES (spec 12 round-5);
+        omitting it → 422. `templateCode` (optional) pre-fills/attaches a canned note (decision_templates).
+        Human-override (ADR-0011 §3): set supersedesDecisionId to reverse an earlier (typically AGENT)
+        decision on the same listing — the server writes a new append-only row with isHumanOverride=true
+        and actor.principalType=HUMAN (never mutates the superseded row).
+        State-transition endpoint: keeps guard-based 409 (API_CONVENTIONS §10) instead of If-Match.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ModerationActionRequest'
+            schema: { $ref: '#/components/schemas/ModerationActionRequest' }
       responses:
         '200':
           description: Decision recorded; listing transitioned
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationDecision'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          description: Listing already moderated (concurrent decision) or not in PENDING_MODERATION
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/ModerationDecision' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/decisions:
     get:
       summary: List moderation decisions (append-only audit)
       operationId: listModerationDecisions
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
           name: entity_type
-          schema:
-            type: string
-            enum: [LISTING, ANIMAL]
+          schema: { type: string, enum: [LISTING, ANIMAL] }
         - in: query
           name: entity_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: Decisions page
@@ -125,16 +220,16 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ModerationDecision'
-                  page:
-                    type: integer
-                  total:
-                    type: integer
+                    items: { $ref: '#/components/schemas/ModerationDecision' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/reasons:
     get:
       summary: List configurable moderation reason codes
       operationId: listModerationReasons
+      x-required-roles: [MODERATOR, ADMIN]
       responses:
         '200':
           description: Active reason codes
@@ -142,65 +237,146 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ModerationReason'
+                items: { $ref: '#/components/schemas/ModerationReason' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /moderation/decision-templates:
+    get:
+      summary: List canned decision-note templates (controlled dictionary)
+      operationId: listModerationDecisionTemplates
+      description: >-
+        Returns active decision_templates — reusable canned notes a moderator OR an AGENT principal
+        attaches to a REJECT / CHANGES_REQUESTED decision (spec 12 round-5). This is reference-data
+        (a controlled, Admin-extensible dictionary), NOT an enum: new templates are added as data rows
+        with no schema/contract change (phasing rule §5 — see decision below). An agent selects a template
+        by its stable `code`. Filterable by applicable decision and market.
+      x-required-roles: [MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: appliesToDecision
+          schema: { type: string, enum: [REJECTED, CHANGES_REQUESTED, ANY] }
+          description: Return only templates applicable to this decision type
+        - in: query
+          name: market
+          schema: { type: string, enum: [pet, livestock] }
+          description: Return only templates scoped to this market (or market-agnostic)
+      responses:
+        '200':
+          description: Active decision templates (both locales returned for the operator editor)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DecisionTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/moderation-result:
+    get:
+      summary: Owner-facing moderation result for a listing (agent-transparency, Owner-decision #5)
+      operationId: getOwnerModerationResult
+      description: >-
+        Returns the latest EFFECTIVE moderation result for a listing as seen by its OWNER/seller
+        (Owner-decision #5, locked 2026-06-24: "decided by AI" is shown to EVERYONE, incl. the end
+        user/seller). The owner sees the decision outcome, reason, notes, AND principalType / agent
+        attribution — full transparency, aligned with the AI-run-platform vision. "Effective" resolves
+        the human-override chain (ADR-0011 §3): if a HUMAN override supersedes an earlier AGENT decision,
+        the owner sees the override as the effective result, with the supersedes link visible so the
+        agent→human reversal is transparent. Object-level guard: only the listing owner (seller_id ==
+        caller) OR MODERATOR/ADMIN. Returns 204 if the listing has no decision yet (still PENDING).
+        NOTE (form now, behavior with domain): this is the canonical owner-facing projection; the owner's
+        Listing read (listings-api) SHOULD embed the same OwnerModerationResult as an additive
+        `lastModerationResult` field — flagged for backend + doc-keeper.
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest effective owner-facing moderation result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OwnerModerationResult' }
+        '204': { description: No decision yet (listing still PENDING_MODERATION) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /content-reports:
     post:
       summary: Submit a user report/flag on content
       operationId: createContentReport
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ContentReportCreate'
+            schema: { $ref: '#/components/schemas/ContentReportCreate' }
       responses:
         '201':
           description: Report created
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ContentReport'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     get:
       summary: List content reports (moderator/admin)
       operationId: listContentReports
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
-          schema:
-            type: string
-            enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
+          schema: { type: string, enum: [OPEN, REVIEWED, DISMISSED, ACTIONED] }
         - in: query
           name: entity_type
-          schema:
-            type: string
-            enum: [LISTING, ANIMAL, USER, MESSAGE]
+          schema: { type: string, enum: [LISTING, ANIMAL, USER, MESSAGE] }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: Reports list
+          description: Reports page
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ContentReport'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ContentReport' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /content-reports/{id}:
     patch:
       summary: Resolve a content report (moderator/admin)
       operationId: resolveContentReport
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior read of the content report
       requestBody:
         required: true
         content:
@@ -215,53 +391,187 @@ paths:
       responses:
         '200':
           description: Report updated
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ContentReport'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
-    ModerationQueueItem:
+    LocalizedString:
       type: object
       properties:
-        listing_id:
+        en: { type: string }
+        ru: { type: string }
+    Actor:
+      type: object
+      description: >-
+        Actor-badge: the acting principal on any actor-bearing response (ADR-0011 §6). principalType is the
+        write-time snapshot of users.principal_type (HUMAN|AGENT); it lets a consumer tell a human-decided from
+        an agent-decided action without a second lookup. DEFAULT HUMAN in MVP (no AGENT active until gated).
+      required: [actorId, principalType]
+      properties:
+        actorId:
           type: string
           format: uuid
-        title:
+          description: Acting principal (users.id).
+        principalType:
           type: string
+          enum: [HUMAN, AGENT]
+          description: Snapshot of the acting principal's type at the moment of the action (ADR-0011 §1).
+        actorDisplayName:
+          type: string
+          nullable: true
+          description: Optional human-readable label of the actor (operator UI convenience).
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+        counts:
+          allOf: [ { $ref: '#/components/schemas/QueueGroupCounts' } ]
+          nullable: true
+          description: >-
+            Optional, additive (API_CONVENTIONS §5 cursor-ready/additive discipline). Populated ONLY by the
+            moderation queue to carry per-market / per-SLA-state tab badge totals; absent (null) on all
+            other list endpoints. Clients ignoring it keep working.
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    ModerationQueueItem:
+      type: object
+      required: [listingId, market, submittedAt, waitingSeconds, slaState, lockState]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
         market:
           type: string
           enum: [pet, livestock]
         species:
           type: string
-        submitted_at:
+        submittedAt:
           type: string
           format: date-time
-        waiting_seconds:
+          description: When the item entered the queue (listings.moderation_enqueued_at; SLA clock start).
+        waitingSeconds:
           type: integer
-          description: Time spent waiting in queue (for SLA)
+          description: Seconds spent waiting in queue since submittedAt (server-computed; drives slaState).
+        slaState:
+          type: string
+          enum: [ON_TRACK, BREACHED, ESCALATED]
+          description: >-
+            SLA state (spec 12 round-5). ON_TRACK = within target; BREACHED = target exceeded but not yet
+            escalated; ESCALATED = SLA timeout fired, item escalated to ADMIN (event Moderation.Escalated)
+            and STILL PENDING_MODERATION — never auto-approved/rejected.
+        # ----- claim/lock (spec 12 round-5 "no double moderation"; columns: listings.assigned_to/locked_at/lock_expires_at) -----
+        lockState:
+          type: string
+          enum: [FREE, CLAIMED_BY_ME, CLAIMED_BY_OTHER, LOCK_EXPIRED]
+          description: >-
+            Claim/lock state RELATIVE TO THE CALLING PRINCIPAL. FREE = unclaimed; CLAIMED_BY_ME = caller
+            holds a live lock; CLAIMED_BY_OTHER = another principal holds a live lock (caller cannot act);
+            LOCK_EXPIRED = a stale lock past lockExpiresAt, re-claimable by anyone.
+        assignedTo:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          nullable: true
+          description: >-
+            Principal currently holding the claim as {actorId, principalType} (ADR-0011 §6); null when FREE.
+            principalType lets the UI show whether a human or an AGENT is reviewing it.
+        lockedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the current claim was taken (listings.locked_at); null when FREE.
+        lockExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Claim expiry (listings.lock_expires_at = lockedAt + MOD_LOCK_TTL, default 15 min). Past this
+            instant the lock auto-releases and lockState becomes LOCK_EXPIRED. Null when FREE.
+    ModerationLock:
+      type: object
+      description: Result of a successful claim/re-claim (POST /moderation/queue/{listingId}/claim).
+      required: [listingId, assignedTo, lockedAt, lockExpiresAt, lockState]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        assignedTo:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: The principal that now holds the lock (the calling principal).
+        lockedAt:
+          type: string
+          format: date-time
+        lockExpiresAt:
+          type: string
+          format: date-time
+          description: lockedAt + MOD_LOCK_TTL (default 15 min).
+        lockState:
+          type: string
+          enum: [CLAIMED_BY_ME]
+          description: Always CLAIMED_BY_ME on a successful claim.
     ModerationQueuePage:
       type: object
       properties:
         items:
           type: array
-          items:
-            $ref: '#/components/schemas/ModerationQueueItem'
-        page:
-          type: integer
-        limit:
-          type: integer
-        total:
-          type: integer
+          items: { $ref: '#/components/schemas/ModerationQueueItem' }
+        meta:
+          allOf: [ { $ref: '#/components/schemas/PageMeta' } ]
+          description: >-
+            Standard PageMeta plus moderation-queue group counts (counts) for tab badges — totals are
+            over the FULL filtered queue, not just the current page.
+    QueueGroupCounts:
+      type: object
+      description: >-
+        Group totals for operator queue tabs (spec 12 round-5 task 3). Counts span the entire queue under
+        the active non-tab filters, enabling badge rendering without extra requests.
+      properties:
+        byMarket:
+          type: object
+          properties:
+            pet: { type: integer }
+            livestock: { type: integer }
+        bySlaState:
+          type: object
+          properties:
+            ON_TRACK: { type: integer }
+            BREACHED: { type: integer }
+            ESCALATED: { type: integer }
     ModerationActionRequest:
       type: object
-      required: [listing_id, action]
+      required: [listingId, action]
       properties:
-        listing_id:
+        listingId:
           type: string
           format: uuid
         action:
@@ -269,25 +579,51 @@ components:
           enum: [APPROVE, REJECT, REQUEST_CHANGES]
         reason:
           type: string
-          description: Reason code (FK to moderation_reasons.code); required for REJECT/REQUEST_CHANGES
+          description: Reason code (FK to moderation_reasons.code); required for REJECT/REQUEST_CHANGES (422 if missing)
+        templateCode:
+          type: string
+          nullable: true
+          description: >-
+            Optional canned-note template code (FK to decision_templates.code). The server resolves the
+            template body into the decision notes (in the actor's locale); free-text `notes` may override
+            or extend it. Usable by both human and AGENT principals (an agent selects by this stable code).
         notes:
           type: string
           nullable: true
+          description: Free-text note; if templateCode is given, supplements/overrides the template body.
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Human-override (ADR-0011 §3): id of an earlier decision on the SAME listing to reverse. When
+            present, the server writes a new append-only row with isHumanOverride=true and
+            actor.principalType=HUMAN; it never mutates the superseded row. MUST reference a decision on the
+            same (entityType, entityId) — otherwise 422. An AGENT principal MUST NOT set this (override is
+            a HUMAN-only act) → 403/422.
     ModerationDecision:
       type: object
       description: Append-only audit record (immutable; no update/delete)
+      required: [id, actor, entityType, entityId, decision, isHumanOverride, createdAt]
       properties:
         id:
           type: string
           format: uuid
-        moderator_id:
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Acting principal as the {actorId, principalType} agent-badge (ADR-0011 §6); replaces the former flat
+            moderatorId. principalType is the write-time snapshot (moderation_decisions.actor_principal_type).
+        actorRole:
           type: string
-          format: uuid
-          description: Acting principal (users.id); may be a HUMAN or AGENT (ADR-0006)
-        entity_type:
+          nullable: true
+          description: >-
+            Snapshot of the role the actor held when deciding (moderation_decisions.actor_role, ADR-0011 §2);
+            users.role is mutable, so the decision permanently shows the role under which it was made.
+        entityType:
           type: string
           enum: [LISTING, ANIMAL]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         decision:
@@ -299,7 +635,63 @@ components:
         notes:
           type: string
           nullable: true
-        created_at:
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            For a human-override row: the superseded decision on the same (entityType, entityId) (ADR-0011 §3).
+            Non-null iff isHumanOverride is true (biconditional invariant chk_moddec_override).
+        isHumanOverride:
+          type: boolean
+          default: false
+          description: >-
+            True when this decision is a HUMAN reversal of an earlier (typically AGENT) decision (ADR-0011 §3).
+            An override row's actor.principalType MUST be HUMAN and supersedesDecisionId MUST be non-null.
+        createdAt:
+          type: string
+          format: date-time
+    OwnerModerationResult:
+      type: object
+      description: >-
+        Owner/seller-facing projection of the latest EFFECTIVE moderation decision (Owner-decision #5 —
+        agent-transparency to everyone). A deliberately NARROWER view than ModerationDecision: it omits
+        operator-internal fields (actorRole, raw moderator identity beyond the agent badge) but DOES carry
+        principalType so the seller sees whether a human or an AI decided, plus the resolved-locale reason
+        and notes. decidedByAgent is a convenience boolean derived from decidedBy.principalType.
+      required: [listingId, decision, decidedBy, decidedByAgent, decidedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED, CHANGES_REQUESTED]
+        reason:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          nullable: true
+          description: Resolved reason description (from moderation_reasons.descriptionLocalized); null for APPROVED.
+        notes:
+          type: string
+          nullable: true
+          description: Moderator/agent note shown to the owner (may originate from a decision template).
+        decidedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            The deciding principal as {actorId, principalType} (ADR-0011 §6). principalType is the
+            transparency signal — Owner-decision #5 mandates the seller can tell an AI decision from a human one.
+        decidedByAgent:
+          type: boolean
+          description: Convenience flag = (decidedBy.principalType == AGENT); drives the "Decided by AI" UI badge.
+        isHumanOverride:
+          type: boolean
+          description: True if this effective result is a HUMAN reversal of an earlier (typically AGENT) decision (ADR-0011 §3).
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: When isHumanOverride, the agent decision this human result reversed — the agent→human chain stays visible.
+        decidedAt:
           type: string
           format: date-time
     ModerationReason:
@@ -307,23 +699,56 @@ components:
       properties:
         code:
           type: string
-        description_localized:
-          type: object
-          additionalProperties:
-            type: string
-        applies_to:
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Reason description (LocalizedString {en, ru})
+        appliesTo:
           type: string
           enum: [LISTING, ANIMAL, ANY]
-        is_active:
+        isActive:
+          type: boolean
+    DecisionTemplate:
+      type: object
+      description: >-
+        A controlled, Admin-extensible canned decision-note (spec 12 round-5). Reference-data shape
+        (mirrors moderation_reasons + the A2 reference-data convention: code PK, LocalizedString body,
+        market scope per ADR-0002, sort_order, is_active, provenance). Backed by a NEW decision_templates
+        table (schema migration flagged for backend — NOT implemented here). Returned with BOTH locales so
+        the operator editor can show/edit each; public/end-user projections resolve to one locale.
+      required: [code, bodyLocalized, appliesToDecision, isActive]
+      properties:
+        code:
+          type: string
+          description: Stable identifier an AGENT or human selects (PK; e.g. "photos_blurry_resubmit").
+        bodyLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Canned note body (LocalizedString {en, ru}); may contain placeholders.
+        appliesToDecision:
+          type: string
+          enum: [REJECTED, CHANGES_REQUESTED, ANY]
+          description: Which decision type(s) this template is offered for.
+        market:
+          type: string
+          enum: [pet, livestock]
+          nullable: true
+          description: Market scope (ADR-0002); null = market-agnostic.
+        relatedReasonCode:
+          type: string
+          nullable: true
+          description: Optional link to a moderation_reasons.code this template typically accompanies.
+        sortOrder:
+          type: integer
+          description: Display order in the operator picker (A2 reference-data convention).
+        isActive:
           type: boolean
     ContentReportCreate:
       type: object
-      required: [entity_type, entity_id, reason]
+      required: [entityType, entityId, reason]
       properties:
-        entity_type:
+        entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         reason:
@@ -338,14 +763,14 @@ components:
         id:
           type: string
           format: uuid
-        reporter_id:
+        reporterId:
           type: string
           format: uuid
           nullable: true
-        entity_type:
+        entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
-        entity_id:
+        entityId:
           type: string
           format: uuid
         reason:
@@ -356,45 +781,21 @@ components:
         status:
           type: string
           enum: [OPEN, REVIEWED, DISMISSED, ACTIONED]
-        resolved_by:
-          type: string
-          format: uuid
+        resolvedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
           nullable: true
-        created_at:
+          description: >-
+            Resolving principal as the {actorId, principalType} agent-badge (ADR-0011 §6); replaces the former
+            flat resolvedBy uuid. Null while the report is OPEN. principalType is the write-time snapshot.
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-        message:
-          type: string
   responses:
-    Unauthorized:
-      description: Authentication required
+    Problem:
+      description: RFC7807 problem (application/problem+json)
       content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    Forbidden:
-      description: Caller lacks MODERATOR/ADMIN privileges
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    ValidationError:
-      description: Validation failed
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

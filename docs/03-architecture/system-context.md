@@ -3,14 +3,18 @@
 ## Purpose
 Shows the ZooLink system as a single box, with its users and the external systems it directly interacts with.
 
+> ⚠️ **Providers are RF-set.** The external providers drawn below (Twilio/SendGrid) are illustrative legacy labels;
+> the binding RF defaults are SMS.RU (SMS), Unisender (email), Yandex (maps/storage/CDN), ЮKassa+СБП (payments) —
+> see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md).
+
 ## Diagram Description
 ```mermaid
 flowchart LR
     %% External Entities
     subgraph "External Systems"
         direction TB
-        SMS["SMS Gateway<br/>(Twilio or similar)"]
-        Email["Email Service<br/>(SendGrid or similar)"]
+        SMS["SMS Gateway<br/>(SMS.RU — ADR-0008)"]
+        Email["Email Service<br/>(Unisender — ADR-0008)"]
         Maps["Geocoding & Maps<br/>(Yandex.Maps API)"]
         Storage["Object Storage<br/>(S3-compatible)"]
         OAuth["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
@@ -67,8 +71,8 @@ flowchart LR
 - **WebApp ↔ API**: REST/JSON over HTTPS.
 - **API ↔ Database**: SQL queries via Prisma ORM (PostgreSQL protocol).
 - **API ↔ Cache**: Redis protocol (TCP).
-- **API ↔ SMS Gateway**: HTTPS API (Twilio REST or similar).
-- **API ↔ Email Service**: HTTPS API (SendGrid v3 or similar).
+- **API ↔ SMS Gateway**: HTTPS API (SMS.RU; behind `SmsProvider` port — ADR-0008).
+- **API ↔ Email Service**: HTTPS API (Unisender; behind `EmailProvider` port — ADR-0008).
 - **API ↔ Geocoding/Maps**: HTTPS API (Yandex.Maps Geocoder and Search).
 - **API ↔ Object Storage**: S3-compatible REST API (via pre-signed URLs or direct SDK).
 - **API ↔ OAuth Providers**: OAuth 2.0 flows (authorization code grant with PKCE where applicable).

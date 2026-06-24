@@ -109,7 +109,7 @@ This specification addresses the following Non-Functional Requirements:
 ## Prior Decisions
 - **Backend Testing:** 
   - Framework: Jest with supertest for API testing
-  - Mocking: Jest mocks for external services (Twilio, Redis, etc.)
+  - Mocking: Jest mocks for external services (SMS.RU, Unisender, Redis, etc.)
   - Database: Use SQLite in-memory or transactional rollbacks for tests
   - Coverage Tool: Jest built-in coverage or nyc
   
@@ -197,6 +197,30 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 
 ---
+
+## Test data, DB strategy & CI (round-5, normative)
+
+- **Test database = PostgreSQL only.** SQLite is **not** usable — the schema relies on PL/pgSQL triggers, JSONB,
+  `pg_trgm`, GIN/partial indexes. Integration/E2E run on **PostgreSQL 16** via Testcontainers (or GH Actions
+  `services: postgres`), each test in a transaction rolled back (or a fresh ephemeral DB per suite).
+- **Seed / fixtures (normative):**
+  - Reference data + `moderation_reasons` + `notification_templates` come from the **seed migrations** (0010);
+    production reference data (species/breeds/cities РФ) is a dedicated seed migration.
+  - Business entities use **typed factories** (`@faker-js` with a fixed seed for determinism) producing users,
+    animals, listings **in every state** (DRAFT/PENDING_MODERATION/ACTIVE/EXPIRED/SOLD/DEACTIVATED) and org structures.
+  - A **large-volume generator** (50k animals / 100k listings) backs the geo/perf tests.
+- **Invariant negative-test matrix (must cover the DB-enforced rules):** ACTIVE⇒APPROVED trigger; pedigree
+  cycle/self-parent/parent-sex/species/DOB; unique microchip/tattoo/inn/oauth/phone; one-HQ-per-org; price≥0,
+  quantity≥1, currency ISO-4217, nickname language; append-only audit_log/moderation_decisions; rate limits
+  (auth, contact-reveal); ACTIVE-without-APPROVED rejection. Each is an explicit failing-case test.
+- **Contract testing:** OpenAPI contracts validated against the implementation (schemathesis or dredd); optional
+  consumer-driven (Pact) for frontend↔backend.
+- **Coverage:** backend unit/integration ≥90%; critical E2E flows (register→verify→animal→listing→moderate→publish→
+  search→contact-reveal) green; enforced via `coverageThreshold` in CI.
+- **CI gates (`.github/workflows`):** `ci.yml` (draft template) = lint + typecheck + `prisma migrate deploy` check +
+  unit/integration on PG service + **security gates** (`npm audit`, Trivy image scan, Semgrep SAST, OWASP ZAP baseline
+  on staging). `performance-tests.yml` is a **draft** (k6) — it activates once the `./backend` repo exists; until then
+  it is not a working gate.
 
 ## Related Documents
 

@@ -6,7 +6,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
 ## Core Concepts
 - **Reference Data**: Standardized lists used across domains (species, breeds, cities, traits, health certifications, etc.)
 - **Moderation Queue**: Listings awaiting review, with tools for approving/rejecting and providing feedback
-- **User Roles & Permissions**: Defines what users can do in the system (USER, MODERATOR, ADMIN)
+- **User Roles & Permissions**: Defines what users can do in the system. Platform role canon (`users.role`, 7 roles): USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER (additive — see §3)
 - **System Settings**: Configuration flags and parameters that affect platform behavior
 - **Audit Trail**: Logs of moderation actions, role changes, and system events for accountability
 
@@ -45,9 +45,10 @@ Manages system configuration, reference data, moderation workflows, and user rol
     - Returns listing to DRAFT state
     - **Requires mandatory rejection reason** (selected from predefined list + optional custom text)
     - User notified with reason and can edit/resubmit
-  - **FLAG FOR REVIEW**: 
-    - Special status for complex cases requiring senior moderator input
-    - Does not change listing state but adds indicator
+  - **CHANGES_REQUESTED** (request changes — the fixable path):
+    - Returns the listing to DRAFT so the seller can amend and re-submit (a recoverable outcome, as opposed to the terminal REJECT)
+    - Records the requested changes as notes; the seller is notified and can edit/resubmit
+    - Recorded as a `moderation_decisions.decision` value and the `listings.moderation_status` enum (decision set `{APPROVED, REJECTED, CHANGES_REQUESTED}`, ADR-0003 / spec 12)
   - **BAN USER** (from moderation view):
     - Available if moderator detects pattern of abuse/spam
     - Requires specifying reason and duration (temporary/permanent)
@@ -91,9 +92,25 @@ Manages system configuration, reference data, moderation workflows, and user rol
   - Can manage API keys and third-party integrations
   - Can initiate data exports/GDPR requests
   - Cannot modify core platform code (requires deployment)
-- **SUPER ADMIN** (system role, not assigned via UI):
-  - Full system access (for emergency/maintenance)
-  - Typically held by platform owners/devops
+- **Break-glass / super-admin** (out-of-system devops capability, **NOT** a `users.role` value):
+  - Full system access for emergency/maintenance, held by platform owners/devops
+  - Modelled outside the `users.role` enum (ADR-0011 §7); the platform role canon is the 7-role set only and never includes SUPER_ADMIN
+- **Additive (capability) roles — BREEDER / FARMER / VETERINARIAN / GROOMER**:
+  - Each is **USER + extra capabilities** (e.g. breeding visibility, livestock listings); they inherit all USER permissions (additive model — see `docs/specs/security/rbac-matrix.md`)
+  - They are not operator roles; MODERATOR and ADMIN are the operator roles above
+  - `principal_type` (HUMAN\|AGENT) is orthogonal to `role` (ADR-0006): an operator role may be held by an AI agent
+
+> **(role-canon sync + moderation-action sync, normative) — admin-BR aligned to the role and decision canon.**
+> **WHAT:** (a) Removed `SUPER_ADMIN` from the `users.role` model — it is now described as an out-of-system
+> break-glass/devops capability outside the enum (ADR-0011 §7); (b) stated the additive 7-role model
+> (BREEDER/FARMER/VETERINARIAN/GROOMER = USER + extras) and expanded the role enums to the 7-role canon;
+> (c) replaced the moderator action `FLAG` / "FLAG FOR REVIEW" with `CHANGES_REQUESTED` and aligned the decision set
+> to `{APPROVED, REJECTED, CHANGES_REQUESTED}` (`database_schema.sql` `moderation_decisions.decision` / spec 12).
+> **WHY:** GAP-TRACE-004 (three de-synced role sets + phantom SUPER_ADMIN) and GAP-TRACE-006 (FLAG describes a moderator
+> action that does not exist while omitting the real one). The BR contradicted the validated schema and ADR-0011.
+> **WHY BETTER for the whole project:** one role canon (validated on PG) anchors RBAC, guards and migrations;
+> dropping SUPER_ADMIN from `users.role` keeps a clean "system operation vs application role" split; `CHANGES_REQUESTED`
+> gives the seller a fixable path without a separate FLAG state machine, matching the moderation model and decision enum.
 
 ### 4. Role Assignment & Management
 - New users register as USER by default.
@@ -194,7 +211,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
 | `id` | UUID | Yes | Primary key |
 | `listing_id` | UUID (FK to Listings.id) | Yes | The listing being moderated |
 | `moderator_id` | UUID (FK to Users.id) | Yes | Who performed the action |
-| `action` | ENUM('APPROVE', 'REJECT', 'FLAG') | Yes | What was done |
+| `action` | ENUM('APPROVED', 'REJECTED', 'CHANGES_REQUESTED') | Yes | What was done (decision set per `database_schema.sql` `moderation_decisions.decision` / spec 12) |
 | `reason_code` | VARCHAR(50) | No | Standardized rejection reason (if REJECT) |
 | `reason_text` | TEXT | No | Custom explanation (required for REJECT) |
 | `created_at` | TIMESTAMP | Yes | When action occurred |
@@ -204,7 +221,7 @@ Manages system configuration, reference data, moderation workflows, and user rol
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `user_id` | UUID (FK to Users.id) | Yes | The user |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN') | Yes | Assigned role |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER') | Yes | Assigned role (7-role canon per `database_schema.sql` / `rbac-matrix.md`; additive model) |
 | `assigned_at` | TIMESTAMP | Yes | When role was granted |
 | `assigned_by` | UUID (FK to Users.id) | Yes | Who made the change (ADMIN) |
 | `expires_at` | TIMESTAMP | No | For temporary roles (not used on MVP) |
@@ -314,7 +331,7 @@ sequenceDiagram
 - `GET /reference-data/{dataset}/{id}` (get specific entry)
 - `GET /moderation/queue` (get pending listings with filters: type, species, limit, offset)
 - `GET /moderation/listing/{id}` (get listing details for moderation)
-- `POST /moderation/action` (approve/reject/flag listing)
+- `POST /moderation/action` (approve/reject/request-changes listing)
 - `GET /moderation/log/{listing_id}` (get moderation history for listing)
 - `POST /moderation/ban-user` (ban user with reason/duration)
 - `GET /system/settings` (get current settings - ADMIN only)

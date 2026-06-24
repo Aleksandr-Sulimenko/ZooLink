@@ -134,10 +134,10 @@ CREATE TABLE listings (
     organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
     metadata JSONB DEFAULT '{}'::jsonb,
-    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
+    listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing')), -- 'leasing' = FORM now (enum value, migration 0021); leasing rules/behaviour are Фаза 2
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    price_cents INTEGER,
+    price_cents BIGINT, -- money is stored in minor units (kopecks) as BIGINT, never FLOAT/INTEGER: INTEGER overflows on livestock-scale deals
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     location_point GEOGRAPHY(POINT, 4326),
@@ -158,14 +158,18 @@ CREATE TABLE listings (
 - The seller is always a user (even for organizational listings)
 - Optional association with an organization/branch
 - Geospatial position for radius search
-- Various listing types through a CHECK constraint
+- Various listing types through a CHECK constraint. The set is `sale, breeding, show, adoption,
+  stud_service, leasing` (migration 0021). `leasing` is **form now / behaviour Фаза 2** (B3): the
+  enum value exists so the type is selectable and not a later schema rewrite, but leasing-specific
+  rules/flow (terms, return, pricing model) are deferred to Фаза 2 — see
+  `business-requirements/livestock-marketplace.md`. Listing triggers do not hard-code the type set.
 - Ownership constraint: either a personal listing or an organizational listing
 
 ### users Table (Identity Context)
 ```sql
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    phone_hash VARCHAR(60),
+    phone_hash VARCHAR(60), -- deterministic HMAC-SHA256(phone, server_pepper), unique; NOT bcrypt (spec 01 round-4)
     oauth_google_id VARCHAR(255),
     oauth_apple_id VARCHAR(255),
     oauth_telegram_id VARCHAR(255),
@@ -175,22 +179,51 @@ CREATE TABLE users (
     avatar_url TEXT,
     email VARCHAR(255),
     email_verified BOOLEAN DEFAULT FALSE,
-    password_hash VARCHAR(60),
+    password_hash VARCHAR(60), -- bcrypt; OPERATOR-only (end users are passwordless: phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
     principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (principal_type IN ('HUMAN', 'AGENT')), -- ADR-0006: operator roles may be held by an AI agent
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    status VARCHAR(25) NOT NULL DEFAULT 'UNVERIFIED'
+        CHECK (status IN ('UNVERIFIED','PENDING_VERIFICATION','VERIFIED','ACTIVE','SUSPENDED','DEACTIVATED')), -- lifecycle source of truth (user_state_machine.md)
+    suspended_at TIMESTAMP WITH TIME ZONE,
+    verification_attempts INTEGER NOT NULL DEFAULT 0, -- OTP attempts; MAX 5 then lockout
+    notification_prefs JSONB NOT NULL DEFAULT '{"email": true, "sms": true, "promo": false}'::jsonb,
+    preferred_language CHAR(2) NOT NULL DEFAULT 'ru' REFERENCES supported_languages(code),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, -- DERIVED from status (kept in sync; not authoritative)
     last_login_at TIMESTAMP WITH TIME ZONE,
     deactivated_at TIMESTAMP WITH TIME ZONE,
+    erased_at TIMESTAMP WITH TIME ZONE, -- set by erase_user() (ФЗ-152 anonymise-in-place); NULL = not erased
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 ```
 
 **Key points:**
-- Multiple authentication methods (phone/SMS + OAuth providers)
+- Multiple authentication methods (phone/SMS OTP + OAuth providers); end users are passwordless
+- `status` is the lifecycle source of truth; `is_active`/`deactivated_at` are derived from it
 - The user role determines access to system features
 - Relationship with a city for geo-search by location
-- Soft deletion through the deactivated_at field
+- Soft deletion through the deactivated_at field (status=DEACTIVATED)
+- Right-to-erasure (ФЗ-152): `erase_user()` anonymises PII in place, releases identifiers
+  (phone_hash/oauth_*/email), revokes sessions and stamps `erased_at`; the UUID is retained so
+  FK RESTRICT rows stay valid (data-governance.md §2)
+
+### refresh_tokens Table (session/device tracking)
+
+`refresh_tokens` is the rotating-refresh-token store backing the 15-min access / 7-day refresh
+session model (`nfr/security.md` §Session Management, spec 01). Beyond the rotation/family columns
+already present (`device_label`, `family_id`), migration 0020 (B2) added **session-context** columns
+so a user can see and revoke individual sessions and so security review has provenance:
+
+| Column | Type | Notes |
+|---|---|---|
+| `ip_address` | `INET` | Client IP captured at issue (security/audit; redacted in logs per `nfr/observability.md`) |
+| `user_agent` | `TEXT` | Client UA string at issue (device-list UX) |
+| `last_used_at` | `TIMESTAMPTZ` | Updated on each rotation; powers "active sessions" / idle detection |
+| `revoked_reason` | `VARCHAR` | Why a token was invalidated (logout / rotation / role-change / erase / admin) |
+
+**No MFA placeholder column** is added: MFA is deferred to Фаза 2 (GAP-013), and a speculative
+empty column would be dead schema (IMPLEMENTATION_PLAYBOOK §5 — add the form only when it is the
+irreversible artifact). See the MFA correction in `nfr/security.md`.
 
 ## Relationships and Constraints
 
@@ -238,6 +271,47 @@ CREATE TABLE users (
 - Indexes on reference tables (species, breeds, cities)
 - Indexes on ownership history tables and organization association tables
 
+## Reference Data Model (species / breeds / cities)
+
+The three admin-managed lookup tables share one extensible shape (migration 0018):
+
+- **Localized name** — the display name is a single `name_localized JSONB {ru,en}` column (NOT flat
+  `name_ru`/`name_en`). This matches the `*_localized` JSONB canon used by `organizations`/`branches`/
+  `animals`, the `get_localized()`/`has_translation()` SQL helpers, `localization_specification.md`, and
+  `API_CONVENTIONS.md §6`. A new language is added by writing another JSON key — **no schema change**.
+  Admin/editor reads return the full `LocalizedString` (`nameLocalized`); public reads return the resolved
+  `name` string for `Accept-Language` (en fallback). Per-locale `GIN ((name_localized -> 'xx'))` indexes
+  back localized search.
+- **Provenance & ordering** — `created_by`/`updated_by` (nullable `FK → users(id) ON DELETE SET NULL`,
+  agent-as-principal ready per ADR-0006: an AGENT row may own a change) and `sort_order INTEGER` (display
+  ordering; lists are `ORDER BY sort_order, id`). Soft-delete via `is_active` (no row deletion → FK safety).
+- **Registry extensibility (code pattern)** — the backend reference-data module is dataset-driven: the
+  managed set is one `DATASETS` tuple and a `CAPS` table (per-dataset `{code, speciesId, market}` flags) in
+  `modules/admin/dto/reference-data.dto.ts` + `reference-data.service.ts`. `ParseDatasetPipe` validates the
+  `{dataset}` path segment against `DATASETS`. Adding a new lookup table = add it to `DATASETS` + a `CAPS`
+  entry + a Prisma delegate — **no change to the CRUD/audit/localization shape**. (Whether a candidate is a
+  managed dataset vs a fixed CHECK-enum is decided per `specs/06-admin-domain.md`.)
+
+**Breeding dictionaries (A3, migration 0019).** `health_certifications` and `genetic_markers` are two more
+admin-managed lookup tables in the **same shape** (`id` INT PK, `code`, `name_localized` JSONB {ru,en},
+`market`, `sort_order`, `is_active`, `created_by`/`updated_by`, per-locale GIN, `update_<tbl>_updated_at`
+trigger), added because the livestock search filters in `business-requirements/livestock-marketplace.md`
+(`health_certifications`, `genetic_flags`) referenced controlled dictionaries that had no backing table
+(GAP-TRACE-002). They were absorbed by the registry with **no shape change** — the extensibility proof for
+A2 — so the managed `dataset` set grew `3 → 5` (`species, breeds, cities, health_certifications,
+genetic_markers`). Uniqueness is `(market, code)` (symmetric with breeds' `(species_id, code)`): a code may
+recur across markets but is unique within one. **Form now, behaviour later:** the marketplace **filtering**
+that consumes these dictionaries stays deferred (Фаза 2, the genetics side gated by
+`feature_toggles.genetics_portal`); only the table form + admin CRUD exist in MVP. The pet-side soft-tags
+`temperament_tags`/`health_flags` are deliberately **free text/JSONB, not tables** (a lookup can be added
+additively in Фаза 2 with no rewrite); `animal-statuses` are a **state CHECK enum, not a dataset**;
+`decision-templates` (moderation) are **deferred to the moderation contract** (coupled to the moderation
+shape, not generic reference-data).
+
+Audit of reference-data CRUD: lookup ids are `INT`, but `audit_log.entity_id` is `UUID`. Migration 0018 adds
+`audit_log.entity_id_int INTEGER` (partial index `idx_audit_log_entity_int`) so an INT-keyed entity is
+audited by its real id; UUID entities keep using `entity_id`. Exactly one of the two is populated per row.
+
 ## Operational Domains (Moderation / Payment / Notification / Ownership Transfer)
 
 The full DDL for the following tables lives in `database_schema.sql` (source of truth); the domain
@@ -247,12 +321,14 @@ contracts are specified in the linked specs. They were added per the schema audi
 | Table | Domain spec | Notes |
 |---|---|---|
 | `moderation_reasons` | `specs/12-moderation-domain.md` | Admin-configurable reason codes (lookup) |
-| `moderation_decisions` | `specs/12-moderation-domain.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger) |
+| `moderation_decisions` | `specs/12-moderation-domain.md` · `../04-decisions/0011-agent-principal-actor-model.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger). ADR-0011 actor-snapshot (`actor_principal_type` HUMAN/AGENT, `actor_role`) + human-override chain (`supersedes_decision_id` self-ref FK ON DELETE RESTRICT, `is_human_override`, biconditional `chk_moddec_override`) |
+| `decision_templates` | `specs/12-moderation-domain.md` | B10 Admin-extensible dictionary of canned REJECT/CHANGES_REQUESTED notes (TABLE, not enum). INT id; `body_localized` JSONB {ru,en}; `applies_to_decision` ∈ {REJECTED, CHANGES_REQUESTED}; `market` (ADR-0002); optional `related_reason_code` FK → `moderation_reasons.code` (ON DELETE SET NULL); `sort_order`/`is_active`/provenance; UNIQUE (market, code); per-locale GIN; updated_at trigger. A2/A3 reference-data shape. FORM now; selection at decision time ships with the Moderation domain. |
 | `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (minor units, never FLOAT); `idempotency_key` UNIQUE |
 | `refunds` | `specs/14-payment-domain.md` | Linked to `payment_transactions` |
 | `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |
 | `notification_logs` | `specs/13-notification-domain.md` | Delivery log (SENT/DELIVERED/FAILED/BOUNCED) |
 | `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Process entity for transfer state machine (distinct from `animal_ownership_history`, the settled log). Animal ownership is locked during MVP. |
+| `digital_assets` | `../04-decisions/0010-nft-digital-assets-hooks.md` | NFT/tokenization readiness hook (ADR-0010). Empty in MVP; gated by `feature_toggles('digital_assets')`. On-chain mint/indexer is Фаза 2+. |
 
 Lifecycle/state columns added to existing tables: `listings.status` + `listings.moderation_status`
 (see `specs/statemachines/listing_state_machine.md`), `users.status` (see
@@ -281,10 +357,12 @@ Used for:
 ## Patterns for Handling Special Data
 
 ### Geospatial Data
-- Primary: a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS)
-- Fallback option: separate latitude/longitude columns (not included in the current schema, but can be added via ALTER TABLE)
+> Note: the SQL snippets in this doc are illustrative; `database_schema.sql` is the source of truth and already
+> includes `lat`/`lng`, `status`/`moderation_status` and the other audited columns.
+- **MVP primary:** `lat`/`lng` DOUBLE columns + Haversine + bounding-box prefilter (in the schema; ADR-0009).
+- **Фаза 2+ option:** a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS; already reserved in the schema).
 - Search radius: a `search_radius_m` column in meters
-- Indexes: a GIST index for efficient Distance Within operations and KNN search
+- Indexes: B-tree on lat/lng (MVP); a GiST index on `location_point` when PostGIS is enabled
 - Units: Meters for distances, SRID 4326 (WGS84) for coordinates
 
 ### Multilingualism
@@ -296,9 +374,51 @@ Used for:
 ### Change History and Audit
 - Soft deletion: `deactivated_at` fields in key tables
 - Animal ownership history: a dedicated `animal_ownership_history` table
-- Outbox events: an `outbox_events` table for reliable integration
-- Timestamps: `created_at` and `updated_at` on all tables via triggers
-- Planned extension: a dedicated audit table for critical operations
+- Outbox events: an `outbox_events` table for reliable integration, with relay delivery state (`attempts`, `last_error`, `next_attempt_at`, `dead_lettered_at`) for at-least-once delivery with exponential backoff and dead-lettering (migration 0012)
+- Timestamps: `created_at` everywhere; `updated_at` maintained by a trigger attached to exactly the tables that have the column (derived from the schema, migration 0013). Append/log tables (`outbox_events`, `audit_log`, `animal_ownership_history`, `messages`) have no `updated_at` and no such trigger
+- Audit: an append-only `audit_log` table (DB-enforced immutability) for privileged operations
+
+### Actor-Principal Model on append-only ledgers (ADR-0011)
+
+Both append-only actor ledgers — `audit_log` and `moderation_decisions` — record the acting principal
+**as a write-time snapshot**, never as a read-time join to `users` (which holds *current*, mutable
+`principal_type`/`role`). An immutable row must reflect who/what acted *at the moment of the action*.
+
+- **`actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'`** (CHECK `HUMAN|AGENT`) on both tables.
+  `DEFAULT 'HUMAN'` is the MVP truth (no agent is active); the column is present now because a missing
+  attribute on an append-only row can never be backfilled truthfully once any AGENT acts. `principal_type`
+  is **orthogonal to `role`** — no cross-column CHECK couples them (ADR-0011 §7).
+- **`moderation_decisions.actor_role VARCHAR(20)`** — free snapshot of the role the actor held when
+  deciding (nullable; intentionally **no** enum CHECK, since the role enum may evolve). Mirrors
+  `audit_log.actor_role`, which already existed.
+- **Human-override chain** — a human reversing an agent decision inserts a **new append-only row** (never a
+  mutation): `is_human_override = TRUE`, `supersedes_decision_id` → the superseded decision
+  (self-referential FK, `ON DELETE RESTRICT`). Both rows remain forever; the agent→human chain is fully
+  reconstructable. The biconditional `chk_moddec_override` enforces `is_human_override = TRUE ⇔
+  supersedes_decision_id IS NOT NULL`. A service-layer rule (not a DB CHECK, as it spans rows) requires an
+  override row's `actor_principal_type = 'HUMAN'` and its `supersedes_decision_id` to reference a decision on
+  the **same** `(entity_type, entity_id)`. Read side resolves "latest effective decision" by following
+  `supersedes_decision_id` (indexed by `idx_moddec_supersedes`).
+- **Agent service-credential store** — `service_credentials` (ADR-0011 §5.3/§C, A0b, migration 0017),
+  a **forward-compatible FORM**: an in-monolith hashed-secret store keyed to the agent (`agent_user_id` FK
+  `users.id`, `ON DELETE RESTRICT`), **rotatable** (`rotated_from` self-FK = issue-new links to old) and
+  **revocable** (`is_active` / `revoked_at`), with **only `secret_hash`** at rest (never plaintext) and no
+  separate auth service. It is **FORM ONLY in MVP**: the AGENT gate is off, so no row is created and no
+  secret is verified; the `AgentServiceTokenAuthenticator` stub is not in the authenticator chain and always
+  returns `null`. Activating agent service-auth later (ADR-0006 P-A…P-D) needs no schema rewrite.
+- **Authenticator chain** (ADR-0011 §5) — authentication is factored out of `JwtAuthGuard` into an ordered
+  `RequestAuthenticator` chain producing the source-agnostic `AuthPrincipal {userId, role, principalType}`.
+  `BearerJwtAuthenticator` is the only link today (human end-users + operators); `AgentServiceTokenAuthenticator`
+  is the additive future link (gated). RBAC/CASL/actor-snapshotting all consume the principal abstraction, so
+  adding agents is one extra authenticator, not a guard/authz rewrite. Env `AGENT_SERVICE_SIGNING_SECRET`
+  (≥32; optional in dev/test, required in production) is the form of the signing secret — unused while gated.
+- **Agent lifecycle** = deactivation, never deletion (`users.status='DEACTIVATED'`), so the
+  `ON DELETE RESTRICT` FKs from the ledgers are never orphaned.
+
+`organization_users.role_in_org` canon is the **4-value** set `{OWNER, ADMIN, STAFF, VET}`
+(`chk_org_user_role`). `MODERATOR` is a platform-operator role, **not** an org-membership role
+(ADR-0011 §7); the previously contradictory inline CHECK and column comment were corrected to match the
+effective named constraint.
 
 ## Related Decisions
 
@@ -307,6 +427,7 @@ Used for:
 - [ADR-0003: Pre-moderation workflow](../04-decisions/0003-pre-moderation-workflow.md)
 - [ADR-0004: Animal as the aggregate root](../04-decisions/0004-animal-as-aggregate.md)
 - [ADR-0005: No built-in chat in the MVP](../04-decisions/0005-no-chat-mvp.md)
+- [ADR-0011: Agent-Principal Actor Model (actor snapshot, human-override, role canon)](../04-decisions/0011-agent-principal-actor-model.md)
 
 ## ERD Diagram
 

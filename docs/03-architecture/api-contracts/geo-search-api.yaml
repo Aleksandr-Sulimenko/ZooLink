@@ -6,61 +6,52 @@ info:
     Radius search over listings (Haversine + bounding box on lat/lng; spec 07),
     address geocoding proxy (Yandex.Maps), and saved searches (UC-GS-03,
     saved_searches table). Proactive alerts on saved searches are Phase 2.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth with public opt-out (§2),
+    x-required-roles (§3), RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /geo-search:
     get:
       summary: Radius search for listings near a point
       operationId: geoSearchListings
       description: >-
-        Returns ACTIVE listings within radius_m of (lat, lng), combinable with
-        standard listing filters. Results include distance from the point.
+        Public (security opt-out). Returns ACTIVE listings within radiusM of (lat, lng), combinable
+        with standard listing filters. Results include distance from the point. Filter query params
+        stay snake_case (§12).
+      security: []
       parameters:
         - in: query
           name: lat
           required: true
-          schema:
-            type: number
-            format: double
-            minimum: -90
-            maximum: 90
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
         - in: query
           name: lng
           required: true
-          schema:
-            type: number
-            format: double
-            minimum: -180
-            maximum: 180
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
         - in: query
           name: radius_m
           required: true
-          schema:
-            type: integer
-            minimum: 1000
-            maximum: 100000
+          schema: { type: integer, minimum: 1000, maximum: 100000 }
           description: Radius in meters (1km..100km per spec 07)
         - in: query
           name: market
-          schema:
-            type: string
-            enum: [pet, livestock]
+          schema: { type: string, enum: [pet, livestock] }
         - in: query
           name: species
-          schema:
-            type: string
+          schema: { type: string }
         - in: query
           name: listing_type
-          schema:
-            type: string
-            enum: [sale, breeding, show, adoption, stud_service]
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
         - in: query
           name: page
-          schema:
-            type: integer
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: Listings with distance, paginated
@@ -71,24 +62,22 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/GeoSearchResult'
-                  page:
-                    type: integer
-                  total:
-                    type: integer
-        '422':
-          $ref: '#/components/responses/ValidationError'
+                    items: { $ref: '#/components/schemas/GeoSearchResult' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /geo/geocode:
     get:
       summary: Geocode an address to coordinates (Yandex.Maps proxy)
       operationId: geocodeAddress
+      description: Public (security opt-out).
+      security: []
       parameters:
         - in: query
           name: address
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         '200':
           description: Geocoding candidates
@@ -96,14 +85,15 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/GeocodeResult'
-        '502':
-          description: Upstream geocoding provider error
+                items: { $ref: '#/components/schemas/GeocodeResult' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /saved-searches:
     get:
       summary: List the current user's saved searches
       operationId: listSavedSearches
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       responses:
         '200':
           description: Saved searches
@@ -111,65 +101,94 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/SavedSearch'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+                items: { $ref: '#/components/schemas/SavedSearch' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Save a search (filters + location)
       operationId: createSavedSearch
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SavedSearchCreate'
+            schema: { $ref: '#/components/schemas/SavedSearchCreate' }
       responses:
         '201':
           description: Saved
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SavedSearch'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '422':
-          $ref: '#/components/responses/ValidationError'
+              schema: { $ref: '#/components/schemas/SavedSearch' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /saved-searches/{id}:
     delete:
       summary: Delete a saved search
       operationId: deleteSavedSearch
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Deleted
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
     GeoSearchResult:
       type: object
       properties:
-        listing_id:
+        listingId:
           type: string
           format: uuid
-        title:
-          type: string
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
         lat:
           type: number
           format: double
         lng:
           type: number
           format: double
-        distance_m:
+        distanceM:
           type: integer
           description: Distance from the query point in meters
     GeocodeResult:
@@ -189,7 +208,7 @@ components:
         id:
           type: string
           format: uuid
-        user_id:
+        userId:
           type: string
           format: uuid
         name:
@@ -206,13 +225,13 @@ components:
           type: number
           format: double
           nullable: true
-        radius_m:
+        radiusM:
           type: integer
           nullable: true
-        created_at:
+        createdAt:
           type: string
           format: date-time
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
     SavedSearchCreate:
@@ -231,32 +250,12 @@ components:
           type: number
           format: double
           nullable: true
-        radius_m:
+        radiusM:
           type: integer
           nullable: true
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-        message:
-          type: string
   responses:
-    Unauthorized:
-      description: Authentication required
+    Problem:
+      description: RFC7807 problem (application/problem+json)
       content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    ValidationError:
-      description: Validation failed
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

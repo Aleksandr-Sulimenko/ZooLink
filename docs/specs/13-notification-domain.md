@@ -2,7 +2,7 @@
 version: "1.0"
 lastUpdated: "2026-06-15"
 author: "System Analyst"
-status: "Draft"
+status: "Approved"
 ---
 
 # Spec: Notification Domain
@@ -12,8 +12,8 @@ Provide a reliable notification service for delivering timely alerts to users vi
 
 ## Scope & Boundaries
 **In Scope:**
-- Email notification service (via SendGrid or similar provider)
-- SMS notification service (via Twilio or similar provider)
+- Email notification service (via **Unisender** default; behind `EmailProvider` port — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md))
+- SMS notification service (via **SMS.RU** default; behind `SmsProvider` port — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)). SendGrid/Twilio are **not usable in RF**.
 - Template-based notification content with localization support
 - Delivery tracking (sent, delivered, failed, bounced)
 - Rate limiting and throttling to comply with provider limits
@@ -35,7 +35,7 @@ Provide a reliable notification service for delivering timely alerts to users vi
 - Notification scheduling (send at specific time) - deferred to phase 2
 
 ## Constraints
-- **Legal:** Must comply with Russian Federal Law 152-ФЗ (Personal Data) when handling user contact information. Must adhere to Russian communication laws (advertising, spam prevention). Must comply with international regulations (CAN-SPAM, GDPR where applicable).
+- **Legal:** Must comply with Russian Federal Law 152-ФЗ (Personal Data) when handling user contact information, and Russian advertising/anti-spam law (38-ФЗ «О рекламе» — consent for promotional messages). PII stays within RF infrastructure.
 - **Performance:** Notification API call latency < 500ms; actual delivery time depends on provider but should be < 10s for SMS, < 30s for email under normal conditions.
 - **Reliability:** System must achieve >99% delivery success rate for valid notifications; failed notifications must be retryable.
 - **Usability:** Notification content must be clear, concise, and actionable; users must easily understand how to unsubscribe or manage preferences.
@@ -46,7 +46,7 @@ Provide a reliable notification service for delivering timely alerts to users vi
 
 ## Prior Decisions
 - Notification service is implemented as a dedicated NestJS module with providers for email and SMS.
-- Uses external service providers (SendGrid for email, Twilio for SMS) via their APIs.
+- Uses RF external providers (**Unisender** for email, **SMS.RU** for SMS) via their APIs, behind the `EmailProvider`/`SmsProvider` ports ([ADR-0008](../04-decisions/0008-rf-provider-matrix.md)).
 - Notification templates are stored as handlebars templates with localization support.
 - Notification requests are queued in Redis (or database) for asynchronous processing to prevent blocking API calls.
 - Each notification attempt is logged with status, provider response, and timestamps.
@@ -65,11 +65,11 @@ This specification addresses the following Non-Functional Requirements:
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `notification` module with NestJS CLI
-   - [ ] Define NotificationLog entity (TypeORM) with fields: id, userId, type (EMAIL/SMS), templateId, recipient, subject/content, status (SENT/DELIVERED/FAILED/BOUNCED), providerResponse, attempts, createdAt, updatedAt
-   - [ ] Define NotificationTemplate entity (TypeORM) for managing templates (id, name, type, subjectTemplate, bodyTemplate, language, isActive)
+   - [ ] Define NotificationLog model (Prisma) with fields: id, userId, type (EMAIL/SMS), templateId, recipient, subject/content, status (SENT/DELIVERED/FAILED/BOUNCED), providerResponse, attempts, createdAt, updatedAt
+   - [ ] Define NotificationTemplate model (Prisma) for managing templates (id, name, type, subjectTemplate, bodyTemplate, language, isActive)
    - [ ] Implement NotificationController (send notification, get logs, manage preferences)
    - [ ] Implement NotificationService (business logic for queuing, template rendering, provider integration)
-   - [ ] Create providers for SendGrid and Twilio abstractions
+   - [ ] Implement `EmailProvider` (Unisender) and `SmsProvider` (SMS.RU) adapters behind the ports
    - [ ] Implement notification queue (Redis-based or database-based)
    - [ ] Implement retry mechanism with exponential backoff
    - [ ] Implement rate limiting per provider and per user
@@ -79,7 +79,7 @@ This specification addresses the following Non-Functional Requirements:
 
 2. **Infrastructure**
    - [ ] Configure Redis for notification queue (or use database tables)
-   - [ ] Set up external provider credentials (SendGrid API key, Twilio Account SID/Auth Token) in environment
+   - [ ] Set up RF provider credentials (Unisender API key, SMS.RU api_id) in environment
    - [ ] Configure logging for notification events (sent, failed, retried)
    - [ ] Add security headers and CORS configuration
    - [ ] Implement monitoring for notification delivery rates and provider costs
@@ -95,6 +95,28 @@ This specification addresses the following Non-Functional Requirements:
    - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 
 ---
+
+## Delivery mechanics (round-5, normative)
+
+- **Templates & variables:** Handlebars syntax (`{{var}}`). Seeded set (migration 0010), per-event variables:
+  `user_verify_code` → `{code, ttl_min}`; `listing_approved`/`listing_expired` → `{listing_title}`;
+  `listing_rejected`/`listing_changes_requested` → `{listing_title, reason}`; `report_resolved` → `{entity_type, decision}`.
+  Missing variable → render fails (caught, logged), never sends a half-rendered message.
+- **Language:** uses `users.preferred_language` (migration 0009, default `ru`); fallback `ru → en`. (`Accept-Language`
+  is irrelevant for async sends.)
+- **Transactional vs promotional:** transactional notifications (verify code, moderation results, expiry,
+  report-resolved) are **always sent**, ignoring `notification_prefs`. Promotional sends require `notification_prefs.promo`
+  AND no `notification_suppressions` row (38-ФЗ consent). Channel prefs (`email`/`sms`) apply to promo only.
+- **Idempotency:** one notification per (outbox `event_id`, recipient, template) — `notification_logs.idempotency_key`
+  UNIQUE (migration 0009); at-least-once outbox replays do not double-send.
+- **Retry/backoff:** `notification_state_machine.md` — max 3 attempts, 1m/5m/30m; `FAILED` after exhaustion. Single
+  provider per channel in MVP (SMS.RU / Unisender); cross-provider failover is Фаза 2.
+- **Delivery receipts:** provider webhook → `POST /notifications/webhook` (HMAC-verified header), maps via
+  `notification_logs.provider_message_id` (migration 0009) to set `DELIVERED`/`BOUNCED`.
+- **Suppression:** hard-bounce/complaint/unsubscribe writes `notification_suppressions(recipient, channel)`; checked
+  before every send. Unsubscribe = a signed-token public link that sets `notification_prefs.promo=false` and a
+  suppression row.
+- **PII/retention:** `notification_logs.content`/`recipient` per `data-governance.md` (90-day retention / masking).
 
 ## Related Documents
 

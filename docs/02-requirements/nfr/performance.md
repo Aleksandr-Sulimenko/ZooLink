@@ -71,7 +71,7 @@ Applies to all system components: backend APIs, frontend applications, database 
 
 ### Measurement & Profiling
 - **Monitoring Tools**:
-  - Application Performance Monitoring (APM): Datadog, New Relic, or similar
+  - Application Performance Monitoring (APM): **Prometheus + Grafana / VictoriaMetrics** (RF default, self-hostable; ADR-0008); Datadog/New Relic only where billing is accessible
   - Real User Monitoring (RUM): For frontend performance metrics
   - Infrastructure Monitoring: CPU, memory, disk, network utilization
   - Database Monitoring: Query performance, connection pooling, replication lag
@@ -91,7 +91,7 @@ Applies to all system components: backend APIs, frontend applications, database 
 ### Backend Optimizations
 - **Database**:
   - Proper indexing on query patterns (geo-search, listings by type/species/location)
-  - Use of connection pooling (HikariCP or similar via Prisma)
+  - Use of connection pooling appropriate to Node.js/Prisma (Prisma's built-in pool; PgBouncer in transaction mode for high connection counts). HikariCP is JVM-only and not used in this stack.
   - Query optimization: avoid SELECT *, use limits, optimize JOINs
   - Read replicas for read-heavy operations (geo-search, listing views)
   - Caching layer (Redis) for:

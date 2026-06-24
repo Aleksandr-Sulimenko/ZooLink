@@ -85,6 +85,9 @@ An append-only audit record (`moderation_decisions`) of a moderator/agent's deci
 **Moderation Reason**  
 A configurable reason code (`moderation_reasons`) selectable when deciding/reporting.
 
+**Decision Template**  
+An editable, admin-managed canned decision-note (`decision_templates`, B10): the operator (HUMAN or AGENT) picks one by a stable `code` to populate the notes of a REJECTED / CHANGES_REQUESTED decision. A controlled **reference-data table** (`body_localized` JSONB, `applies_to_decision`, `market`, optional `related_reason_code`), **not** an enum — distinct from the mandatory **Moderation Reason** taxonomy (why-rejected); a template is the prose the actor sends. Form now; selection at decision time ships with the Moderation domain.
+
 **Payment Transaction / Refund**  
 A payment (`payment_transactions`) and its refund (`refunds`). Amounts are **minor units** (BIGINT), never floats.
 
@@ -120,6 +123,12 @@ The professional "veterinarian" appears as two tokens in two **different** role 
 **Moderator / Admin**  
 Operator roles that review content / administer the platform. May be held by a HUMAN or an AGENT (ADR-0006).
 
+**agent-service-auth**  
+The *form* (laid now, behaviour gated) by which an AGENT principal authenticates as a service: a scoped, in-monolith service credential (ADR-0009 — no separate auth service) resolved through the same authenticator chain as humans, with an env signing-secret (≥32) and a rotatable/revocable hashed-secret store keyed to the agent's `users.id` (ADR-0011 §5). No agent token is issued until the AGENT gate is on (DEFAULT HUMAN).
+
+**principal-source-agnostic**  
+The property that authorization (RBAC matrix, CASL abilities, object-level ownership, actor snapshotting) consumes a single principal abstraction `{ actor_id, principal_type, role }` **regardless of how the request authenticated** (ADR-0011 §5). Adding agents later is one additional authenticator (`AgentServiceToken`) on the chain, not an authz/guard rewrite — the authz subject is already agent-agnostic.
+
 ## Statuses & State Machines
 
 **State Machine**  
@@ -130,6 +139,9 @@ A formal model of an entity's lifecycle (states + guarded transitions). ZooLink 
 
 **Moderation status**  
 `listings.moderation_status` ∈ {PENDING, APPROVED, REJECTED, CHANGES_REQUESTED} — the review outcome, a field **separate** from the lifecycle `status`.
+
+**CHANGES_REQUESTED**  
+The **fixable** moderation outcome: the moderator/agent asks the seller to amend the listing (it returns to `DRAFT` for re-submission), as opposed to `REJECTED` (a terminal refusal). This is the canonical token — it supersedes the informal "FLAG"/"flagged" wording in admin-BR, which conflated "needs changes" with "report/flag". Recorded as a `moderation_decisions.decision` value and the `listings.moderation_status` enum (ADR-0003).
 
 **User status**  
 `users.status` ∈ {UNVERIFIED, PENDING_VERIFICATION, VERIFIED, ACTIVE, SUSPENDED, DEACTIVATED}.
@@ -146,10 +158,37 @@ A formal model of an entity's lifecycle (states + guarded transitions). ZooLink 
 **Pre-moderation**  
 The workflow (ADR-0003) where a listing is not publicly visible until a moderator/agent approves it (`PENDING_MODERATION` → `ACTIVE`).
 
+**Lock state** (claim/lock)  
+The exclusivity state of a moderation-queue item relative to the calling principal: `FREE`, `CLAIMED_BY_ME`, `CLAIMED_BY_OTHER`, `LOCK_EXPIRED` (B10, spec 12). A moderator (HUMAN or AGENT) **claims** an item to gain an exclusive lock (`assigned_to`/`locked_at`/`lock_expires_at`, TTL `MOD_LOCK_TTL` ≈ 15 min) so two principals cannot decide the same item; a competing claim → `409 ALREADY_CLAIMED`. Surfaced as the `lockState` queue filter/field.
+
 ## Data & Architecture Concepts
 
 **ID convention**  
 Business entities use **UUID** primary keys; lookup/reference tables (`species`, `breeds`, `cities`, `supported_languages`) use **INTEGER** keys. Hence `species_id`/`breed_id`/`city_id` are INTEGER.
+
+**dataset** (reference-data)  
+A named set of reference/lookup rows managed under one admin CRUD surface (e.g. `species`, `breeds`, `cities`). The Admin reference-data registry is extensibility-first: a new dataset is added without changing the contract/registry shape. **A state-enum is NOT a dataset** — e.g. `animal-statuses` are lifecycle states (a state machine), not operator-editable reference data, so they are excluded from the registry (ADR/plan A2/A3).
+
+**Passwordless auth**  
+End-user authentication uses **phone OTP + OAuth**, never a password. `password_hash` is reserved for operator roles (ADMIN/MODERATOR) only (spec 01 round-4).
+
+**OTP (one-time password)**  
+6-digit SMS verification code: TTL 5 min, 60 s resend cooldown, 5 attempts then 15-min lockout. Stored only as a SHA-256 digest in Redis (never at rest in PG); keyed by `phone_hash`.
+
+**phone_hash (HMAC + pepper)**  
+Deterministic `HMAC-SHA256(phone, server_pepper)` (base64url) of the E.164 phone, stored unique on `users`. Deterministic (unlike bcrypt) so phones are unique/look-up-able without storing the raw number; the `PHONE_HASH_PEPPER` secret is server-side env.
+
+**Account recovery (email-OTP)**  
+Self-service path for a user who lost their phone/OAuth but has a **verified email**: a fresh OTP is sent to that email (`/auth/recover/email/*`) and, once confirmed, a new session is issued (a DEACTIVATED-within-grace account is reactivated). No silent takeover (spec 01 Slice-4).
+
+**Identifier re-bind (admin-assisted)**  
+ADMIN-only, audit-logged replacement of a user's `phone_hash` or an `oauth_*` identifier (`/admin/users/{id}/rebind`) for recovery when no verified email exists. Revokes the target's sessions; never a silent takeover.
+
+**Role-elevation**  
+ADMIN-granted change of `users.role` (`/admin/users/{id}/role`) — USER → BREEDER/FARMER/VETERINARIAN/GROOMER (or operator roles) is never self-claimed; audit-logged and revokes all the target's refresh families (round-4).
+
+**erase_user / right-to-erasure (152-ФЗ)**  
+Anonymise-in-place procedure (`/admin/users/{id}/erase`, data-governance.md §2): PII NULLed/tombstoned, identifiers (`phone_hash`/`oauth_*`/`email`) released, sessions revoked, `notification_logs` redacted, `users.erased_at` stamped; the UUID is retained so FK RESTRICT rows stay valid. Append-only audit/moderation/financial records are retained under legal hold.
 
 **creator_id ≡ seller_id**  
 `creator_id` is the business term for "the user who posted a listing (for audit)"; it maps to the canonical schema column `listings.seller_id`. Same field; for org listings it is the affiliated user who created the listing.

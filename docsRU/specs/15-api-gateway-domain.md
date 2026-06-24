@@ -10,6 +10,8 @@ status: "Черновик"
 ## Результат
 Предоставить безопасный, высокопроизводительный точку входа для всех клиентских запросов к платформе ZooLink. Обрабатывать сквозные проблемы, такие как аутентификация, ограничение скорости, преобразование запросов/ответов, маршрутизация и балансировка нагрузки, обеспечивая при этом наблюдаемость, безопасность и устойчивость.
 
+> ⚠️ **MVP vs Target State.** По [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md) «API Gateway» в MVP — **не** отдельный сервис и не Kubernetes ingress. В модульном монолите MVP он реализован **глобальными NestJS guards/interceptors/filters** (auth, RBAC, rate-limiting через `@nestjs/throttler`+Redis, валидация, error-envelope) за **reverse proxy (Nginx/Caddy)** с терминацией TLS. Kubernetes/HPA, ELK, Jaeger, circuit-breaker и цель 10k RPS в этой спеке — **Target State (Фаза 2+)**; цели нагрузки MVP — в `performance_specification.md` (50 RPS средн. / 200 пик).
+
 ## Область и границы
 **Включено:**
 - Маршрутизация запросов к соответствующим backend-сервисам (модулям) на основе пути и метода

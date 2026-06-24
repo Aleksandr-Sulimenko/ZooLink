@@ -2,7 +2,7 @@
 version: "1.0"
 lastUpdated: "2026-06-15"
 author: "System Analyst"
-status: "Draft"
+status: "Approved"
 ---
 
 # Spec: Payment Domain
@@ -14,7 +14,7 @@ Provide a secure and reliable payment processing service for handling financial 
 **In Scope:**
 - Payment processing for platform services (listing promotions, featured placements, premium subscriptions)
 - Payout processing for users (sale proceeds, breeding fees, service payments)
-- Integration with payment gateways (Stripe, PayPal, etc.) - initial implementation with one provider
+- Integration with **RF-available** payment gateways (ЮKassa + СБП; alternatives Т-Касса/CloudPayments) via the `PaymentProvider` abstraction — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md). Stripe/PayPal are **not usable in RF**.
 - Secure storage of payment metadata (transaction IDs, amounts, statuses) - NOT storing full card details
 - Payment status tracking (pending, completed, failed, refunded, disputed)
 - Refund processing for cancelled or failed transactions
@@ -23,7 +23,8 @@ Provide a secure and reliable payment processing service for handling financial 
 - Integration with Account/Billing system (to be implemented in future phases)
 - Support for one-time payments and recurring payments (subscriptions)
 - Localization of payment interface and receipts (English/Russian)
-- Compliance with PCI DSS requirements (by using tokenization and not storing raw card data)
+- PCI DSS scope minimized: card data handled entirely by the RF provider (ЮKassa) via hosted payment elements/tokenization; raw card data never touches our systems
+- **54-ФЗ fiscalization:** issuing online fiscal receipts (чеки) via the provider's fiscalization capability (ЮKassa supports this)
 - Audit trail for all payment-related actions
 
 **Out of Scope:**
@@ -37,19 +38,19 @@ Provide a secure and reliable payment processing service for handling financial 
 - In-platform wallet/store credit system - deferred to phase 2
 
 ## Constraints
-- **Legal:** Must comply with Russian Federal Law 161-ФЗ "On the National Payment System" and related regulations. Must adhere to data protection laws (152-ФЗ) for any personal data associated with payments.
-- **Security:** Must achieve PCI DSS compliance by never storing, processing, or transmitting raw card data on our systems. Must use tokenization and encryption for payment metadata.
+- **Legal:** Must comply with Russian Federal Law 161-ФЗ "On the National Payment System", **54-ФЗ (ККТ / online fiscal receipts)**, and data protection law 152-ФЗ for any personal data associated with payments.
+- **Security:** PCI DSS obligations are met on the **provider side** (ЮKassa); we never store, process, or transmit raw card data. We persist only tokenized payment metadata.
 - **Performance:** Payment API call latency < 1s for initiating payment; actual processing time depends on gateway but should complete within reasonable time (<30s for most transactions).
 - **Reliability:** System must handle payment gateway downtime gracefully (queueing, user notifications). Must ensure no financial loss due to system failures.
 - **Usability:** Payment process must be simple and clear for users; error messages must be actionable.
 - **Scalability:** System must support 1k+ payment transactions per day initially, scaling to 10k+.
-- **Technology:** Must align with selected stack (NestJS, TypeScript, PostgreSQL, Redis).
+- **Technology:** Must align with selected stack (NestJS, TypeScript, PostgreSQL, **Prisma** ORM per [ADR-0007](../04-decisions/0007-orm-strategy.md), Redis).
 - **Data:** Payment metadata must be stored securely; sensitive data must be tokenized/gateway-only.
 - **Financial Integrity:** All transactions must be reconciled; system must prevent double-charging or missing payments.
 
 ## Prior Decisions
 - Payment service is implemented as a dedicated NestJS module.
-- Uses established payment gateways (Stripe recommended for initial implementation) via their APIs.
+- Uses RF-available payment gateways (**ЮKassa + СБП** default; alternatives Т-Касса/CloudPayments) via their APIs behind the `PaymentProvider` port — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md).
 - No raw card data touches our servers; all payment information is handled directly by the gateway or via secure payment elements.
 - We store only payment metadata: gateway transaction ID, amount, currency, status, user reference, purpose reference (listing ID, etc.), and timestamps.
 - Payment intents are created via gateway API and confirmed client-side with user authentication.
@@ -118,11 +119,11 @@ flowchart TD
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `payment` module with NestJS CLI
-   - [ ] Define PaymentTransaction entity (TypeORM) with fields: id, userId, gatewayTransactionId, amount, currency, status (PENDING/COMPLETED/FAILED/REFUNDED/DISPUTED), purposeType (ListingPromotion/PremiumSubscription/etc.), purposeId, createdAt, updatedAt
-   - [ ] Define Refund entity (TypeORM) for tracking refunds (id, paymentTransactionId, gatewayRefundId, amount, reason, status, createdAt)
+   - [ ] Define PaymentTransaction model (Prisma) with fields: id, userId, gatewayTransactionId, amount_minor (BIGINT), currency, status (PENDING/COMPLETED/FAILED/REFUNDED/DISPUTED), purposeType (ListingPromotion/PremiumSubscription/etc.), purposeId, idempotencyKey, createdAt, updatedAt
+   - [ ] Define Refund model (Prisma) for tracking refunds (id, paymentTransactionId, gatewayRefundId, amount_minor, reason, status, createdAt)
    - [ ] Implement PaymentController (create payment intent, confirm payment, get transaction status, process refund, webhook handler)
    - [ ] Implement PaymentService (business logic for payment creation, status checking, refund processing)
-   - [ ] Create payment gateway provider abstraction (Stripe/Twilio/PayPal)
+   - [ ] Create `PaymentProvider` gateway abstraction with RF adapters (ЮKassa/Т-Касса/CloudPayments)
    - [ ] Implement secure webhook endpoint for payment gateway notifications
    - [ ] Implement idempotency keys for payment requests to prevent double-charging
    - [ ] Set up logging for payment events (created, completed, failed, refunded)
@@ -142,7 +143,7 @@ flowchart TD
    - [ ] Set up logging for payment events and webhook deliveries
    - [ ] Add security headers and CORS configuration (with strict origins for webhooks)
    - [ ] Implement monitoring for payment success rates, failure reasons, and gateway latency
-   - [ ] Plan for PCI DSS compliance validation (external audit)
+   - [ ] Confirm provider-side PCI DSS posture (ЮKassa) and configure 54-ФЗ fiscal receipt issuance
 
 4. **Verification Criteria**
    - [ ] Unit tests achieve >90% coverage for payment module (backend)

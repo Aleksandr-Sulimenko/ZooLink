@@ -9,8 +9,8 @@ graph TD
     %% External Systems (from Level 1)
     subgraph External_Systems
         direction TB
-        SMS["SMS Gateway<br/>(Twilio or similar)"]
-        Email["Email Service<br/>(SendGrid or similar)"]
+        SMS["SMS Gateway<br/>(SMS.RU / SMSC / MTS Exolve)"]
+        Email["Email Service<br/>(Unisender / Mailopost)"]
         Maps["Geocoding & Maps<br/>(Yandex.Maps API)"]
         Storage["Object Storage<br/>(S3-compatible)"]
         OAuth["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
@@ -22,7 +22,7 @@ graph TD
         %% Web Application
         subgraph WebApp["Web Application<br/>(SPA/PWA)"]
             direction TB
-            SPA["Single Page Application<br/>(React/Vue/Angular)"]
+            SPA["Single Page Application<br/>(React + TypeScript)"]
             PWA_ServiceWorker["PWA Service Worker<br/>(Offline caching)"]
         end
 
@@ -47,7 +47,7 @@ graph TD
             direction TB
             DB[(PostgreSQL<br/>Primary Database)]
             Cache[(Redis Cache<br/>Sessions, reference data)]
-            Search_Index[(Elasticsearch<br/>Full-text search)]
+            Search_Index[(Elasticsearch<br/>Full-text search — Фаза 2+)]
             Object_Storage[(S3-compatible<br/>File storage)]
         end
     end
@@ -120,7 +120,7 @@ graph TD
 ### Data Stores
 - **PostgreSQL Database**: Primary relational database for all domain data
 - **Redis Cache**: Session storage, reference data caching, temporary data
-- **Elasticsearch**: Full-text search for listings and animal profiles (future enhancement)
+- **Elasticsearch**: Full-text search for listings and animal profiles (**Фаза 2+, not in MVP**). MVP search runs on PostgreSQL FTS (`russian` config + `pg_trgm`).
 - **Object Storage**: Scalable storage for user-uploaded media files
 
 ### External Systems
@@ -130,7 +130,7 @@ graph TD
 - **User ↔ WebApp**: HTTPS via desktop/mobile browser
 - **WebApp ↔ API Gateway**: REST/JSON over HTTPS with JWT auth
 - **API Gateway ↔ Modules**: Internal NestJS module communication
-- **Modules ↔ Database**: SQL via TypeORM/Prisma ORM
+- **Modules ↔ Database**: Prisma ORM (primary); Kysely / parameterized raw SQL for geo and complex JSONB queries (see `04-decisions/0007-orm-strategy.md`)
 - **Modules ↔ Cache**: Redis protocol for caching layers
 - **Modules ↔ Search Index**: Elasticsearch DSL for search operations
 - **Modules ↔ Object Storage**: S3-compatible API for file operations

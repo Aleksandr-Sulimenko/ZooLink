@@ -3,6 +3,15 @@
 ## Purpose
 Shows the high-level components and their interfaces within the ZooLink platform.
 
+> ⚠️ **MVP vs Target State.** This diagram depicts the **Target Architecture (Фаза 2+)**, not the MVP.
+> Per [ADR-0001](../04-decisions/0001-tech-stack.md) and [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md),
+> the **MVP is a modular monolith** (a single NestJS deployment) on Docker Compose.
+> The following are **deferred to Фаза 2+** and must **not** be built in the MVP:
+> microservices decomposition, **gRPC** inter-service calls, the standalone **Event Bus** (MVP uses the
+> `outbox_events` table drained by a background worker), the **SSR Web Gateway** (frontend is a Vite SPA/PWA),
+> read replicas, and the service mesh. **Elasticsearch** and **Payment Gateways** are also Фаза 2+.
+> Treat the boxes below as *logical modules within the monolith* for the MVP.
+
 ## Diagram Description
 ```mermaid
 graph TD
@@ -44,11 +53,11 @@ graph TD
     %% External Systems
     subgraph External_Systems
         direction TB
-        SMS_Gateway["SMS Provider<br/>(Twilio)"]
-        Email_Service["Email Provider<br/>(SendGrid)"]
+        SMS_Gateway["SMS Provider<br/>(SMS.RU / SMSC / MTS Exolve)"]
+        Email_Service["Email Provider<br/>(Unisender / Mailopost)"]
         Maps_Service["Maps Provider<br/>(Yandex.Maps)"]
-        OAuth_Providers["OAuth Providers<br/>(Google, Apple, etc.)"]
-        Payment_Gateways["Payment Gateways<br/>(Stripe, PayPal)"]
+        OAuth_Providers["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
+        Payment_Gateways["Payment Gateways — Фаза 2+<br/>(ЮKassa + СБП)"]
     end
 
     %% User Interfaces
@@ -208,7 +217,7 @@ graph TD
 - **Email Provider**: Third-party service for transactional and marketing emails
 - **Maps Provider**: Geocoding and mapping service for location-based features
 - **OAuth Providers**: Third-party identity providers for social login options
-- **Payment Gateways**: Future integration with payment processors for financial transactions
+- **Payment Gateways**: Фаза 2+ integration with **RF-available** processors (ЮKassa + СБП; see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)). Stripe/PayPal are **not usable in RF** and must not be assumed.
 
 ### User Interfaces
 - **Web Application**: Single Page Application with PWA capabilities for browser access

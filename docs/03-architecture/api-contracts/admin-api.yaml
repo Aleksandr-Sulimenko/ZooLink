@@ -2,49 +2,81 @@ openapi: 3.0.3
 info:
   title: ZooLink Admin API
   version: 1.0.0
-  description: API for managing reference data, moderation workflows, and system settings in ZooLink.
+  description: >-
+    API for managing reference data, moderation workflows, and system settings in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), LocalizedString (§6, admin
+    returns both locales), §12 sort convention, If-Match/ETag on mutating PATCH (§10).
+
+
+    Reference-data `dataset` reconciliation (round-9 → A3, normative) — aligned to the actual schema
+    (`database_schema.sql`) and rbac-matrix.md.
+
+    WHAT: the `dataset` enum is the **5 managed INT-keyed lookup tables** that exist as CRUD-able admin
+    reference data: `species`, `breeds`, `cities`, `health_certifications`, `genetic_markers`.
+    The last two were added in A3 (ADMIN_PHASE_ACTION_PLAN) as **form-now / behaviour-later** breeding
+    dictionaries (livestock health-certs & genetic markers): the managed lookup form + CRUD exists now,
+    while their marketplace **filtering** is deferred (Фаза 2) — anti-rewrite per IMPLEMENTATION_PLAYBOOK §5.
+    NOT admin-managed datasets (excluded from the enum):
+      - `listing-types`  → fixed DB CHECK enum on `listings.listing_type`
+                           ('sale','breeding','show','adoption','stud_service'); schema/ADR change, not CRUD.
+      - `animal-statuses`→ fixed DB CHECK lifecycle enums on `listings.status` / `animals`; same as above.
+      - `traits` / `temperament_tags` / `health_flags` → free text/JSONB soft tags, not controlled lookups;
+                           a lookup table can be added additively in Фаза 2 without a rewrite.
+
+    WHY: species/breeds/cities/health_certifications/genetic_markers are the INT-keyed managed lookups in
+    the schema (= code `DATASETS`); the contract must neither list datasets with no backing managed table
+    (404/handler drift) nor omit ones that now exist (code↔contract drift).
+
+    WHY BETTER: the contract matches the source of truth (schema + RBAC + code DATASETS), keeps MVP scope
+    honest (form now, filtering behaviour gated), and the dataset registry absorbs new lookups without
+    changing the CRUD/audit/localization shape.
+
+    Also (round-9): reference-data entry `id` is an **integer** (SERIAL lookup keys per the id-type
+    convention: lookups=INT, entities=UUID), not a UUID; and list responses use the standard
+    `{ items, meta: PageMeta }` envelope (API_CONVENTIONS.md §5).
+
+    B0.6 (done, ADR-0011 §6): actor-bearing responses carry the `{ actorId, principalType }` agent-badge
+    (the shared `Actor` schema). AuditLogEntry/ModerationLogEntry/ModerationActionResponse expose `actor`
+    (replacing flat `performedBy`/`moderatorId`; `performedByName` folds into `actor.actorDisplayName`);
+    SystemSetting.updatedBy is an `Actor`. The audit-log `actorId` query param replaces `performedBy`.
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /reference-data/{dataset}:
     get:
       summary: Get all active entries in a reference dataset
       operationId: getReferenceData
+      description: >-
+        Public read (security opt-out per API_CONVENTIONS §3): reference data is reference-grade public
+        content (rbac-matrix.md "Reference data = R/R/CRUD" + §3 public-endpoint list). PUBLIC reads return
+        the resolved `name` (Accept-Language); an authenticated ADMIN/editor read returns `nameLocalized`
+        (§6). `includeInactive=true` is honoured for ADMIN only.
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: query
           name: includeInactive
-          schema:
-            type: boolean
-            default: false
+          schema: { type: boolean, default: false }
           description: Include inactive/deactivated entries
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Items per page
         - in: query
           name: search
-          schema:
-            type: string
-            maxLength: 100
+          schema: { type: string, maxLength: 100 }
           description: Search term for filtering (name or code)
       responses:
         '200':
@@ -56,270 +88,217 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ReferenceDataEntry'
-                  total:
-                    type: integer
-                    description: Total number of entries
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '400':
-          description: Bad request (invalid dataset)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+                    items: { $ref: '#/components/schemas/ReferenceDataEntry' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create new reference data entry
       operationId: createReferenceData
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
-      security:
-        - bearerAuth: []
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ReferenceDataCreateRequest'
+            schema: { $ref: '#/components/schemas/ReferenceDataCreateRequest' }
       responses:
         '201':
           description: Reference data entry created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (validation error or duplicate)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/new:
     get:
       summary: Get form/template for creating new reference data entry
       operationId: getReferenceDataForm
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
-      security:
-        - bearerAuth: []
       responses:
         '200':
           description: Form template for creating reference data entry
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataForm'
-        '400':
-          description: Bad request (invalid dataset)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataForm' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/{id}:
     get:
       summary: Get specific reference data entry by ID
       operationId: getReferenceDataById
+      description: >-
+        Public read (security opt-out per API_CONVENTIONS §3): reference data is public content
+        (rbac-matrix.md "Reference data = R/R/CRUD"). PUBLIC reads return the resolved `name`
+        (Accept-Language); an authenticated ADMIN/editor read returns `nameLocalized` (§6).
+      security: []
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
       responses:
         '200':
           description: Reference data entry details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update reference data entry
       operationId: updateReferenceData
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ReferenceDataUpdateRequest'
+            schema: { $ref: '#/components/schemas/ReferenceDataUpdateRequest' }
       responses:
         '200':
           description: Reference data entry updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /reference-data/{dataset}/{id}/toggle-active:
     patch:
       summary: Activate or deactivate reference data entry
       operationId: toggleReferenceDataActive
+      description: State-transition endpoint — keeps guard-based 409 (API_CONVENTIONS §10) instead of If-Match.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: dataset
           required: true
-          schema:
-            type: string
-            enum: [species, breeds, cities, traits, health-certifications, genetic-markers, listing-types, animal-statuses]
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
           description: Reference dataset name
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Reference data entry ID
-      security:
-        - bearerAuth: []
+          schema: { type: integer, minimum: 1 }
+          description: Reference data entry ID (integer SERIAL key; lookups=INT per id-type convention)
       responses:
         '200':
           description: Reference data entry activation status toggled successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReferenceDataEntry'
-        '400':
-          description: Bad request (invalid operation)
-        '404':
-          description: Reference data entry not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/ReferenceDataEntry' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/queue:
     get:
-      summary: Get pending listings for moderation
+      summary: '[SUPERSEDED] Get pending listings — use moderation-api'
       operationId: getModerationQueue
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** Moderation is owned by **moderation-api.yaml**, which
+        holds the single decision vocabulary (APPROVED / REJECTED / CHANGES_REQUESTED), claim/lock,
+        SLA and the agent-as-principal actor model. This admin-api moderation block is kept only as
+        a deprecated pointer to prevent a divergent second moderation contract (DIV-2/3).
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: query
-          name: listingType
-          schema:
-            type: string
-            enum: [sale, breeding, show, adoption, stud_service]
+          name: listing_type
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
           description: Filter by listing type
         - in: query
-          name: species
-          schema:
-            type: string
-            format: uuid
-          description: Filter by species
+          name: species_id
+          schema: { type: integer }
+          description: Filter by species (INT lookup)
         - in: query
-          name: breed
-          schema:
-            type: string
-            format: uuid
-          description: Filter by breed
+          name: breed_id
+          schema: { type: integer }
+          description: Filter by breed (INT lookup)
         - in: query
-          name: minPrice
-          schema:
-            type: integer
-          description: Minimum price in cents
+          name: price_min
+          schema: { type: integer }
+          description: Minimum price in minor units
         - in: query
-          name: maxPrice
-          schema:
-            type: integer
-          description: Maximum price in cents
+          name: price_max
+          schema: { type: integer }
+          description: Maximum price in minor units
         - in: query
-          name: location
-          schema:
-            type: string
-            format: uuid
-          description: Filter by city/region
+          name: city_id
+          schema: { type: integer }
+          description: Filter by city/region (INT lookup)
         - in: query
-          name: radiusKm
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
+          name: radius_km
+          schema: { type: integer, minimum: 1, maximum: 100 }
           description: Search radius in kilometers from location
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Items per page
         - in: query
-          name: sortBy
-          schema:
-            type: string
-            enum: [createdAt, price, location]
-            default: createdAt
-          description: Sort field
-        - in: query
-          name: sortOrder
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-          description: Sort order
+          name: sort
+          schema: { type: string, default: 'created_at:desc' }
+          description: 'Sort (§12): <field>:<asc|desc>, e.g. created_at:desc | price_cents:asc'
       responses:
         '200':
           description: Paginated list of pending listings for moderation
@@ -330,87 +309,74 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ModerationQueueItem'
-                  total:
-                    type: integer
-                    description: Total number of pending listings
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+                    items: { $ref: '#/components/schemas/ModerationQueueItem' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/listing/{id}:
     get:
-      summary: Get listing details for moderation review
+      summary: '[SUPERSEDED] Get listing for moderation — use moderation-api'
       operationId: getListingForModeration
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** Moderation is owned by moderation-api.yaml (single decision vocabulary + actor model). Kept only as a deprecated pointer.'
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Listing ID
-      security:
-        - bearerAuth: []
       responses:
         '200':
           description: Listing details for moderation
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationListingDetails'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+              schema: { $ref: '#/components/schemas/ModerationListingDetails' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/action:
     post:
-      summary: Perform moderation action on listing (approve/reject/flag)
+      summary: '[SUPERSEDED] Perform moderation action — use moderation-api'
       operationId: performModerationAction
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** The canonical moderation action endpoint lives in
+        **moderation-api.yaml**; the single decision vocabulary is APPROVED / REJECTED /
+        CHANGES_REQUESTED (the legacy FLAG verb is retired). Kept only as a deprecated pointer.
+        State-transition endpoint — keeps guard-based 409 (API_CONVENTIONS §10).
+      x-required-roles: [MODERATOR, ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ModerationActionRequest'
+            schema: { $ref: '#/components/schemas/ModerationActionRequest' }
       responses:
         '200':
           description: Moderation action performed successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ModerationActionResponse'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+              schema: { $ref: '#/components/schemas/ModerationActionResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/log/{listing_id}:
     get:
-      summary: Get moderation history for a listing
+      summary: '[SUPERSEDED] Get moderation history — use moderation-api'
       operationId: getModerationLog
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** Moderation history is owned by moderation-api.yaml. Kept only as a deprecated pointer.'
+      x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
           name: listing_id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Listing ID
-      security:
-        - bearerAuth: []
       responses:
         '200':
           description: Moderation history for listing
@@ -418,41 +384,38 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/ModerationLogEntry'
-        '404':
-          description: Listing not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - moderator/admin required)
+                items: { $ref: '#/components/schemas/ModerationLogEntry' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /moderation/ban-user:
     post:
-      summary: Ban user with reason and duration
+      summary: '[SUPERSEDED] Ban user — use moderation-api'
       operationId: banUser
-      security:
-        - bearerAuth: []
+      deprecated: true
+      description: '**SUPERSEDED — do not implement.** User-ban as a moderation action is owned by moderation-api.yaml (single decision vocabulary + actor model). Kept only as a deprecated pointer.'
+      x-required-roles: [ADMIN]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BanUserRequest'
+            schema: { $ref: '#/components/schemas/BanUserRequest' }
       responses:
         '200':
           description: User banned successfully
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BanUserResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /system/settings:
     get:
       summary: Get current system settings
       operationId: getSystemSettings
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       responses:
         '200':
           description: System settings retrieved successfully
@@ -462,113 +425,90 @@ paths:
                 type: object
                 additionalProperties:
                   $ref: '#/components/schemas/SystemSetting'
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /system/settings/{key}:
     patch:
       summary: Update system setting
       operationId: updateSystemSetting
-      security:
-        - bearerAuth: []
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: key
           required: true
-          schema:
-            type: string
-            description: Setting key to update
+          schema: { type: string }
+          description: Setting key to update
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior read of the setting
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SystemSettingUpdateRequest'
+            schema: { $ref: '#/components/schemas/SystemSettingUpdateRequest' }
       responses:
         '200':
           description: System setting updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SystemSetting'
-        '400':
-          description: Bad request (validation error or invalid key)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+              schema: { $ref: '#/components/schemas/SystemSetting' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /audit/log:
     get:
       summary: Get audit trail entries
       operationId: getAuditLog
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       parameters:
         - in: query
           name: entityType
-          schema:
-            type: string
-            enum: [listing, user, organization, reference-data, moderation-action]
+          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action] }
           description: Filter by entity type
         - in: query
           name: entityId
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by entity ID
         - in: query
           name: actionType
-          schema:
-            type: string
-            enum: [created, updated, deleted, approved, rejected, banned, role-changed]
+          schema: { type: string, enum: [created, updated, deleted, approved, rejected, banned, role-changed] }
           description: Filter by action type
         - in: query
-          name: performedBy
-          schema:
-            type: string
-            format: uuid
-          description: Filter by user who performed the action
+          name: actorId
+          schema: { type: string, format: uuid }
+          description: Filter by the acting principal (users.id) who performed the action (was performedBy)
         - in: query
           name: startDate
-          schema:
-            type: string
-            format: date
+          schema: { type: string, format: date }
           description: Start date for filtering (inclusive)
         - in: query
           name: endDate
-          schema:
-            type: string
-            format: date
+          schema: { type: string, format: date }
           description: End date for filtering (inclusive)
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 50
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
           description: Items per page
         - in: query
-          name: sortBy
-          schema:
-            type: string
-            enum: [createdAt, entityType, actionType]
-            default: createdAt
-          description: Sort field
-        - in: query
-          name: sortOrder
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-          description: Sort order
+          name: sort
+          schema: { type: string, default: 'created_at:desc' }
+          description: 'Sort (§12): <field>:<asc|desc>, e.g. created_at:desc'
       responses:
         '200':
           description: Paginated audit trail entries
@@ -579,59 +519,36 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/AuditLogEntry'
-                  total:
-                    type: integer
-                    description: Total number of audit log entries
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+                    items: { $ref: '#/components/schemas/AuditLogEntry' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /users/roles:
     get:
       summary: Get users with their roles
       operationId: getUsersWithRoles
-      security:
-        - bearerAuth: []
+      x-required-roles: [ADMIN]
       parameters:
         - in: query
           name: role
-          schema:
-            type: string
-            enum: [USER, MODERATOR, ADMIN]
+          schema: { type: string, enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER] }
           description: Filter by role
         - in: query
           name: isActive
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by active status
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Items per page
         - in: query
           name: search
-          schema:
-            type: string
-            maxLength: 100
+          schema: { type: string, maxLength: 100 }
           description: Search term for filtering (full name or email)
       responses:
         '200':
@@ -643,56 +560,57 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/UserRoleInfo'
-                  total:
-                    type: integer
-                    description: Total number of users matching filters
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
+                    items: { $ref: '#/components/schemas/UserRoleInfo' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /users/{id}/role:
     patch:
-      summary: Change user role
+      summary: '[SUPERSEDED] Change user role — use auth-api PATCH /admin/users/{userId}/role'
       operationId: changeUserRole
+      deprecated: true
+      description: >-
+        **SUPERSEDED — do not implement.** The canonical, *implemented* role-change endpoint is
+        `PATCH /admin/users/{userId}/role` (`adminSetUserRole`) in **auth-api.yaml**, which owns
+        the role-elevation flow (7-role enum, audit, agent-as-principal actor snapshot). This
+        admin-api duplicate is kept only as a deprecated pointer to avoid two divergent contracts
+        for the same operation (DIV-2/3). Optimistic concurrency (§10) — requires If-Match
+        carrying the ETag from a prior GET.
+      x-required-roles: [ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: User ID
-      security:
-        - bearerAuth: []
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior read of the user
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ChangeUserRoleRequest'
+            schema: { $ref: '#/components/schemas/ChangeUserRoleRequest' }
       responses:
         '200':
           description: User role changed successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/UserRoleInfo'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions - admin only)
-        '404':
-          description: User not found
+              schema: { $ref: '#/components/schemas/UserRoleInfo' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -700,41 +618,106 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    Actor:
+      type: object
+      description: >-
+        Actor-badge: the acting principal on any actor-bearing response (ADR-0011 §6). principalType is the
+        write-time snapshot of users.principal_type (HUMAN|AGENT); it lets a consumer tell a human-decided from
+        an agent-decided action without a second lookup. DEFAULT HUMAN in MVP (no AGENT active until gated).
+      required: [actorId, principalType]
+      properties:
+        actorId:
+          type: string
+          format: uuid
+          description: Acting principal (users.id).
+        principalType:
+          type: string
+          enum: [HUMAN, AGENT]
+          description: Snapshot of the acting principal's type at the moment of the action (ADR-0011 §1).
+        actorDisplayName:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Optional human-readable label of the actor (operator UI convenience).
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    # round-9 / B0 / A2: reconciled to database_schema.sql (migration 0018). Lookup tables
+    # (species/breeds/cities) localize the name via name_localized JSONB {ru,en} — a single
+    # LocalizedString, not flat name_ru/name_en. Per API_CONVENTIONS §6 the read shape depends on
+    # context: an ADMIN/editor read returns the full `nameLocalized` (both locales); a PUBLIC read
+    # returns the resolved `name` string for Accept-Language (en fallback). Both fields are declared;
+    # exactly the context-appropriate one is populated. `code` is present only on species/breeds
+    # (UNIQUE: species globally, breeds per-species); cities have no code. `speciesId` is REQUIRED for
+    # breeds (FK → species). `sortOrder` is the display ordering (migration 0018). No
+    # description/version/deactivated_at columns; soft-delete = isActive boolean.
     ReferenceDataEntry:
       type: object
       required:
         - id
-        - code
-        - name
         - isActive
+        - sortOrder
         - createdAt
         - updatedAt
       properties:
         id:
-          type: string
-          format: uuid
-          description: Unique identifier
+          type: integer
+          minimum: 1
+          description: Unique identifier (SERIAL; lookups=INT per id-type convention)
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset (e.g., 'dog', 'labrador')
+          nullable: true
+          description: Unique code within dataset (species/breeds only; null for cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: Parent species id (breeds only; null otherwise)
         name:
           type: string
-          maxLength: 100
-          description: 'Display name (localized for MVP: Russian)'
-        name_en:
-          type: string
-          maxLength: 100
           nullable: true
-          description: English name (for future phases)
-        description:
-          type: string
-          maxLength: 500
+          description: >-
+            Resolved display name for the requested Accept-Language (en fallback). Populated on PUBLIC
+            reads (API_CONVENTIONS §6); null on ADMIN reads (use nameLocalized instead).
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           nullable: true
-          description: Detailed description (optional)
+          description: >-
+            Display name as LocalizedString {en, ru} (both locales). Populated on ADMIN/editor reads;
+            null on PUBLIC reads (use the resolved `name` instead).
+        sortOrder:
+          type: integer
+          description: Display ordering within the dataset (ascending; default 0)
+        market:
+          type: string
+          enum: [pet, livestock]
+          nullable: true
+          description: Market the species belongs to (species only; ADR-0002)
         isActive:
           type: boolean
-          description: Whether entry is active (can be deactivated without deletion)
+          description: Whether entry is active (deactivated via isActive=false, not deleted)
         createdAt:
           type: string
           format: date-time
@@ -743,60 +726,50 @@ components:
           type: string
           format: date-time
           description: Last update timestamp
-        deactivatedAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: When entry was deactivated (null if active)
-        version:
-          type: integer
-          default: 1
-          description: Version number for optimistic locking
     ReferenceDataCreateRequest:
       type: object
       required:
-        - code
-        - name
+        - nameLocalized
       properties:
         code:
           type: string
           maxLength: 50
-          description: Unique code within dataset
-        name:
+          description: Unique code (required for species/breeds; rejected for cities)
+        speciesId:
+          type: integer
+          minimum: 1
+          description: Parent species id (required for breeds; rejected for species/cities)
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Display name (LocalizedString {en, ru})
+        market:
           type: string
-          maxLength: 100
-          description: Display name (Russian)
-        name_en:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
-          type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Market (species only; defaults to 'pet' when omitted)
+        sortOrder:
+          type: integer
+          default: 0
+          description: Display ordering within the dataset (ascending)
         isActive:
           type: boolean
           default: true
           description: Whether entry is active upon creation
     ReferenceDataUpdateRequest:
       type: object
+      description: >-
+        Partial update. `code`/`speciesId` are immutable (identity of the lookup row); only the
+        display name, market (species) and isActive may change.
       properties:
-        name:
+        nameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Display name (LocalizedString {en, ru})
+        market:
           type: string
-          maxLength: 100
-          description: Display name (Russian)
-        name_en:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: English name (optional)
-        description:
-          type: string
-          maxLength: 500
-          nullable: true
-          description: Detailed description (optional)
+          enum: [pet, livestock]
+          description: Market (species only)
+        sortOrder:
+          type: integer
+          description: Display ordering within the dataset (ascending)
         isActive:
           type: boolean
           description: Whether entry is active
@@ -844,7 +817,7 @@ components:
         - animalId
         - sellerId
         - listingType
-        - title
+        - titleLocalized
         - createdAt
         - speciesId
         - breedId
@@ -869,22 +842,24 @@ components:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing description (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents (null for non-price listings)
+          description: Price in minor units (null for non-price listings)
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Currency code (ISO 4217)
         quantity:
           type: integer
           default: 1
@@ -898,14 +873,12 @@ components:
           nullable: true
           description: Search radius in meters
         speciesId:
-          type: string
-          format: uuid
-          description: Animal species reference
+          type: integer
+          description: Animal species reference (INT lookup)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Animal breed reference (null if custom/other)
+          description: Animal breed reference (INT lookup; null if custom/other)
         breedText:
           type: string
           maxLength: 100
@@ -979,7 +952,7 @@ components:
         - animal
         - seller
         - listingType
-        - title
+        - titleLocalized
         - createdAt
       properties:
         id:
@@ -998,22 +971,24 @@ components:
           type: string
           enum: [sale, breeding, show, adoption, stud_service]
           description: Type of listing
-        title:
-          type: string
-          maxLength: 255
-          description: Listing title
-        description:
-          type: string
-          description: Listing description
+        titleLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing title (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Listing description (LocalizedString {en, ru})
         priceCents:
           type: integer
+          format: int64
           nullable: true
-          description: Price in cents
+          description: Price in minor units
         currency:
           type: string
+          minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           default: RUB
-          description: Currency code
+          description: Currency code (ISO 4217)
         quantity:
           type: integer
           default: 1
@@ -1051,8 +1026,7 @@ components:
           default: []
         moderationHistory:
           type: array
-          items:
-            $ref: '#/components/schemas/ModerationLogEntry'
+          items: { $ref: '#/components/schemas/ModerationLogEntry' }
           description: Previous moderation actions on this listing
           default: []
     AnimalSummary:
@@ -1069,14 +1043,12 @@ components:
           format: uuid
           description: Animal ID
         speciesId:
-          type: string
-          format: uuid
-          description: Species reference
+          type: integer
+          description: Species reference (INT lookup)
         breedId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Breed reference (null if custom/other)
+          description: Breed reference (INT lookup; null if custom/other)
         breedText:
           type: string
           maxLength: 100
@@ -1184,10 +1156,9 @@ components:
           maxLength: 100
           description: User's full name
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Reference to city for geo-search (INT lookup)
         avatarUrl:
           type: string
           format: uri
@@ -1206,7 +1177,7 @@ components:
           description: True if email confirmed via link
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
           description: User role
         isActive:
           type: boolean
@@ -1234,7 +1205,7 @@ components:
       required:
         - id
         - listingId
-        - moderatorId
+        - actor
         - action
         - createdAt
       properties:
@@ -1246,10 +1217,11 @@ components:
           type: string
           format: uuid
           description: Listing ID
-        moderatorId:
-          type: string
-          format: uuid
-          description: Moderator user ID
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Acting principal as the {actorId, principalType} agent-badge (ADR-0011 §6); replaces the former flat
+            moderatorId. principalType is the write-time snapshot (moderation_decisions.actor_principal_type).
         action:
           type: string
           enum: [approved, rejected, flagged]
@@ -1286,7 +1258,7 @@ components:
       required:
         - listingId
         - action
-        - moderatorId
+        - actor
         - processedAt
       properties:
         listingId:
@@ -1302,10 +1274,11 @@ components:
           maxLength: 500
           nullable: true
           description: Reason for rejection (if applicable)
-        moderatorId:
-          type: string
-          format: uuid
-          description: Moderator user ID who performed the action
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Acting principal as the {actorId, principalType} agent-badge (ADR-0011 §6); replaces the former flat
+            moderatorId. principalType is the write-time snapshot (moderation_decisions.actor_principal_type).
         processedAt:
           type: string
           format: date-time
@@ -1388,10 +1361,11 @@ components:
           format: date-time
           description: Last update timestamp
         updatedBy:
-          type: string
-          format: uuid
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
           nullable: true
-          description: User ID who last updated the setting
+          description: >-
+            Acting principal who last updated the setting, as the {actorId, principalType} agent-badge
+            (ADR-0011 §6); replaces the former flat updatedBy uuid. Null if never updated.
     SystemSettingUpdateRequest:
       type: object
       required:
@@ -1412,7 +1386,7 @@ components:
         - entityType
         - entityId
         - actionType
-        - performedBy
+        - actor
         - createdAt
       properties:
         id:
@@ -1432,15 +1406,12 @@ components:
           type: string
           enum: [created, updated, deleted, approved, rejected, banned, role-changed, login, logout]
           description: Type of action performed
-        performedBy:
-          type: string
-          format: uuid
-          description: User ID who performed the action
-        performedByName:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Name of user who performed the action (for display)
+        actor:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: >-
+            Acting principal as the {actorId, principalType} agent-badge (ADR-0011 §6); replaces the former flat
+            performedBy uuid. principalType is the write-time snapshot (audit_log.actor_principal_type); the
+            display name (former performedByName) is carried as actor.actorDisplayName.
         details:
           type: string
           maxLength: 1000
@@ -1485,7 +1456,7 @@ components:
           description: Email address for notifications
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
           description: User role
         isActive:
           type: boolean
@@ -1509,10 +1480,9 @@ components:
           nullable: true
           description: When user chose to deactivate (null if active)
         cityId:
-          type: string
-          format: uuid
+          type: integer
           nullable: true
-          description: Reference to city for geo-search
+          description: Reference to city for geo-search (INT lookup)
         avatarUrl:
           type: string
           format: uri
@@ -1526,5 +1496,11 @@ components:
       properties:
         role:
           type: string
-          enum: [USER, MODERATOR, ADMIN]
+          enum: [USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER]
           description: New role for user
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

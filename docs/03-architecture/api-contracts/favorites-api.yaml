@@ -1,0 +1,81 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Favorites API
+  version: 1.0.0
+  description: >
+    User favorites (saved listings). Conforms to API_CONVENTIONS.md: bearer auth required,
+    RFC7807 Problem errors, page/limit pagination. Backed by the `favorites` table (UNIQUE user_id+listing_id).
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /favorites:
+    get:
+      summary: List the current user's favorite listings
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      parameters:
+        - { in: query, name: page,  schema: { type: integer, default: 1, minimum: 1 } }
+        - { in: query, name: limit, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: Page of favorites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Favorite" } }
+                  meta:  { $ref: "#/components/schemas/PageMeta" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+  /listings/{id}/favorite:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Add a listing to favorites (idempotent)
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      responses:
+        "201": { description: Added (or already present) }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Remove a listing from favorites (idempotent)
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      responses:
+        "204": { description: Removed (or was absent) }
+        "401": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Favorite:
+      type: object
+      properties:
+        id:        { type: string, format: uuid }
+        listingId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+  responses:
+    Problem:
+      description: RFC7807 problem
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }

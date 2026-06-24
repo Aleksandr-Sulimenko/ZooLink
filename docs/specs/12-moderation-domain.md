@@ -102,7 +102,7 @@ flowchart TD
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `moderation` module with NestJS CLI
-   - [ ] Define ModerationDecision entity (TypeORM) with fields: id, moderatorId (User reference), entityType (Listing/Animal), entityId, decision (APPROVED/REJECTED/CHANGES_REQUESTED), reason (enum), notes (optional), createdAt
+   - [ ] Define ModerationDecision model (Prisma) with fields: id, moderatorId (User reference), entityType (Listing/Animal), entityId, decision (APPROVED/REJECTED/CHANGES_REQUESTED), reason (enum), notes (optional), createdAt
    - [ ] Add moderationStatus field to Listing and Animal entities (or create association table)
    - [ ] Implement ModerationController (get queue, get item details, submit decision)
    - [ ] Implement ModerationService (business logic for queue retrieval, decision processing, notification triggering)
@@ -136,6 +136,103 @@ flowchart TD
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 
 ---
+
+## Queue operations (round-5, normative)
+
+- **Queue & FIFO:** the queue = listings in `PENDING_MODERATION` ordered by `moderation_enqueued_at ASC` (set on
+  submit), index `idx_listings_modqueue`. Target <2 s / 100 items.
+- **Assignment / lock (no double moderation):** a moderator **claims** an item — `assigned_to`, `locked_at`,
+  `lock_expires_at` (migration 0009). A claim is exclusive for `MOD_LOCK_TTL` (default 15 min, auto-released on
+  expiry). Two moderators (or an AI agent + human) cannot act on the same item; second claim → `409`.
+- **Reason taxonomy:** `moderation_reasons` is seeded (migration 0010): `prohibited_species, incomplete_info,
+  poor_photos, suspected_fraud, price_violation, wrong_category, duplicate, animal_welfare, policy_violation`.
+  A **reason is mandatory** on REJECT and CHANGES_REQUESTED; its `description_localized` feeds the
+  `listing_rejected`/`listing_changes_requested` notification (`reason` variable).
+- **Re-moderation on edit:** editing an ACTIVE listing's **material fields** (title, description, photos, price,
+  species/breed, listing_type) returns it to `PENDING_MODERATION` (`moderation_status='PENDING'`); trivial edits
+  (e.g. toggling a saved flag) do not. Enforced at the service layer.
+- **SLA & escalation:** SLA clock starts at `moderation_enqueued_at`; on timeout the item is **escalated to ADMIN**
+  (event `Moderation.Escalated`) and stays `PENDING_MODERATION` — never auto-approved/rejected.
+- **Animal moderation:** in MVP animals are **not** independently pre-moderated; an animal is reviewed via its
+  listing. `entity_type='ANIMAL'` in `moderation_decisions`/`content_reports` is used only for **report-driven**
+  decisions (e.g. acting on a reported animal), not a standalone animal queue.
+- **Appeals:** **no appeal flow in MVP** — a hard REJECT is terminal (the seller may create a new corrected listing);
+  CHANGES_REQUESTED is the fixable path. (Appeals are Фаза 2; appeal-rate is not an MVP metric.)
+- **Audit:** every decision writes `moderation_decisions` (append-only) **and** an `audit_log` row.
+- **AI moderator (ADR-0006):** an AGENT uses the same claim/lock contract; gated by a feature toggle, off in MVP.
+
+## Claim/lock state machine & contract-shape (B10, round-5 normative)
+
+Contract-shape laid now in `moderation-api.yaml` (FORM now, behavior with the Moderation domain). Aligns the
+contract to the round-5 queue operations above.
+
+### Claim/lock state machine (per queue item, relative to the calling principal)
+
+```mermaid
+stateDiagram-v2
+    [*] --> FREE: enqueued (PENDING_MODERATION)
+    FREE --> CLAIMED_BY_ME: claim (POST .../claim) by me
+    FREE --> CLAIMED_BY_OTHER: claim by another principal
+    CLAIMED_BY_ME --> CLAIMED_BY_ME: re-claim (idempotent, refresh lockExpiresAt)
+    CLAIMED_BY_ME --> FREE: release (DELETE .../claim) | decision recorded
+    CLAIMED_BY_ME --> LOCK_EXPIRED: lockExpiresAt < now (MOD_LOCK_TTL)
+    CLAIMED_BY_OTHER --> LOCK_EXPIRED: holder's lockExpiresAt < now
+    CLAIMED_BY_OTHER --> FREE: holder releases | holder decides
+    LOCK_EXPIRED --> CLAIMED_BY_ME: re-claim by me
+    LOCK_EXPIRED --> CLAIMED_BY_OTHER: re-claim by another
+```
+
+- **Trigger/guard table**
+
+| From | Action | Guard | To | Else |
+|---|---|---|---|---|
+| FREE / LOCK_EXPIRED | claim | item is PENDING_MODERATION | CLAIMED_BY_ME | 404 if not in queue |
+| CLAIMED_BY_OTHER (live lock) | claim | — | (no transition) | **409 `ALREADY_CLAIMED`** (carries current holder Actor + lockExpiresAt) |
+| CLAIMED_BY_ME | claim (re-claim) | caller == holder | CLAIMED_BY_ME (refresh TTL) | — |
+| CLAIMED_BY_ME | release (DELETE) | caller == holder OR ADMIN | FREE | **409 `NOT_LOCK_HOLDER`** |
+| CLAIMED_BY_ME | submit decision | caller holds live lock | FREE (+ decision) | **409 `NOT_LOCK_HOLDER`** / **409 `ITEM_NOT_CLAIMED`** if no live lock |
+
+- **Lock TTL:** `MOD_LOCK_TTL` (default 15 min). Expiry auto-releases (no background job required — expiry is
+  computed from `lock_expires_at < now()`); a background sweep MAY null stale columns but is not required for correctness.
+- **AGENT parity:** an AGENT principal uses the identical claim/lock contract (ADR-0006, gated).
+
+### SLA / escalation
+- `slaState ∈ {ON_TRACK, BREACHED, ESCALATED}` derived from `waitingSeconds` vs target (ADR-0003: pet <4h,
+  livestock <6h business hours — exact thresholds owned by config). **ESCALATED** = SLA-timeout fired →
+  `Moderation.Escalated` event to ADMIN; item **stays PENDING_MODERATION**, never auto-approved/rejected.
+- Queue filters: `market`, `slaState`, `escalated=true` (≡ `slaState=ESCALATED`), `lockState`.
+- `meta.counts` (byMarket, bySlaState) gives operator-tab badge totals over the full filtered queue.
+
+### Agent-transparency (Owner-decision #5, locked 2026-06-24 — show "decided by AI" to EVERYONE)
+- Operator decision records (`ModerationDecision`) already carry the `Actor` agent-badge (B0.6/ADR-0011 §6).
+- **Owner-facing:** `GET /listings/{id}/moderation-result` → `OwnerModerationResult` carries
+  `decidedBy.principalType` + `decidedByAgent` so the **seller** sees whether an AI or a human decided, plus
+  the resolved reason/notes and the human-override chain (`isHumanOverride`/`supersedesDecisionId`). The owner
+  read in `listings-api` SHOULD embed the same projection as an additive `lastModerationResult` field
+  (flagged for backend + doc-keeper).
+
+### Decision-templates = controlled dictionary (TABLE, not enum) — phasing decision §5
+**ЧТО:** Canned decision notes for REJECT/CHANGES_REQUESTED are modeled as reference-data — a NEW
+`decision_templates` table (controlled, Admin-extensible dictionary; `code` PK, `body_localized` JSONB,
+`applies_to_decision`, `market`, `related_reason_code`, `sort_order`, `is_active`, provenance) — surfaced by
+`GET /moderation/decision-templates` and selected via `ModerationActionRequest.templateCode`. **NOT an enum.**
+
+**ПОЧЕМУ:** Templates are business-editable content that grows over time and that an AI agent must select by a
+stable key. They are notes (free prose), distinct from the mandatory `moderation_reasons` taxonomy (why-rejected).
+
+**ПОЧЕМУ ТАК ЛУЧШЕ для проекта:** By §5 cost-of-change — an enum would force a **contract + schema rewrite**
+every time an operator adds/edits a template (rewrite-test = yes); a table makes a new template a single data
+row with **zero schema/contract change**. It mirrors the proven `moderation_reasons` reference-data shape and the
+A2 reference-data convention (`sort_order`/provenance/JSONB localization), keeps both locales for the operator
+editor (B0.4), and gives the AGENT a stable `code` to pick — agent-first, forward-compatible. → **schema
+migration flagged for `zoolink-backend-engineer`** (NOT implemented in this contract round).
+
+### B10 error codes (extend API_CONVENTIONS §4 domain-specific set)
+| code | HTTP | When |
+|---|---|---|
+| `ALREADY_CLAIMED` | 409 | claim on an item with another principal's live lock |
+| `NOT_LOCK_HOLDER` | 409 | release/decide by a non-holder |
+| `ITEM_NOT_CLAIMED` | 409 | decide on an item with no live lock |
 
 ## Related Documents
 

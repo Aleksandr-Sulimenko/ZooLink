@@ -90,6 +90,26 @@ This specification addresses the following Non-Functional Requirements:
 
 ---
 
+## Pedigree integrity & JSONB contracts (round-4, normative)
+
+**Pedigree integrity** (enforced by trigger `trg_enforce_pedigree_integrity`, migration 0008):
+- An animal cannot be its own parent; **no cycles** (an animal may not be its own ancestor; checked to depth 64).
+- `mother_id` must reference a **Female** of the **same species**, born **before** the offspring; `father_id` a **Male**, same rules.
+- `mother_id`/`father_id` NULL = "unknown/external ancestor" (external pedigree numbers live in `pedigree_id`; a richer
+  external-ancestor model is Фаза 2+).
+- Deactivated animals remain in their offspring's pedigree (lineage integrity) but are excluded from breeding search (`is_active`).
+
+**JSONB field contracts** (each is a JSON **array**; validate `jsonb_typeof = 'array'` + per-item shape at the service layer):
+- `health_records`: `[{ "type": "vaccination|treatment|checkup", "date": "YYYY-MM-DD", "note": str, "vet": str? }]`
+- `reproductive_data` (females): `[{ "event": "heat|mating|pregnancy|birth", "date": "YYYY-MM-DD", "details": obj? }]`
+- `health_test_results`: `[{ "test": str (HD|ED|PRA|DNA…), "result": "clear|carrier|affected|<value>", "date": "YYYY-MM-DD", "lab": str? }]`
+- `show_titles`: `[{ "title": str, "show": str?, "date": "YYYY-MM-DD"?, "country": str?, "rank": str? }]`
+
+**Other:** `microchip_id`/`tattoo_brand_id` are **unique** (migration 0004) — supersedes earlier "warned, not enforced"
+wording; chip format SHOULD follow ISO-11784/85 (15 digits, service-validated). Correcting an immutable field
+(species/sex/DoB) requires an audit-logged admin procedure (not self-service). `breed_id` may be normalized **once**
+from custom (NULL) → directory id (migration 0008).
+
 ## Related Documents
 
 - [Glossary](glossary.md)

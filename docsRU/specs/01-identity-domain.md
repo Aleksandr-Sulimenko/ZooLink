@@ -53,8 +53,8 @@ status: "Approved"
 ## Разбивка задач
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `identity` с помощью NestJS CLI
-   - [ ] Определить сущность User (TypeORM/Prasmic) с полями: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
-   - [ ] Реализовать сервис проверки телефона (отправка SMS через abstraction Twilio)
+   - [ ] Определить модель User (Prisma, по [ADR-0007](../04-decisions/0007-orm-strategy.md)) с полями: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
+   - [ ] Реализовать сервис проверки телефона (SMS через порт `SmsProvider` — SMS.RU по умолчанию, [ADR-0008](../04-decisions/0008-rf-provider-matrix.md))
    - [ ] Реализовать стратегии проверки OAuth (Google, Apple, Telegram, VK)
    - [ ] Создать AuthController (регистрация, вход, обновление токена, профиль)
    - [ ] Создать AuthService (валидация учетных данных, генерация JWT/токенов обновления)
@@ -77,7 +77,7 @@ status: "Approved"
 
 3. **Инфраструктура**
    - [ ] Настроить Redis для хранения токенов обновления (или использовать JWT с токенами обновления в базе данных)
-   - [ ] Настроить учетные данные поставщика SMS (Twilio) в окружении
+   - [ ] Настроить учетные данные поставщика SMS (api_id SMS.RU) в окружении
    - [ ] Настроить учетные данные провайдеров OAuth (Google, Apple, и т.д.)
    - [ ] Добавить заголовки безопасности (helmet) и конфигурацию CORS
    - [ ] Внедрить логирование событий аутентификации (успех/неудача)
@@ -94,6 +94,95 @@ status: "Approved"
 - [ ] Трассируемость НФТ: проверить, что требования производительности, безопасности и доступности корректно учтены и документированы
 
 ---
+
+## Жизненный цикл аккаунта, сессии и восстановление (раунд 4, нормативно)
+
+- **Уникальность идентификаторов:** `phone_hash` и каждый `oauth_*` — **уникальны** (миграция 0008). `phone_hash` —
+  **детерминированный HMAC-SHA256(phone, server_pepper)**, НЕ bcrypt, чтобы дубли детектировались. Показ последних 4 цифр — отдельно.
+- **Модель auth:** passwordless для конечных пользователей (phone OTP + OAuth). `password_hash` — только для
+  операторских ролей (ADMIN/MODERATOR); password policy/lockout из `security_specification.md` применимы только к ним.
+  Канонический TTL access — **15 мин** (refresh 7 д); «24h» в других местах заменён.
+- **SMS OTP:** 6 цифр, TTL 5 мин, cooldown повтора 60 с, максимум 5 попыток ввода → блок 15 мин;
+  `verification_attempts` считает попытки ввода и сбрасывается при успехе/TTL.
+- **Сессии / refresh:** хранятся в `refresh_tokens` (ротация по family). На `/auth/refresh` токен ротируется (новая
+  строка, `rotated_from`); **повторное использование уже ротированного токена отзывает весь `family_id`** (детект кражи).
+  Максимум 5 активных family/пользователь (старейшая вытесняется). Смена пароля/роли/статуса → отзыв всех family.
+- **Восстановление доступа:** потеря телефона/OAuth → через **подтверждённый запасной канал** (verified email) с новым
+  OTP, либо admin-ассистированное перепривязывание идентификатора с аудитом. (Без тихого захвата.)
+- **Повышение роли:** USER → BREEDER/FARMER/VETERINARIAN/GROOMER — **назначается админом/верификацией**, не self-claim,
+  с аудитом. Канонический набор ролей = 7 из CHECK БД; enum в `auth-api` обязан перечислять все 7.
+- **Деактивация vs erasure (ФЗ-152):** `status='DEACTIVATED'` (grace 30 дней, восстановимо) — MVP; процедура
+  анонимизации `erase_user` — в [data-governance.md](data-governance.md). `status` — единственный источник истины;
+  `is_active`/`deactivated_at` — производные.
+
+### Эндпоинты восстановления, повышения роли и стирания (Slice-4, нормативно)
+Конкретные эндпоинты, реализующие пункты восстановления/роли/стирания выше (контракт: `auth-api.yaml`):
+
+| Эндпоинт | Auth | Поведение |
+|---|---|---|
+| `POST /auth/recover/email/request` | public | Отправляет 6-значный OTP на **ПОДТВЕРЖДЁННЫЙ** email пользователя. Всегда 202 (без перечисления аккаунтов). Тот же жизненный цикл OTP, что у SMS (TTL 5 мин, cooldown 60 с, 5 попыток → блок 15 мин), отдельное Redis-пространство `recover:email:*`. |
+| `POST /auth/recover/email/verify` | public | Проверяет OTP → выдаёт свежую сессию. SUSPENDED ⇒ 403 (только оператор). DEACTIVATED в пределах grace ⇒ реактивируется в ACTIVE; после grace ⇒ 403. Стёртый аккаунт ⇒ не восстановим (email NULL → нет совпадения). Закрывает затреканный пункт Slice-3 «auth-путь для разлогиненного DEACTIVATED». |
+| `PATCH /admin/users/{userId}/role` | ADMIN | Устанавливает `users.role` в любую из 7 канонических ролей. Записывается в аудит (`identity.role_changed`, before/after). **Отзывает ВСЕ refresh-семейства** цели (round-4). Само-понижение последнего ADMIN в MVP разрешено (см. Open Questions). |
+| `POST /admin/users/{userId}/rebind` | ADMIN | Перепривязывает ровно один идентификатор: `newPhone` (повторно хешируется), либо `oauthProvider`+`oauthId`, либо очистка OAuth id. 409, если новый идентификатор занят. Аудит (`identity.identifier_rebound`, причина записана). Отзывает все сессии цели. Без тихого захвата — актёр это ADMIN. |
+| `POST /admin/users/{userId}/erase` | ADMIN | Выполняет `erase_user` (data-governance.md §2): анонимизация PII, освобождение `phone_hash`/`oauth_*`/`email`, `avatar_url`→NULL, редактирование `notification_logs.recipient/content`, отзыв сессий, метка `erased_at`, status→DEACTIVATED. Идемпотентно (уже стёрт ⇒ 200 no-op). Аудит `user.erased` сохраняется под юр.удержанием. |
+| `POST /me/erase` | user | Самостоятельное право на забвение: немедленная деактивация (если ACTIVE) и фиксация запроса; анонимизация выполняется после 30-дневного grace через **retention-задачу** (только worker, D2) либо по триггеру ADMIN. |
+
+**Действия `erase_user(user_id)` по полям (авторитетно — зеркалит инвентарь PII data-governance.md §1):**
+`phone_hash`→NULL, `oauth_google_id`/`oauth_apple_id`/`oauth_telegram_id`/`oauth_vk_id`→NULL, `email`→NULL,
+`email_verified`→false, `full_name`→`'[deleted]'` (колонка NOT NULL → tombstone, не NULL), `avatar_url`→NULL,
+`contact_phone`→NULL, `contact_telegram`→NULL, `contact_prefs`→default (`{"show_phone": true, "show_telegram": false}`),
+`last_login_at`→NULL, `notification_prefs`→default, `status`→DEACTIVATED, `is_active`→false,
+`deactivated_at`→now() (если не задано), `erased_at`→now(). Строки `notification_logs` пользователя:
+`recipient`→`'[erased]'` (колонка NOT NULL → tombstone), `content`→NULL. **Сохраняются:** `audit_log`,
+`moderation_decisions`, `animal_ownership_history`, `payment_transactions`/`refunds`.
+
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ:** data-governance.md §1 предписывает NULL для `phone_hash`/`recipient`, но
+> `users.full_name` и `notification_logs.recipient` — `NOT NULL` в `database_schema.sql` (иерархия истины:
+> схема > проза спеки). Tombstone (`'[deleted]'`/`'[erased]'`) удовлетворяет цель анонимизации без изменения
+> схемы и нарушения NOT NULL — PII уничтожается в любом случае. Это минимальное, согласованное со схемой
+> примирение.
+
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ (round-8, normative — закрытие contact-PII):** добавлены `contact_phone`→NULL,
+> `contact_telegram`→NULL и `contact_prefs`→default в авторитетный список. **ЧТО:** колонки contact-exchange (ADR-0005,
+> `database_schema.sql` §"Contact exchange") отсутствовали в списке, тогда как data-governance.md §1 уже помечал
+> `contact_phone`/`contact_telegram` как "NULL при стирании" — контракт противоречил сам себе, а код недо-стирал.
+> **ПОЧЕМУ:** они хранят напрямую достижимый телефон/Telegram-хэндл продавца — самые чувствительные контактные ПДн по
+> ФЗ-152 — а `contact_prefs` задаёт их видимость; оставлять их после стирания — нарушение права на стирание (ФЗ-152) в
+> момент запуска contact-exchange. **ПОЧЕМУ ТАК ЛУЧШЕ:** список становится полным покрытием data-governance.md §1 (нет
+> молчаливого расхождения doc↔doc), `contact_prefs` сбрасывается в default колонки по тому же правилу, что уже применено
+> к `notification_prefs` (консистентность, без нарушения NOT NULL — колонка `NOT NULL`), и **не требует изменения схемы**
+> (колонки уже существуют). Латентно сегодня (contact-exchange ещё не построен, колонки всегда NULL), но закрывает
+> пробел до того, как он сможет утечь.
+
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ (D2, нормативно — retention-задача закрывает «в MVP нет планировщика»):**
+> **ЧТО:** анонимизация после 30-дневного grace теперь выполняется автоматически
+> **retention-задачей** только в worker (`backend/src/lib/scheduler/retention.service.ts`, планируется
+> `RetentionExpireJob` под PG advisory-lock; настраивается через `RETENTION_TICK_CRON`/`RETENTION_GRACE_DAYS`,
+> по умолчанию ежечасный тик / 30-дневный grace). Каждый тик: аккаунты DEACTIVATED с
+> `deactivated_at < now() - grace` и `erased_at IS NULL` → `erase_user` (те же авторитетные действия по полям,
+> что и при триггере ADMIN; актёр = **system**, `actor_id = NULL`, `principal_type` по умолчанию HUMAN —
+> платформенная автоматизация, не решение ИИ-агента); этот же проход авто-экспирует ACTIVE-листинги после
+> `expires_at` (GAP-012). **ПОЧЕМУ:** старый текст («в MVP нет планировщика — см. Open Questions») оставлял
+> право на забвение (ФЗ-152) зависимым от ручного действия ADMIN без SLA. **ПОЧЕМУ ТАК ЛУЧШЕ:** стирание
+> после grace теперь происходит без участия человека (своевременность по ФЗ-152), задача идемпотентна
+> (повторный прогон пропускает уже стёртые / в пределах grace строки) и безопасна для одного инстанса
+> (advisory-lock, forward-compatible с масштабированным пулом worker'ов), и **не требует изменения схемы** —
+> переиспользует уже имеющиеся `status`/`deactivated_at`/`erased_at`.
+
+### Поток активации по phone-OTP (round-7/Фаза-2, нормативно)
+- Регистрация, отправляющая OTP в том же запросе, создаёт аккаунт **сразу в `PENDING_VERIFICATION`**
+  (входное состояние `UNVERIFIED` транзитивно/внутреннее — момент до отправки кода — и phone-потоком не
+  персистится).
+- При валидном OTP аккаунт переходит **`PENDING_VERIFICATION → ACTIVE`** одним шагом: в MVP **нет
+  обязательного гейта завершения профиля**, поэтому состояние `VERIFIED` сворачивается в `ACTIVE`
+  («автоматическая активация (нет требования профиля)» в
+  [user_state_machine.md](statemachines/user_state_machine.md)). `VERIFIED` остаётся логическим
+  pass-through; при появлении требования профиля поток будет останавливаться на `VERIFIED`.
+- `verify-phone` активирует только аккаунт в `{UNVERIFIED, PENDING_VERIFICATION}`; устаревший OTP не может
+  реактивировать `ACTIVE/SUSPENDED/DEACTIVATED` (защита от гонок).
+- **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ:** сворачивание `VERIFIED→ACTIVE` соответствует MVP (нет гейта профиля),
+  избегает лишней промежуточной записи и делает стейт-машину честной относительно того, что реально
+  персистится, — не удаляя состояние `VERIFIED`, нужное при появлении гейта профиля.
 
 ## Связанные документы
 

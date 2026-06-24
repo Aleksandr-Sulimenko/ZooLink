@@ -10,6 +10,8 @@ status: "Approved"
 ## Outcome
 Provide efficient geographic search capabilities for finding animals and listings within a specified radius (1-100 km) from a user's location. Support accurate distance calculations and filtering to enable location-based discovery across all marketplace domains (Pet, Livestock, Matching).
 
+> ⚠️ **MVP decision (resolved):** the MVP uses `lat`/`lng` columns + **Haversine formula with a bounding-box prefilter** (no extension), per [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md) and `storage.md`. **PostGIS** (and the `earthdistance`/`ll_to_earth` alternative) is **Фаза 2+**, not a MVP open question. Mentions of PostGIS below are the Target option.
+
 ## Scope & Boundaries
 **In Scope:**
 - Distance calculation using Haversine formula or PostGIS extension
@@ -39,7 +41,7 @@ Provide efficient geographic search capabilities for finding animals and listing
 
 ## Prior Decisions
 - Store location as separate latitude and longitude floating-point columns in Listing and optionally Animal tables.
-- Use PostgreSQL with earthdistance cube extension or PostGIS for geo-indexing (to be decided based on performance testing).
+- **MVP (resolved):** PostgreSQL `lat`/`lng` + Haversine + bounding-box prefilter, B-tree indexes on lat/lng. PostGIS/earthdistance is Фаза 2+ (ADR-0009).
 - For MVP, implement geo-search using Haversine formula optimized with bounding box pre-filter to reduce computational load.
 - External geocoding (address to coordinates) will be handled by Yandex.Maps API via frontend/backend abstraction.
 - Maximum search radius enforced at 100km to prevent abusive queries.
@@ -129,6 +131,32 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 
 ---
+
+## Algorithm, result contract & edge cases (round-4, normative)
+
+**Haversine + bounding-box (MVP):** Earth radius `R = 6_371_000 m`.
+- **Bbox prefilter** (uses the B-tree on lat/lng): `Δlat = radius_m / 111_320`;
+  `Δlng = radius_m / (111_320 * cos(radians(lat)))`; filter `lat BETWEEN lat0-Δlat AND lat0+Δlat` and same for lng.
+- **Exact distance:** `d = 2*R*asin(sqrt( sin²((lat-lat0)/2) + cos(lat0)cos(lat) sin²((lng-lng0)/2) ))`, keep `d ≤ radius_m`.
+- **Boundary:** comparison is `≤` with a `±100 m` tolerance (NFR), so "exactly at radius" is INCLUDED despite float error.
+
+**Result contract:** `ORDER BY distance_m ASC, created_at DESC, id ASC`; `distance_m` is returned (rounded); pagination
+`page`/`limit` (default 20, max 100); `total` = COUNT within radius. Always combined with `status='ACTIVE'` and the
+animal's `market` filter.
+
+**Edge cases (normative):**
+- **Antimeridian (±180° lng):** when the bbox crosses ±180 (relevant for RF: Chukotka/Kamchatka), split into two lng
+  ranges (`lng ≥ min` OR `lng ≤ max`).
+- **Near-pole:** clamp `Δlng` (cos→0) to 180° to avoid blow-up.
+- **Missing coordinates:** listings without `lat/lng` are excluded from geo results (no city-centroid fallback in MVP).
+- **Radius:** must be `1_000 ≤ radius_m ≤ 100_000`; values outside are rejected (validation).
+- `listings.search_radius_m` is **not** a geo-search filter — it is reserved for "looking within X" matching use; the
+  query radius is the authoritative one for geo-search.
+
+**Combined search & saved searches:** geo + Russian FTS (`to_tsvector('russian', …)`) + trigram fuzzy + attribute
+filters (species/breed/price/type) compose into one query (bbox + bitmap-AND of GIN indexes). `saved_searches.filters`
+JSONB schema = the geo-search query params: `{ q?: str, species_id?: int, breed_id?: int, listing_type?: str,
+price_min?: int, price_max?: int }` plus stored `lat/lng/radius_m`; re-execution maps these to `/geo-search` params.
 
 ## Related Documents
 

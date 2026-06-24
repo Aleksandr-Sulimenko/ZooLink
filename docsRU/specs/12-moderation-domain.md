@@ -102,7 +102,7 @@ flowchart TD
 ## Разбивка на задачи
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `moderation` с помощью CLI NestJS
-   - [ ] Определить сущность ModerationDecision (TypeORM) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
+   - [ ] Определить модель ModerationDecision (Prisma) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
    - [ ] Добавить поле moderationStatus в сущности Listing и Animal (или создать таблицу ассоциаций)
    - [ ] Реализовать ModerationController (получение очереди, получение деталей элемента, отправка решения)
    - [ ] Реализовать ModerationService (бизнес-логика получения очереди, обработки решения, запуска уведомлений)
@@ -136,6 +136,104 @@ flowchart TD
 - [ ] Трассируемость NFR: проверка, что требования производительности, безопасности и доступности правильно учтены и документированы
 
 ---
+
+## Операции очереди (раунд 5, нормативно)
+
+- **Очередь и FIFO:** очередь = объявления в `PENDING_MODERATION`, порядок по `moderation_enqueued_at ASC` (ставится
+  при сабмите), индекс `idx_listings_modqueue`. Цель <2 с / 100 элементов.
+- **Назначение / блокировка (без двойной модерации):** модератор **захватывает** задачу — `assigned_to`, `locked_at`,
+  `lock_expires_at` (миграция 0009). Захват эксклюзивен на `MOD_LOCK_TTL` (по умолч. 15 мин, авто-снятие по истечении).
+  Два модератора (или AI-агент + человек) не могут действовать над одним элементом; второй захват → `409`.
+- **Таксономия причин:** `moderation_reasons` засеяна (миграция 0010): `prohibited_species, incomplete_info,
+  poor_photos, suspected_fraud, price_violation, wrong_category, duplicate, animal_welfare, policy_violation`.
+  Причина **обязательна** при REJECT и CHANGES_REQUESTED; её `description_localized` идёт в уведомления
+  `listing_rejected`/`listing_changes_requested` (переменная `reason`).
+- **Ре-модерация при правке:** редактирование **существенных полей** ACTIVE-объявления (title, description, фото,
+  цена, species/breed, listing_type) возвращает его в `PENDING_MODERATION` (`moderation_status='PENDING'`); тривиальные
+  правки — нет. Энфорс в сервис-слое.
+- **SLA и эскалация:** часы SLA с `moderation_enqueued_at`; при таймауте — **эскалация ADMIN** (событие
+  `Moderation.Escalated`), остаётся `PENDING_MODERATION` — без авто-одобрения/отклонения.
+- **Модерация животных:** в MVP животные **не** модерируются отдельно; животное проверяется через своё объявление.
+  `entity_type='ANIMAL'` в `moderation_decisions`/`content_reports` используется только для решений **по жалобам**, не как отдельная очередь.
+- **Апелляции:** **нет апелляций в MVP** — hard REJECT терминален (продавец создаёт новое исправленное объявление);
+  исправимый путь — CHANGES_REQUESTED. (Апелляции — Фаза 2; appeal-rate не метрика MVP.)
+- **Аудит:** каждое решение пишет `moderation_decisions` (append-only) **и** строку `audit_log`.
+- **AI-модератор (ADR-0006):** AGENT использует тот же claim/lock-контракт; гейтится feature-флагом, в MVP выключен.
+
+## Стейт-машина claim/lock и форма контракта (B10, раунд 5, нормативно)
+
+Форма контракта заложена сейчас в `moderation-api.yaml` (ФОРМА сейчас, поведение — с доменом Moderation).
+Приводит контракт в соответствие с операциями очереди раунда 5 выше.
+
+### Стейт-машина claim/lock (на элемент очереди, относительно вызывающего принципала)
+
+```mermaid
+stateDiagram-v2
+    [*] --> FREE: enqueued (PENDING_MODERATION)
+    FREE --> CLAIMED_BY_ME: claim (POST .../claim) by me
+    FREE --> CLAIMED_BY_OTHER: claim by another principal
+    CLAIMED_BY_ME --> CLAIMED_BY_ME: re-claim (idempotent, refresh lockExpiresAt)
+    CLAIMED_BY_ME --> FREE: release (DELETE .../claim) | decision recorded
+    CLAIMED_BY_ME --> LOCK_EXPIRED: lockExpiresAt < now (MOD_LOCK_TTL)
+    CLAIMED_BY_OTHER --> LOCK_EXPIRED: holder's lockExpiresAt < now
+    CLAIMED_BY_OTHER --> FREE: holder releases | holder decides
+    LOCK_EXPIRED --> CLAIMED_BY_ME: re-claim by me
+    LOCK_EXPIRED --> CLAIMED_BY_OTHER: re-claim by another
+```
+
+- **Таблица триггеров/гвардов**
+
+| Из | Действие | Гвард | В | Иначе |
+|---|---|---|---|---|
+| FREE / LOCK_EXPIRED | claim | элемент в PENDING_MODERATION | CLAIMED_BY_ME | 404, если не в очереди |
+| CLAIMED_BY_OTHER (живой lock) | claim | — | (нет перехода) | **409 `ALREADY_CLAIMED`** (несёт текущего держателя Actor + lockExpiresAt) |
+| CLAIMED_BY_ME | claim (re-claim) | вызывающий == держатель | CLAIMED_BY_ME (обновить TTL) | — |
+| CLAIMED_BY_ME | release (DELETE) | вызывающий == держатель OR ADMIN | FREE | **409 `NOT_LOCK_HOLDER`** |
+| CLAIMED_BY_ME | submit decision | вызывающий держит живой lock | FREE (+ решение) | **409 `NOT_LOCK_HOLDER`** / **409 `ITEM_NOT_CLAIMED`**, если нет живого lock |
+
+- **TTL блокировки:** `MOD_LOCK_TTL` (по умолч. 15 мин). Истечение авто-снимает (фоновая задача не требуется —
+  истечение вычисляется из `lock_expires_at < now()`); фоновый sweep МОЖЕТ обнулять устаревшие колонки, но для
+  корректности не обязателен.
+- **Паритет AGENT:** AGENT-принципал использует идентичный claim/lock-контракт (ADR-0006, gated).
+
+### SLA / эскалация
+- `slaState ∈ {ON_TRACK, BREACHED, ESCALATED}` выводится из `waitingSeconds` относительно цели (ADR-0003: pet <4ч,
+  livestock <6ч рабочих часов — точные пороги владеет конфиг). **ESCALATED** = сработал таймаут SLA →
+  событие `Moderation.Escalated` к ADMIN; элемент **остаётся PENDING_MODERATION**, без авто-одобрения/отклонения.
+- Фильтры очереди: `market`, `slaState`, `escalated=true` (≡ `slaState=ESCALATED`), `lockState`.
+- `meta.counts` (byMarket, bySlaState) даёт счётчики-бейджи на вкладках оператора по всей отфильтрованной очереди.
+
+### Agent-transparency (решение владельца #5, зафиксировано 2026-06-24 — показывать «решено ИИ» ВСЕМ)
+- Записи операторских решений (`ModerationDecision`) уже несут agent-бейдж `Actor` (B0.6/ADR-0011 §6).
+- **Для владельца:** `GET /listings/{id}/moderation-result` → `OwnerModerationResult` несёт
+  `decidedBy.principalType` + `decidedByAgent`, чтобы **продавец** видел, решил ли ИИ или человек, плюс
+  разрешённые причину/заметки и цепочку human-override (`isHumanOverride`/`supersedesDecisionId`). Чтение владельца
+  в `listings-api` ДОЛЖНО встраивать ту же проекцию как аддитивное поле `lastModerationResult` (отмечено для
+  backend + doc-keeper).
+
+### Decision-templates = контролируемый словарь (ТАБЛИЦА, не enum) — решение о фазировании §5
+**ЧТО:** Заготовленные формулировки решений для REJECT/CHANGES_REQUESTED моделируются как reference-data — НОВАЯ
+таблица `decision_templates` (контролируемый, расширяемый админом словарь; `code` PK, `body_localized` JSONB,
+`applies_to_decision`, `market`, `related_reason_code`, `sort_order`, `is_active`, provenance) — отдаётся через
+`GET /moderation/decision-templates` и выбирается через `ModerationActionRequest.templateCode`. **НЕ enum.**
+
+**ПОЧЕМУ:** Шаблоны — это редактируемый бизнесом контент, который растёт со временем и который ИИ-агент должен
+выбирать по стабильному ключу. Это заметки (свободная проза), отличные от обязательной таксономии
+`moderation_reasons` (почему-отклонено).
+
+**ПОЧЕМУ ТАК ЛУЧШЕ для проекта:** По §5 cost-of-change — enum вынуждал бы **переписывать контракт + схему** каждый
+раз, когда оператор добавляет/правит шаблон (rewrite-test = да); таблица делает новый шаблон одной строкой данных
+с **нулевым изменением схемы/контракта**. Она зеркалит проверенную форму reference-data `moderation_reasons` и
+конвенцию A2 (`sort_order`/provenance/JSONB-локализация), сохраняет оба языка для операторского редактора (B0.4) и
+даёт AGENT стабильный `code` для выбора — agent-first, форвард-совместимо. → **миграция схемы отмечена для
+`zoolink-backend-engineer`** (НЕ реализована в этом раунде контракта).
+
+### Коды ошибок B10 (расширяют domain-specific набор API_CONVENTIONS §4)
+| code | HTTP | Когда |
+|---|---|---|
+| `ALREADY_CLAIMED` | 409 | claim на элементе с живым lock другого принципала |
+| `NOT_LOCK_HOLDER` | 409 | release/decide не-держателем |
+| `ITEM_NOT_CLAIMED` | 409 | decide на элементе без живого lock |
 
 ## Связанные документы
 

@@ -14,7 +14,7 @@ Provide administrative functions for platform management, including user moderat
 **In Scope:**
 - User management: view users, change roles, ban/unban, verify identity
 - Listing moderation: review queue, approve/reject listings, add rejection reasons
-- Reference data management: species, breeds, cities, listing types, health statuses
+- Reference data management: species, breeds, cities, health_certifications, genetic_markers (the five managed lookup datasets; see the round-9 → A3 implementation-scope note below — listing types and animal/health statuses are fixed DB CHECK enums, not row-CRUD)
 - System configuration: moderation rules, rate limits, feature toggles
 - Audit logs: track moderation actions, user actions, system changes
 - Integration with all other domains (Identity, Animal, Marketplaces, Matching)
@@ -66,11 +66,28 @@ This specification addresses the following Non-Functional Requirements:
 **UC-AD-03:** As an administrator, I want to manage reference data so that I can ensure accuracy and consistency across the platform.
 - Acceptance Criteria:
   - Reference data management loads in <2s
-  - CRUD operations for species, breeds, cities, listing types, health statuses
+  - CRUD operations for species, breeds, cities, health_certifications, genetic_markers (listing types and animal/health statuses are fixed CHECK enums, not row-CRUD — see the round-9 → A3 note below)
   - Validation rules for reference data (e.g., breed must belong to species)
   - Bulk import/export of reference data (CSV/JSON)
   - Versioning and change history for reference data
   - Notification system for users when reference data changes affect their listings
+
+> **Implementation scope (round-9 → A3, normative).** The **managed lookup tables that exist in
+> `database_schema.sql` are CRUD-able reference data: `species`, `breeds`, `cities`,
+> `health_certifications`, `genetic_markers`** (= code `DATASETS`; matches rbac-matrix.md "Reference
+> data = ADMIN C/R/U/D"). `health_certifications`/`genetic_markers` were added in **A3**
+> (ADMIN_PHASE_ACTION_PLAN) as **form-now / behaviour-later** livestock breeding dictionaries: the
+> managed lookup + CRUD exists now, while their marketplace **filtering** is deferred to Фаза 2
+> (anti-rewrite, IMPLEMENTATION_PLAYBOOK §5). "Listing types" and "animal/health statuses" are **fixed DB
+> CHECK enums** (`listings.listing_type`, `listings.status`, animal lifecycle), not row-CRUD — changing
+> them is a schema/ADR change. `traits`/`temperament_tags`/`health_flags` are **free text/JSONB soft
+> tags** (no managed table; a lookup can be added additively in Фаза 2 without a rewrite). Lookup ids are
+> **INT** (id-type convention); localized names are **`name_localized` JSONB** (A2). Bulk import/export
+> and change-history/versioning are deferred (soft-delete = `is_active`); the audit_log records every
+> mutation (via `entity_id_int` for INT lookups). WHY: contract must match the source of truth
+> (schema + RBAC + code); WHY BETTER: prevents endpoints that cannot exist, keeps MVP scope honest
+> (form vs behaviour), and the dataset registry absorbs new lookups without shape change. See
+> `api-contracts/admin-api.yaml` (reconciled).
 
 **UC-AD-04:** As an administrator, I want to monitor system activity and security so that I can detect and respond to potential issues.
 - Acceptance Criteria:
@@ -141,10 +158,46 @@ This specification addresses the following Non-Functional Requirements:
 
 ---
 
+## Reference-data audit & operator security (D4, normative)
+
+### Reference-data CRUD is audited and audit-readable (closes GAP-006-sub "versioning/audit reference-data")
+- **Every reference-data mutation** (create/update/soft-deactivate of `species`, `breeds`, `cities`,
+  `health_certifications`, `genetic_markers`) writes an `audit_log` row (actor + before/after JSONB), per
+  [data-governance.md](data-governance.md) §3. Because reference lookups are **INT** (id-type convention) while
+  `audit_log.entity_id` is UUID, the INT lookup id is recorded in **`audit_log.entity_id_int`** (A2 / migration
+  0018) with `entity_type = 'reference-data'`.
+- **These entries are readable** through admin **`GET /audit/log`** (`getAuditLog`, ADMIN-only — `admin-api.yaml`),
+  filterable by `actorId`, `entityType=reference-data` and `actionType`. This is the **change history** for
+  reference data in the MVP — it replaces the deferred dedicated "versioning" feature (UC-AD-03 lists versioning as
+  an aspiration; the audit trail is the implemented MVP equivalent).
+- **ЧТО:** make explicit that reference-data edits are both *written* to `audit_log` (via `entity_id_int`) and
+  *read back* via `GET /audit/log`. **ПОЧЕМУ:** GAP-006-sub flagged that reference-data had no stated audit/versioning
+  contract; the round-9→A3 note covered the write side only. **ПОЧЕМУ ТАК ЛУЧШЕ:** the read path closes the loop with
+  zero new infrastructure (the audit table, the INT key column and the endpoint already exist) — admins get a complete
+  who/when/before-after history of reference changes, which satisfies the UC-AD-03 "change history" acceptance criterion
+  in the MVP without building a separate versioning store. agent-as-principal (ADR-0006): the `audit_log.actor` badge
+  carries `principalType`, so an AI-agent admin's reference edits are attributed identically.
+
+### Operator authentication uses the password policy in security_specification.md
+- Operator roles (**ADMIN/MODERATOR**) are the **only** password-bearing accounts (`users.password_hash`;
+  end users are passwordless — [01-identity-domain.md](01-identity-domain.md) "Auth model"). Their credential rules are
+  **not redefined here** — they are governed by [security/security_specification.md](security/security_specification.md):
+  **min 12 chars + complexity**, **bcrypt cost factor ≥12**, **account lockout after 5 failed attempts for 15 min**,
+  and the session-timeout / token-TTL rules (canonical access TTL **15 min**, refresh **7 d** — 01-identity-domain.md).
+- **ЧТО:** bind the admin/moderation domain's operator-login requirement to the existing `security_specification.md`
+  canon rather than restating numbers. **ПОЧЕМУ:** the spec asserts "admin actions restricted to authorized roles" and
+  "protect against privilege escalation" but never named the operator credential policy, risking drift if a number is
+  re-stated. **ПОЧЕМУ ТАК ЛУЧШЕ:** single source of truth (security-spec) for the password/lockout numbers — no
+  duplication, no new infrastructure; this is a requirement-linkage, not a new rule.
+
+---
+
 ## Related Documents
 
 - [Glossary](glossary.md)
 - [Admin API](../03-architecture/api-contracts/admin-api.yaml)
+- [Security Specification](security/security_specification.md)
+- [Data Governance](data-governance.md)
 - [Moderation Domain](12-moderation-domain.md)
 - [Identity Domain](01-identity-domain.md)
 - [Business Requirements](../02-requirements/business-requirements/admin-domain.md)
