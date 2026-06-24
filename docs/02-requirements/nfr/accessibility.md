@@ -3,6 +3,22 @@
 ## Purpose
 Defines accessibility requirements to ensure the platform is usable by people with diverse abilities, including visual, auditory, motor, and cognitive impairments. Complies with WCAG 2.1 AA standards and considers Russian Federal Law No. 381-FZ "On Accessibility of the Environment for Persons with Disabilities".
 
+## Phase & tracking status (E1, normative — GAP-014)
+> **WCAG 2.1 AA / ФЗ-381 compliance is a frontend-phase requirement, not an MVP-backend deliverable.** The
+> backend phase ships no user-facing rendering, so the success criteria below cannot be implemented or verified
+> yet. This requirement is **tracked, not dissolved**: it is mapped onto the **frontend Definition of Done** —
+> when the frontend phase opens (`zoolink-frontend-engineer`), this document is the **entry-DoD checklist** for
+> every user-facing surface, and the automated/manual/user-testing gates in "Accessibility Testing & Validation"
+> below become CI/PR acceptance criteria. Until a dedicated frontend-DoD file exists, **this note is the
+> authoritative marker** that accessibility is a mandatory frontend-phase input.
+>
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ:** **ЧТО:** record that accessibility is deliberately deferred to the frontend
+> phase and bound to its DoD, rather than left as an unowned NFR. **ПОЧЕМУ:** GAP-014 flagged the risk that a
+> real-defer requirement (no backend surface to make accessible) silently evaporates between phases.
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** it keeps the requirement traceable across the phase boundary with zero premature work —
+> the defer is honest (it genuinely cannot be built now) and the mapping to the frontend-DoD guarantees it
+> re-surfaces as an enforced gate the moment a frontend exists.
+
 ## Scope
 Applies to all user-facing components: web application (SPA/PWA), documentation, and user-generated content guidelines.
 

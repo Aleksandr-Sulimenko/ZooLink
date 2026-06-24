@@ -158,10 +158,46 @@ This specification addresses the following Non-Functional Requirements:
 
 ---
 
+## Reference-data audit & operator security (D4, normative)
+
+### Reference-data CRUD is audited and audit-readable (closes GAP-006-sub "versioning/audit reference-data")
+- **Every reference-data mutation** (create/update/soft-deactivate of `species`, `breeds`, `cities`,
+  `health_certifications`, `genetic_markers`) writes an `audit_log` row (actor + before/after JSONB), per
+  [data-governance.md](data-governance.md) §3. Because reference lookups are **INT** (id-type convention) while
+  `audit_log.entity_id` is UUID, the INT lookup id is recorded in **`audit_log.entity_id_int`** (A2 / migration
+  0018) with `entity_type = 'reference-data'`.
+- **These entries are readable** through admin **`GET /audit/log`** (`getAuditLog`, ADMIN-only — `admin-api.yaml`),
+  filterable by `actorId`, `entityType=reference-data` and `actionType`. This is the **change history** for
+  reference data in the MVP — it replaces the deferred dedicated "versioning" feature (UC-AD-03 lists versioning as
+  an aspiration; the audit trail is the implemented MVP equivalent).
+- **ЧТО:** make explicit that reference-data edits are both *written* to `audit_log` (via `entity_id_int`) and
+  *read back* via `GET /audit/log`. **ПОЧЕМУ:** GAP-006-sub flagged that reference-data had no stated audit/versioning
+  contract; the round-9→A3 note covered the write side only. **ПОЧЕМУ ТАК ЛУЧШЕ:** the read path closes the loop with
+  zero new infrastructure (the audit table, the INT key column and the endpoint already exist) — admins get a complete
+  who/when/before-after history of reference changes, which satisfies the UC-AD-03 "change history" acceptance criterion
+  in the MVP without building a separate versioning store. agent-as-principal (ADR-0006): the `audit_log.actor` badge
+  carries `principalType`, so an AI-agent admin's reference edits are attributed identically.
+
+### Operator authentication uses the password policy in security_specification.md
+- Operator roles (**ADMIN/MODERATOR**) are the **only** password-bearing accounts (`users.password_hash`;
+  end users are passwordless — [01-identity-domain.md](01-identity-domain.md) "Auth model"). Their credential rules are
+  **not redefined here** — they are governed by [security/security_specification.md](security/security_specification.md):
+  **min 12 chars + complexity**, **bcrypt cost factor ≥12**, **account lockout after 5 failed attempts for 15 min**,
+  and the session-timeout / token-TTL rules (canonical access TTL **15 min**, refresh **7 d** — 01-identity-domain.md).
+- **ЧТО:** bind the admin/moderation domain's operator-login requirement to the existing `security_specification.md`
+  canon rather than restating numbers. **ПОЧЕМУ:** the spec asserts "admin actions restricted to authorized roles" and
+  "protect against privilege escalation" but never named the operator credential policy, risking drift if a number is
+  re-stated. **ПОЧЕМУ ТАК ЛУЧШЕ:** single source of truth (security-spec) for the password/lockout numbers — no
+  duplication, no new infrastructure; this is a requirement-linkage, not a new rule.
+
+---
+
 ## Related Documents
 
 - [Glossary](glossary.md)
 - [Admin API](../03-architecture/api-contracts/admin-api.yaml)
+- [Security Specification](security/security_specification.md)
+- [Data Governance](data-governance.md)
 - [Moderation Domain](12-moderation-domain.md)
 - [Identity Domain](01-identity-domain.md)
 - [Business Requirements](../02-requirements/business-requirements/admin-domain.md)

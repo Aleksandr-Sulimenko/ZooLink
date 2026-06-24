@@ -125,7 +125,7 @@ status: "Approved"
 | `PATCH /admin/users/{userId}/role` | ADMIN | Устанавливает `users.role` в любую из 7 канонических ролей. Записывается в аудит (`identity.role_changed`, before/after). **Отзывает ВСЕ refresh-семейства** цели (round-4). Само-понижение последнего ADMIN в MVP разрешено (см. Open Questions). |
 | `POST /admin/users/{userId}/rebind` | ADMIN | Перепривязывает ровно один идентификатор: `newPhone` (повторно хешируется), либо `oauthProvider`+`oauthId`, либо очистка OAuth id. 409, если новый идентификатор занят. Аудит (`identity.identifier_rebound`, причина записана). Отзывает все сессии цели. Без тихого захвата — актёр это ADMIN. |
 | `POST /admin/users/{userId}/erase` | ADMIN | Выполняет `erase_user` (data-governance.md §2): анонимизация PII, освобождение `phone_hash`/`oauth_*`/`email`, `avatar_url`→NULL, редактирование `notification_logs.recipient/content`, отзыв сессий, метка `erased_at`, status→DEACTIVATED. Идемпотентно (уже стёрт ⇒ 200 no-op). Аудит `user.erased` сохраняется под юр.удержанием. |
-| `POST /me/erase` | user | Самостоятельное право на забвение: немедленная деактивация (если ACTIVE) и фиксация запроса; анонимизация выполняется после 30-дневного grace (retention-задача / ADMIN). В MVP нет планировщика — см. Open Questions. |
+| `POST /me/erase` | user | Самостоятельное право на забвение: немедленная деактивация (если ACTIVE) и фиксация запроса; анонимизация выполняется после 30-дневного grace через **retention-задачу** (только worker, D2) либо по триггеру ADMIN. |
 
 **Действия `erase_user(user_id)` по полям (авторитетно — зеркалит инвентарь PII data-governance.md §1):**
 `phone_hash`→NULL, `oauth_google_id`/`oauth_apple_id`/`oauth_telegram_id`/`oauth_vk_id`→NULL, `email`→NULL,
@@ -153,6 +153,21 @@ status: "Approved"
 > к `notification_prefs` (консистентность, без нарушения NOT NULL — колонка `NOT NULL`), и **не требует изменения схемы**
 > (колонки уже существуют). Латентно сегодня (contact-exchange ещё не построен, колонки всегда NULL), но закрывает
 > пробел до того, как он сможет утечь.
+
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ (D2, нормативно — retention-задача закрывает «в MVP нет планировщика»):**
+> **ЧТО:** анонимизация после 30-дневного grace теперь выполняется автоматически
+> **retention-задачей** только в worker (`backend/src/lib/scheduler/retention.service.ts`, планируется
+> `RetentionExpireJob` под PG advisory-lock; настраивается через `RETENTION_TICK_CRON`/`RETENTION_GRACE_DAYS`,
+> по умолчанию ежечасный тик / 30-дневный grace). Каждый тик: аккаунты DEACTIVATED с
+> `deactivated_at < now() - grace` и `erased_at IS NULL` → `erase_user` (те же авторитетные действия по полям,
+> что и при триггере ADMIN; актёр = **system**, `actor_id = NULL`, `principal_type` по умолчанию HUMAN —
+> платформенная автоматизация, не решение ИИ-агента); этот же проход авто-экспирует ACTIVE-листинги после
+> `expires_at` (GAP-012). **ПОЧЕМУ:** старый текст («в MVP нет планировщика — см. Open Questions») оставлял
+> право на забвение (ФЗ-152) зависимым от ручного действия ADMIN без SLA. **ПОЧЕМУ ТАК ЛУЧШЕ:** стирание
+> после grace теперь происходит без участия человека (своевременность по ФЗ-152), задача идемпотентна
+> (повторный прогон пропускает уже стёртые / в пределах grace строки) и безопасна для одного инстанса
+> (advisory-lock, forward-compatible с масштабированным пулом worker'ов), и **не требует изменения схемы** —
+> переиспользует уже имеющиеся `status`/`deactivated_at`/`erased_at`.
 
 ### Поток активации по phone-OTP (round-7/Фаза-2, нормативно)
 - Регистрация, отправляющая OTP в том же запросе, создаёт аккаунт **сразу в `PENDING_VERIFICATION`**

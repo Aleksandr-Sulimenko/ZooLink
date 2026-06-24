@@ -33,7 +33,8 @@ status: "Approved"
 ## 2. Процедура erasure / анонимизации
 Право на забвение (ФЗ-152) согласовано с трассируемостью как **анонимизация на месте с сохранением UUID**:
 1. Запрос удаления → `status = DEACTIVATED`, **grace 30 дней** (восстановимо).
-2. После grace — `erase_user(user_id)`:
+2. После grace — `erase_user(user_id)` — запускается автоматически **retention-задачей** только в worker
+   (D2; `RETENTION_GRACE_DAYS`, по умолчанию 30) либо вручную ADMIN; для прогона задачи актёр = **system**:
    - анонимизировать ПДн `users` по таблице выше (UUID сохраняется → строки с FK RESTRICT валидны).
    - NULL `notification_logs.recipient/content` пользователя; удалить S3-аватар.
    - **Под legal hold (НЕ стирается):** `audit_log`, `moderation_decisions` (append-only), `animal_ownership_history`,
