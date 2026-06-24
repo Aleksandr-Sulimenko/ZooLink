@@ -68,7 +68,7 @@ ADR-0011 (agent-principal) — выход A0a, ссылается из A1/B0
 ### A1 — Канон ролей (GAP-004/008 + schema-гигиена)
 | ID | Действие | 👤 | 🔗 | Статус |
 |----|----------|----|----|--------|
-| **A1** 🔴 | 7 ролей канон; синхрон identity-BR (+BREEDER/FARMER), admin-BR (−SUPER_ADMIN из `users.role`, additive-модель), org-BR (−MODERATOR). **Протянуть 7-ролевой enum в `admin-api.yaml`** (не только auth-api/schema — C3/frontend). **Устранить дубль `role_in_org`** (schema:79 inline с MODERATOR vs :986 named без + comment :722). `principal_type` ⟂ роли — закрепить в ADR-0011, не дублировать. DoD: негативные тесты CHECK (SUPER_ADMIN reject, org-MODERATOR reject) + двойной прогон миграции. | architect→doc-keeper→backend | A0a(инвариант ⟂) | 🔄 (schema role_in_org + 7-ролей в admin-api + rbac-matrix ✅; **остался BR-doc sync** identity/admin/org +RU → фаза C) |
+| **A1** 🔴 | 7 ролей канон; синхрон identity-BR (+BREEDER/FARMER), admin-BR (−SUPER_ADMIN из `users.role`, additive-модель), org-BR (−MODERATOR). **Протянуть 7-ролевой enum в `admin-api.yaml`** (не только auth-api/schema — C3/frontend). **Устранить дубль `role_in_org`** (schema:79 inline с MODERATOR vs :986 named без + comment :722). `principal_type` ⟂ роли — закрепить в ADR-0011, не дублировать. DoD: негативные тесты CHECK (SUPER_ADMIN reject, org-MODERATOR reject) + двойной прогон миграции. | architect→doc-keeper→backend | A0a(инвариант ⟂) | ✅ (schema role_in_org + 7-ролей в admin-api + rbac-matrix ✅; BR-doc sync identity/admin/org +RU выполнен в A1-BR-волне 2026-06-24) |
 
 ### A2 — Модель reference-data (GAP-001 + DIV-9 + C6/C7)
 | ID | Действие | 👤 | 🔗 | Статус |
