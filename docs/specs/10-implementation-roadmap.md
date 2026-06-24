@@ -120,7 +120,7 @@ This specification addresses the following Non-Functional Requirements:
    
 2. **User Experience Improvements**
    - Enhanced profile pages (show animals, listings, badges)
-   - Saved searches and favorites
+   - Saved-search **alerts** (basic favorites & saved searches ship in **MVP** — see `01-discovery/mvp-scope.md`; only new-match alerts are Фаза 2)
    - Listing promotion/boosting (simple featured listings)
    - Improved search (autocomplete, saved locations)
    - User ratings and reviews (basic)

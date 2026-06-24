@@ -102,7 +102,7 @@ flowchart TD
 ## Разбивка на задачи
 1. **Бэкенд (NestJS)**
    - [ ] Создать модуль `moderation` с помощью CLI NestJS
-   - [ ] Определить сущность ModerationDecision (TypeORM) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
+   - [ ] Определить модель ModerationDecision (Prisma) с полями: id, moderatorId (ссылка на пользователя), entityType (Listing/Animal), entityId, решение (APPROVED/REJECTED/CHANGES_REQUESTED), причина (enum), примечания (опционально), createdAt
    - [ ] Добавить поле moderationStatus в сущности Listing и Animal (или создать таблицу ассоциаций)
    - [ ] Реализовать ModerationController (получение очереди, получение деталей элемента, отправка решения)
    - [ ] Реализовать ModerationService (бизнес-логика получения очереди, обработки решения, запуска уведомлений)
@@ -136,6 +136,29 @@ flowchart TD
 - [ ] Трассируемость NFR: проверка, что требования производительности, безопасности и доступности правильно учтены и документированы
 
 ---
+
+## Операции очереди (раунд 5, нормативно)
+
+- **Очередь и FIFO:** очередь = объявления в `PENDING_MODERATION`, порядок по `moderation_enqueued_at ASC` (ставится
+  при сабмите), индекс `idx_listings_modqueue`. Цель <2 с / 100 элементов.
+- **Назначение / блокировка (без двойной модерации):** модератор **захватывает** задачу — `assigned_to`, `locked_at`,
+  `lock_expires_at` (миграция 0009). Захват эксклюзивен на `MOD_LOCK_TTL` (по умолч. 15 мин, авто-снятие по истечении).
+  Два модератора (или AI-агент + человек) не могут действовать над одним элементом; второй захват → `409`.
+- **Таксономия причин:** `moderation_reasons` засеяна (миграция 0010): `prohibited_species, incomplete_info,
+  poor_photos, suspected_fraud, price_violation, wrong_category, duplicate, animal_welfare, policy_violation`.
+  Причина **обязательна** при REJECT и CHANGES_REQUESTED; её `description_localized` идёт в уведомления
+  `listing_rejected`/`listing_changes_requested` (переменная `reason`).
+- **Ре-модерация при правке:** редактирование **существенных полей** ACTIVE-объявления (title, description, фото,
+  цена, species/breed, listing_type) возвращает его в `PENDING_MODERATION` (`moderation_status='PENDING'`); тривиальные
+  правки — нет. Энфорс в сервис-слое.
+- **SLA и эскалация:** часы SLA с `moderation_enqueued_at`; при таймауте — **эскалация ADMIN** (событие
+  `Moderation.Escalated`), остаётся `PENDING_MODERATION` — без авто-одобрения/отклонения.
+- **Модерация животных:** в MVP животные **не** модерируются отдельно; животное проверяется через своё объявление.
+  `entity_type='ANIMAL'` в `moderation_decisions`/`content_reports` используется только для решений **по жалобам**, не как отдельная очередь.
+- **Апелляции:** **нет апелляций в MVP** — hard REJECT терминален (продавец создаёт новое исправленное объявление);
+  исправимый путь — CHANGES_REQUESTED. (Апелляции — Фаза 2; appeal-rate не метрика MVP.)
+- **Аудит:** каждое решение пишет `moderation_decisions` (append-only) **и** строку `audit_log`.
+- **AI-модератор (ADR-0006):** AGENT использует тот же claim/lock-контракт; гейтится feature-флагом, в MVP выключен.
 
 ## Связанные документы
 

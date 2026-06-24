@@ -53,8 +53,8 @@ This specification addresses the following Non-Functional Requirements:
 ## Task Breakdown
 1. **Backend (NestJS)**
    - [ ] Create `identity` module with NestJS CLI
-   - [ ] Define User entity (TypeORM/Prasmic) with fields: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
-   - [ ] Implement phone verification service (SMS sending via Twilio abstraction)
+   - [ ] Define User model (Prisma, per [ADR-0007](../04-decisions/0007-orm-strategy.md)) with fields: id, phoneNumber, firstName, lastName, role, isActive, createdAt, updatedAt
+   - [ ] Implement phone verification service (SMS via `SmsProvider` port — SMS.RU default, [ADR-0008](../04-decisions/0008-rf-provider-matrix.md))
    - [ ] Implement OAuth verification strategies (Google, Apple, Telegram, VK)
    - [ ] Create AuthController (register, login, refresh, profile)
    - [ ] Create AuthService (validate credentials, generate JWT/refresh tokens)
@@ -77,7 +77,7 @@ This specification addresses the following Non-Functional Requirements:
 
 3. **Infrastructure**
    - [ ] Configure Redis for refresh token storage (or use JWT with database refresh tokens)
-   - [ ] Set up SMS provider credentials (Twilio) in environment
+   - [ ] Set up SMS provider credentials (SMS.RU api_id) in environment
    - [ ] Configure OAuth provider credentials (Google, Apple, etc.)
    - [ ] Add security headers (helmet) and CORS configuration
    - [ ] Implement logging for auth events (success/failure)
@@ -94,6 +94,27 @@ This specification addresses the following Non-Functional Requirements:
 - [ ] NFR Traceability: Verify that performance, security, and accessibility requirements are properly addressed and documented
 
 ---
+
+## Account lifecycle, sessions & recovery (round-4, normative)
+
+- **Identifier uniqueness:** `phone_hash` and each `oauth_*` id are **unique** (migration 0008). `phone_hash` is a
+  **deterministic HMAC-SHA256(phone, server_pepper)** — NOT bcrypt — so duplicates are detectable. The last-4-digits
+  display is stored/derived separately.
+- **Auth model:** passwordless for end users (phone OTP + OAuth). `password_hash` is reserved for **operator roles**
+  (ADMIN/MODERATOR) only; the password policy/lockout in `security_specification.md` applies **only** to them. The
+  canonical access TTL is **15 min** (refresh 7 d) — the "24h" wording elsewhere is superseded.
+- **SMS OTP:** 6 digits, TTL 5 min, resend cooldown 60 s, max 5 verify attempts then lockout 15 min;
+  `verification_attempts` counts verify attempts and resets on success/TTL.
+- **Sessions / refresh:** stored in `refresh_tokens` (family-based rotation). On `/auth/refresh` the presented token is
+  rotated (new row, `rotated_from`); **reuse of an already-rotated token revokes the whole `family_id`** (theft
+  detection). Max 5 active families/user (oldest evicted). Password/role/status change → revoke all families.
+- **Account recovery:** lost phone/OAuth → recovery via a **verified secondary channel** (verified email) with a
+  fresh OTP, or an ADMIN-assisted, audit-logged re-binding of the phone/OAuth identifier. (No silent takeover.)
+- **Role elevation:** USER → BREEDER/FARMER/VETERINARIAN/GROOMER is **admin-granted/verified**, not self-claimed,
+  and audit-logged. Canonical role set = the 7 in the DB CHECK; `auth-api` enum must list all 7.
+- **Deactivation vs erasure (ФЗ-152):** `status='DEACTIVATED'` (30-day grace, recoverable) is MVP; the anonymise
+  procedure `erase_user` is defined in [data-governance.md](data-governance.md). `status` is the single source of
+  truth; `is_active`/`deactivated_at` are derived.
 
 ## Related Documents
 

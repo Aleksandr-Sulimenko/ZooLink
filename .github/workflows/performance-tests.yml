@@ -1,3 +1,6 @@
+# ⚠️ DRAFT — not a working gate yet. Requires the ./backend repo (package.json, prisma schema)
+# and tests/performance/*.js (k6) which do not exist until backend implementation starts.
+# See docs/specs/09-testing-strategy.md "Test data, DB strategy & CI". Do not rely on this passing.
 name: Performance Tests
 
 on:

@@ -515,6 +515,33 @@ Feature: Listing Attribution to Organizations
 
 ---
 
+## Org-internal roles, lifecycle & invariants (round-4, normative)
+
+**Organization lifecycle** (`organizations.status`, migration 0008): `PENDING_VERIFICATION → ACTIVE → SUSPENDED →
+ARCHIVED`. An org may **create listings only when `status='ACTIVE'`**. On `ARCHIVED`: its branches → closed, its
+active listings → DEACTIVATED; org-owned animals stay (ownership transfer is MVP-locked) and become read-only.
+INN is **unique** (migration 0008); INN/KPP are format-validated in MVP (registry check is Фаза 2+).
+
+**Branches:** **at most one** `is_headquarters` per org (unique index, migration 0008); a listing's `branch_id` must
+belong to the listing's `organization_id` (service-layer + composite check).
+
+**Org-internal roles** (`organization_users.role_in_org` ∈ OWNER/ADMIN/STAFF/VET; distinct from platform roles):
+
+| Action | OWNER | ADMIN | STAFF | VET |
+|---|---|---|---|---|
+| Manage org profile / branches | ✓ | ✓ | — | — |
+| Invite / remove members, change roles | ✓ | ✓ (not OWNER) | — | — |
+| Create/edit org animals & listings | ✓ | ✓ | ✓ | ✓ (health data) |
+| Transfer ownership / archive org | ✓ | — | — | — |
+
+- **Invariant:** every org has **≥1 OWNER**; the last OWNER cannot leave/be removed (must transfer ownership first).
+- **Membership lifecycle** (`organization_users.status`): `PENDING_INVITE → ACTIVE → REVOKED/EXPIRED`; invites carry
+  `invitation_token` + `invitation_expires_at` (7 days) + `invited_by_user_id` (migration 0008). Creating an org
+  atomically creates an `OWNER` ACTIVE membership for the creator.
+- **Affiliation enforcement:** an org listing's `seller_id` must be an ACTIVE member of the listing's org (service-layer guard).
+- **`is_primary`:** at most one primary org per user (unique index, migration 0008).
+- All membership/role/lifecycle changes are written to `audit_log` (see [data-governance.md](data-governance.md)).
+
 ## Related Documents
 
 - [Glossary](glossary.md)

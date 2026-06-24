@@ -90,6 +90,25 @@ status: "Approved"
 
 ---
 
+## Целостность родословной и JSONB-контракты (раунд 4, нормативно)
+
+**Целостность родословной** (триггер `trg_enforce_pedigree_integrity`, миграция 0008):
+- Животное не может быть своим родителем; **без циклов** (не может быть своим предком; проверка до глубины 64).
+- `mother_id` → **Female** того же вида, рождённая **раньше** потомка; `father_id` → **Male**, те же правила.
+- `mother_id`/`father_id` = NULL означает «неизвестный/внешний предок» (внешние номера — в `pedigree_id`; полноценная
+  модель внешнего предка — Фаза 2+).
+- Деактивированные животные остаются в родословной потомков (целостность линии), но исключаются из breeding-поиска (`is_active`).
+
+**Контракты JSONB-полей** (каждое — JSON **массив**; валидировать `jsonb_typeof='array'` + форму элемента в сервис-слое):
+- `health_records`: `[{ "type": "vaccination|treatment|checkup", "date": "YYYY-MM-DD", "note": str, "vet": str? }]`
+- `reproductive_data` (самки): `[{ "event": "heat|mating|pregnancy|birth", "date": "YYYY-MM-DD", "details": obj? }]`
+- `health_test_results`: `[{ "test": str (HD|ED|PRA|DNA…), "result": "clear|carrier|affected|<value>", "date": "YYYY-MM-DD", "lab": str? }]`
+- `show_titles`: `[{ "title": str, "show": str?, "date": "YYYY-MM-DD"?, "country": str?, "rank": str? }]`
+
+**Прочее:** `microchip_id`/`tattoo_brand_id` **уникальны** (миграция 0004) — заменяет прежнее «warned, not enforced»;
+формат чипа — ISO-11784/85 (15 цифр, валидируется в сервисе). Исправление неизменяемого поля (species/sex/DoB) —
+через admin-процедуру с аудитом (не self-service). `breed_id` можно один раз нормализовать custom (NULL) → directory (миграция 0008).
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

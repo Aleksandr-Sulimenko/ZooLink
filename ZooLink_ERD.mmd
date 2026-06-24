@@ -5,6 +5,7 @@ erDiagram
         VARCHAR_50 code UK
         VARCHAR_100 name_ru
         VARCHAR_100 name_en
+        VARCHAR_10 market
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -84,6 +85,7 @@ erDiagram
         JSONB health_test_results
         JSONB show_titles
         BOOLEAN is_visible_in_breeding_search
+        VARCHAR_20 reproductive_status
         JSONB description_localized
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
@@ -111,6 +113,21 @@ erDiagram
         TIMESTAMPTZ expires_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    digital_assets {
+        UUID id PK
+        UUID animal_id FK
+        VARCHAR_30 asset_type
+        VARCHAR_20 chain
+        VARCHAR_120 contract_address
+        VARCHAR_120 token_id
+        VARCHAR_120 ipfs_cid
+        TEXT metadata_uri
+        VARCHAR_120 tx_hash
+        VARCHAR_20 mint_status
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% ADR-0010: NFT readiness hook; gated by feature_toggles
     }
 
     %% Organization Domain
@@ -276,9 +293,19 @@ erDiagram
         TEXT content
         VARCHAR_20 status
         JSONB provider_response
+        VARCHAR_255 provider_message_id
+        VARCHAR_255 idempotency_key UK
         INTEGER attempts
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    notification_suppressions {
+        UUID id PK
+        VARCHAR_255 recipient
+        VARCHAR_10 channel
+        VARCHAR_30 reason
+        TIMESTAMPTZ created_at
+        %% (recipient, channel) UNIQUE — hard-bounce / unsubscribe
     }
 
     %% Favorites & Saved Searches (MVP)
@@ -311,6 +338,41 @@ erDiagram
         UUID resolved_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    contact_reveals {
+        UUID id PK
+        UUID listing_id FK
+        UUID viewer_id FK
+        UUID seller_id FK
+        TIMESTAMPTZ created_at
+        %% ADR-0005: MVP "contact the seller" (no chat); audit + rate-limit source
+    }
+
+    %% Identity sessions & audit (round-4 integrity)
+    refresh_tokens {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_255 token_hash UK
+        UUID family_id
+        VARCHAR_120 device_label
+        TIMESTAMPTZ issued_at
+        TIMESTAMPTZ expires_at
+        UUID rotated_from
+        TIMESTAMPTZ revoked_at
+    }
+    audit_log {
+        UUID id PK
+        UUID actor_id FK
+        VARCHAR_20 actor_role
+        VARCHAR_100 action
+        VARCHAR_40 entity_type
+        UUID entity_id
+        JSONB before_data
+        JSONB after_data
+        INET ip_address
+        TEXT user_agent
+        TIMESTAMPTZ created_at
+        %% append-only
     }
 
     %% Extensibility / System Tables
@@ -348,6 +410,7 @@ erDiagram
     animals ||..o{ listings : "listed for"
     animals ||..o{ ownership_transfers : "transferred via"
     users ||..o{ ownership_transfers : "transfers (from/to)"
+    animals ||..o{ digital_assets : "tokenized as"
     animals }o..|| animals : "mother of"
     animals }o..|| animals : "father of"
     listings ||..o{ listing_photos : "has photos"
@@ -357,6 +420,10 @@ erDiagram
     listings ||..o{ favorites : "favorited by"
     users ||..o{ saved_searches : "saves search"
     users ||..o{ content_reports : "files report"
+    users ||..o{ contact_reveals : "reveals/owns"
+    listings ||..o{ contact_reveals : "contact revealed for"
+    users ||..o{ refresh_tokens : "has sessions"
+    users ||..o{ audit_log : "acted (nullable)"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"

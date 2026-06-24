@@ -4,6 +4,8 @@
 -- UPDATED: Added requested roles (veterinarian, groomer) for Priority 1 completion
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- pg_trgm: fuzzy/partial text search (typo tolerance) for the MVP search (ADR-0009, storage.md). Russian FTS uses the built-in 'russian' config.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- Uncomment if PostGIS is available for geography type
 -- CREATE EXTENSION IF NOT EXISTS postgis;
 
@@ -200,6 +202,9 @@ CREATE INDEX idx_animals_active ON animals(is_active) WHERE is_active = true;
 CREATE INDEX idx_animals_owned_since ON animals(owned_since);
 -- For breeding search visibility (Matching Domain)
 CREATE INDEX idx_animals_breeding_visible ON animals(is_visible_in_breeding_search) WHERE is_visible_in_breeding_search = true;
+-- Pedigree traversal (recursive CTE over parents) and ON DELETE SET NULL need these FK indexes
+CREATE INDEX idx_animals_mother ON animals(mother_id) WHERE mother_id IS NOT NULL;
+CREATE INDEX idx_animals_father ON animals(father_id) WHERE father_id IS NOT NULL;
 
 -- ========== Ownership History (For traceability, regulatory) ==========
 CREATE TABLE animal_ownership_history (
@@ -496,6 +501,29 @@ CREATE TABLE ownership_transfers (
 CREATE INDEX idx_owntransfer_animal ON ownership_transfers(animal_id);
 CREATE INDEX idx_owntransfer_status ON ownership_transfers(status);
 
+-- ========== Digital Assets / NFT readiness (ADR-0010) ==========
+-- Schema hook only: no minting/contracts/indexer in MVP. Behavior gated by feature_toggles ('digital_assets').
+-- PostgreSQL stays the source of truth; on-chain is a verifiable mirror. No owner PII in on-chain metadata.
+CREATE TABLE digital_assets (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    animal_id        UUID REFERENCES animals(id) ON DELETE RESTRICT,
+    asset_type       VARCHAR(30) NOT NULL CHECK (asset_type IN ('PEDIGREE', 'CERTIFICATE', 'OWNERSHIP')),
+    chain            VARCHAR(20) NOT NULL DEFAULT 'TON' CHECK (chain IN ('TON', 'POLYGON')),
+    contract_address VARCHAR(120),
+    token_id         VARCHAR(120),
+    ipfs_cid         VARCHAR(120),
+    metadata_uri     TEXT,
+    tx_hash          VARCHAR(120),
+    mint_status      VARCHAR(20) NOT NULL DEFAULT 'NONE'
+                     CHECK (mint_status IN ('NONE', 'PENDING', 'MINTED', 'TRANSFERRED', 'FAILED')),
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_digital_assets_animal ON digital_assets(animal_id);
+-- At most one live token per (animal, asset_type)
+CREATE UNIQUE INDEX uq_digital_asset_per_type ON digital_assets(animal_id, asset_type)
+    WHERE mint_status IN ('PENDING', 'MINTED', 'TRANSFERRED');
+
 -- ========== Extensibility / System Tables ==========
 CREATE TABLE feature_toggles (
     key VARCHAR(100) PRIMARY KEY,
@@ -580,6 +608,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) VALUES
 ('premium_profiles', 'Включить премиум‑профили с расширенной галереей и аналитикой', false, 0),
 ('payments', 'Внутриплатёжные платежи (продвижение, premium и т.п.) — таблицы Payment-домена определены, но выключены до пост-MVP', false, 0),
+('digital_assets', 'NFT / токенизация цифровых активов (ADR-0010). Выключено до Фазы 2+.', false, 0),
 ('boosted_listings', 'Платное продвижение объявлений в поиске', false, 0),
 ('vet_leadgen', 'Генерация лидов для ветеринарных клиник', false, 0),
 ('service_marketplace', 'Рынок услуг (ветеринары, тренеры, перевозчики)', false, 0),
@@ -785,6 +814,21 @@ ON listings USING GIN ((description_localized -> 'en'));
 CREATE INDEX IF NOT EXISTS idx_listings_description_localized_ru
 ON listings USING GIN ((description_localized -> 'ru'));
 
+-- ========== MVP full-text & fuzzy search (ADR-0009, storage.md) ==========
+-- Russian-morphology FTS on listing titles/descriptions (ru + en). The GIN indexes above match a JSONB key;
+-- these support actual word search via to_tsvector. pg_trgm indexes add typo/partial tolerance.
+CREATE INDEX IF NOT EXISTS idx_listings_fts_title_ru
+ON listings USING GIN (to_tsvector('russian', coalesce(title_localized ->> 'ru', '')));
+CREATE INDEX IF NOT EXISTS idx_listings_fts_desc_ru
+ON listings USING GIN (to_tsvector('russian', coalesce(description_localized ->> 'ru', '')));
+CREATE INDEX IF NOT EXISTS idx_listings_fts_title_en
+ON listings USING GIN (to_tsvector('english', coalesce(title_localized ->> 'en', '')));
+-- Trigram (fuzzy) on the most-searched text: listing title (ru) and animal nickname (ru)
+CREATE INDEX IF NOT EXISTS idx_listings_trgm_title_ru
+ON listings USING GIN ((coalesce(title_localized ->> 'ru', '')) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_animals_trgm_nickname_ru
+ON animals USING GIN ((coalesce(nickname_localized ->> 'ru', '')) gin_trgm_ops);
+
 COMMENT ON TABLE supported_languages IS 'Таблица поддерживаемых языков для локализации интерфейса и контента';
 COMMENT ON COLUMN supported_languages.code IS 'Код языка по ISO 639-1 (например, ru, en, fr)';
 COMMENT ON COLUMN supported_languages.name_localized IS 'Локализованное название самого языка в формате JSONB';
@@ -801,3 +845,297 @@ COMMENT ON FUNCTION set_app_language(text) IS 'Установить текущи
 ALTER TABLE notification_templates
     ADD CONSTRAINT fk_notification_templates_language
     FOREIGN KEY (language) REFERENCES supported_languages(code) ON DELETE RESTRICT;
+
+-- ========== Business-logic invariants (audit round 3; mirrored in migration 0004) ==========
+-- Listing: ACTIVE requires moderation_status APPROVED (pre-moderation gate, ADR-0003)
+CREATE OR REPLACE FUNCTION enforce_listing_active_requires_approval() RETURNS trigger AS $$
+BEGIN
+    IF NEW.status = 'ACTIVE' AND NEW.moderation_status IS DISTINCT FROM 'APPROVED' THEN
+        RAISE EXCEPTION 'Listing % cannot be ACTIVE unless moderation_status = APPROVED (got %)',
+            NEW.id, NEW.moderation_status;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_listing_active_requires_approval ON listings;
+CREATE TRIGGER trg_listing_active_requires_approval
+    BEFORE INSERT OR UPDATE ON listings
+    FOR EACH ROW EXECUTE FUNCTION enforce_listing_active_requires_approval();
+
+-- Animal: microchip / tattoo uniqueness (anti-fraud; replaces the non-unique indexes above)
+DROP INDEX IF EXISTS idx_animals_microchip;
+DROP INDEX IF EXISTS idx_animals_tattoo;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_animals_microchip ON animals(microchip_id) WHERE microchip_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_animals_tattoo    ON animals(tattoo_brand_id) WHERE tattoo_brand_id IS NOT NULL;
+
+-- Listing value checks
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_price_nonneg;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_price_nonneg CHECK (price_cents IS NULL OR price_cents >= 0);
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_quantity_pos;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_quantity_pos CHECK (quantity IS NULL OR quantity >= 1);
+ALTER TABLE listings DROP CONSTRAINT IF EXISTS chk_listings_currency_iso;
+ALTER TABLE listings ADD  CONSTRAINT chk_listings_currency_iso CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$');
+
+-- Animal nickname must carry at least one non-empty language (en or ru)
+ALTER TABLE animals DROP CONSTRAINT IF EXISTS chk_animals_nickname_lang;
+ALTER TABLE animals ADD  CONSTRAINT chk_animals_nickname_lang CHECK (
+    coalesce(nullif(trim(nickname_localized ->> 'en'), ''), nullif(trim(nickname_localized ->> 'ru'), '')) IS NOT NULL
+);
+
+-- ========== Contact exchange (MVP, no chat — ADR-0005; mirrored in migration 0005) ==========
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_phone    VARCHAR(30);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_telegram VARCHAR(64);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_prefs    JSONB NOT NULL
+    DEFAULT '{"show_phone": true, "show_telegram": false}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS contact_reveals (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    listing_id  UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+    viewer_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    seller_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_reveals_viewer_time ON contact_reveals(viewer_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_contact_reveals_listing ON contact_reveals(listing_id);
+COMMENT ON TABLE contact_reveals IS 'Audit + rate-limit source for seller-contact reveals (ADR-0005, no-chat MVP).';
+COMMENT ON TABLE conversations IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
+COMMENT ON TABLE messages IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
+
+-- ========== Integrity & cascades (audit round 3, P1; mirrored in migration 0006) ==========
+-- Reproductive status for breeding eligibility (matching domain)
+ALTER TABLE animals ADD COLUMN IF NOT EXISTS reproductive_status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN'
+    CHECK (reproductive_status IN ('INTACT', 'NEUTERED', 'UNKNOWN'));
+
+-- breed must belong to the animal's species (composite FK; NULL breed_id allowed via MATCH SIMPLE)
+ALTER TABLE animals DROP CONSTRAINT IF EXISTS fk_animals_breed_species;
+ALTER TABLE breeds  DROP CONSTRAINT IF EXISTS uq_breeds_id_species;
+ALTER TABLE breeds  ADD  CONSTRAINT uq_breeds_id_species UNIQUE (id, species_id);
+ALTER TABLE animals ADD  CONSTRAINT fk_animals_breed_species
+    FOREIGN KEY (breed_id, species_id) REFERENCES breeds(id, species_id) ON DELETE RESTRICT;
+
+-- Content report dedup: one OPEN report per (reporter, entity)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_open_report_per_reporter_entity
+    ON content_reports(reporter_id, entity_type, entity_id) WHERE status = 'OPEN';
+
+-- Deactivation cascades to live listings
+CREATE OR REPLACE FUNCTION cascade_animal_deactivation() RETURNS trigger AS $$
+BEGIN
+    IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
+        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+         WHERE animal_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_cascade_animal_deactivation ON animals;
+CREATE TRIGGER trg_cascade_animal_deactivation AFTER UPDATE ON animals
+    FOR EACH ROW EXECUTE FUNCTION cascade_animal_deactivation();
+
+CREATE OR REPLACE FUNCTION cascade_user_deactivation() RETURNS trigger AS $$
+BEGIN
+    IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
+        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+         WHERE seller_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_cascade_user_deactivation ON users;
+CREATE TRIGGER trg_cascade_user_deactivation AFTER UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION cascade_user_deactivation();
+
+-- Pet/livestock hard split: a species belongs to exactly one market (ADR-0002; mirrored in migration 0007)
+ALTER TABLE species ADD COLUMN IF NOT EXISTS market VARCHAR(10) NOT NULL DEFAULT 'pet'
+    CHECK (market IN ('pet', 'livestock'));
+UPDATE species SET market = 'livestock'
+ WHERE code IN ('cattle', 'cow', 'bull', 'sheep', 'goat', 'pig', 'horse', 'poultry', 'chicken');
+
+-- ========== Round-4 integrity (org / identity / pedigree / governance; mirrored in migration 0008) ==========
+-- Organization lifecycle + invariants
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS status VARCHAR(25) NOT NULL DEFAULT 'PENDING_VERIFICATION'
+    CHECK (status IN ('PENDING_VERIFICATION', 'ACTIVE', 'SUSPENDED', 'ARCHIVED'));
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS verified_at  TIMESTAMP WITH TIME ZONE;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS archived_at  TIMESTAMP WITH TIME ZONE;
+DROP INDEX IF EXISTS idx_organizations_inn;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_inn ON organizations(inn) WHERE inn IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_branch_one_hq ON branches(organization_id) WHERE is_headquarters;
+ALTER TABLE organization_users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+    CHECK (status IN ('PENDING_INVITE', 'ACTIVE', 'REVOKED', 'EXPIRED'));
+ALTER TABLE organization_users ADD COLUMN IF NOT EXISTS invitation_token      VARCHAR(100);
+ALTER TABLE organization_users ADD COLUMN IF NOT EXISTS invitation_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE organization_users ADD COLUMN IF NOT EXISTS invited_by_user_id    UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE organization_users DROP CONSTRAINT IF EXISTS chk_org_user_role;
+ALTER TABLE organization_users ADD  CONSTRAINT chk_org_user_role CHECK (role_in_org IN ('OWNER', 'ADMIN', 'STAFF', 'VET'));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_org_user_primary ON organization_users(user_id) WHERE is_primary;
+
+-- Identity uniqueness + session model
+DROP INDEX IF EXISTS idx_users_phone_hash;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_hash     ON users(phone_hash)       WHERE phone_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oauth_google   ON users(oauth_google_id)  WHERE oauth_google_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oauth_apple    ON users(oauth_apple_id)   WHERE oauth_apple_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oauth_telegram ON users(oauth_telegram_id) WHERE oauth_telegram_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oauth_vk       ON users(oauth_vk_id)      WHERE oauth_vk_id IS NOT NULL;
+COMMENT ON COLUMN users.phone_hash IS 'Deterministic HMAC-SHA256(phone, server_pepper) for unique lookup — NOT bcrypt (per-row salt would defeat uniqueness).';
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash   VARCHAR(255) NOT NULL UNIQUE,
+    family_id    UUID NOT NULL,
+    device_label VARCHAR(120),
+    issued_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    expires_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    rotated_from UUID,
+    revoked_at   TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON refresh_tokens(user_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
+
+-- Animal: relaxed breed normalization + org-ownership MVP lock
+CREATE OR REPLACE FUNCTION trg_animals_immutable_and_owner()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF OLD.species_id IS DISTINCT FROM NEW.species_id THEN
+            RAISE EXCEPTION 'species_id cannot be changed after creation.';
+        END IF;
+        IF OLD.sex IS DISTINCT FROM NEW.sex THEN
+            RAISE EXCEPTION 'sex cannot be changed after creation.';
+        END IF;
+        IF OLD.date_of_birth IS DISTINCT FROM NEW.date_of_birth THEN
+            RAISE EXCEPTION 'date_of_birth cannot be changed after creation.';
+        END IF;
+        IF OLD.breed_id IS NOT NULL AND OLD.breed_id IS DISTINCT FROM NEW.breed_id THEN
+            RAISE EXCEPTION 'breed_id cannot be changed after creation (only custom->directory normalization is allowed).';
+        END IF;
+        IF OLD.owner_id IS DISTINCT FROM NEW.owner_id OR OLD.organization_id IS DISTINCT FROM NEW.organization_id THEN
+            RAISE EXCEPTION 'Changing ownership is not allowed during MVP phase.';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Animal: pedigree integrity (no self-parent, parent sex/species/DOB, cycle prevention)
+CREATE OR REPLACE FUNCTION enforce_pedigree_integrity()
+RETURNS TRIGGER AS $$
+DECLARE v_sex text; v_species int; v_dob date; has_cycle boolean;
+BEGIN
+    IF NEW.mother_id = NEW.id OR NEW.father_id = NEW.id THEN
+        RAISE EXCEPTION 'An animal cannot be its own parent.';
+    END IF;
+    IF NEW.mother_id IS NOT NULL THEN
+        SELECT sex, species_id, date_of_birth INTO v_sex, v_species, v_dob FROM animals WHERE id = NEW.mother_id;
+        IF v_sex IS DISTINCT FROM 'Female' THEN RAISE EXCEPTION 'mother_id must reference a Female animal.'; END IF;
+        IF v_species IS DISTINCT FROM NEW.species_id THEN RAISE EXCEPTION 'mother must be the same species as the offspring.'; END IF;
+        IF v_dob IS NOT NULL AND NEW.date_of_birth IS NOT NULL AND v_dob >= NEW.date_of_birth THEN
+            RAISE EXCEPTION 'mother must be born before the offspring.'; END IF;
+    END IF;
+    IF NEW.father_id IS NOT NULL THEN
+        SELECT sex, species_id, date_of_birth INTO v_sex, v_species, v_dob FROM animals WHERE id = NEW.father_id;
+        IF v_sex IS DISTINCT FROM 'Male' THEN RAISE EXCEPTION 'father_id must reference a Male animal.'; END IF;
+        IF v_species IS DISTINCT FROM NEW.species_id THEN RAISE EXCEPTION 'father must be the same species as the offspring.'; END IF;
+        IF v_dob IS NOT NULL AND NEW.date_of_birth IS NOT NULL AND v_dob >= NEW.date_of_birth THEN
+            RAISE EXCEPTION 'father must be born before the offspring.'; END IF;
+    END IF;
+    IF NEW.mother_id IS NOT NULL OR NEW.father_id IS NOT NULL THEN
+        WITH RECURSIVE anc(id, depth) AS (
+            SELECT id, 1 FROM animals WHERE id IN (NEW.mother_id, NEW.father_id)
+            UNION ALL
+            SELECT p.pid, anc.depth + 1
+            FROM anc
+            JOIN animals a ON a.id = anc.id
+            CROSS JOIN LATERAL (VALUES (a.mother_id), (a.father_id)) AS p(pid)
+            WHERE p.pid IS NOT NULL AND anc.depth < 64
+        )
+        SELECT EXISTS (SELECT 1 FROM anc WHERE id = NEW.id) INTO has_cycle;
+        IF has_cycle THEN RAISE EXCEPTION 'Pedigree cycle detected (animal would be its own ancestor).'; END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_enforce_pedigree_integrity ON animals;
+CREATE TRIGGER trg_enforce_pedigree_integrity
+    BEFORE INSERT OR UPDATE OF mother_id, father_id ON animals
+    FOR EACH ROW EXECUTE FUNCTION enforce_pedigree_integrity();
+
+-- Governance: append-only audit log + reference-data lifecycle
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    actor_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+    actor_role  VARCHAR(20),
+    action      VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(40),
+    entity_id   UUID,
+    before_data JSONB,
+    after_data  JSONB,
+    ip_address  INET,
+    user_agent  TEXT,
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor  ON audit_log(actor_id, created_at);
+CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger AS $$
+BEGIN RAISE EXCEPTION 'audit_log is append-only'; END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_audit_log_append_only ON audit_log;
+CREATE TRIGGER trg_audit_log_append_only BEFORE UPDATE OR DELETE ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
+
+ALTER TABLE species ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE breeds  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE cities  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE feature_toggles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- ========== Round-5 operations (moderation queue / identity language / notification delivery; migration 0009) ==========
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_enqueued_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS assigned_to     UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS locked_at       TIMESTAMP WITH TIME ZONE;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS lock_expires_at TIMESTAMP WITH TIME ZONE;
+CREATE INDEX IF NOT EXISTS idx_listings_modqueue ON listings(moderation_enqueued_at) WHERE status = 'PENDING_MODERATION';
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_language CHAR(2) NOT NULL DEFAULT 'ru'
+    REFERENCES supported_languages(code) ON DELETE RESTRICT;
+
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS provider_message_id VARCHAR(255);
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS idempotency_key      VARCHAR(255);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_idempotency ON notification_logs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_provider_msg ON notification_logs(provider_message_id) WHERE provider_message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS notification_suppressions (
+    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    recipient  VARCHAR(255) NOT NULL,
+    channel    VARCHAR(10) NOT NULL CHECK (channel IN ('EMAIL', 'SMS')),
+    reason     VARCHAR(30) NOT NULL CHECK (reason IN ('HARD_BOUNCE', 'UNSUBSCRIBED', 'COMPLAINT')),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (recipient, channel)
+);
+
+-- ========== Round-5 seed: moderation reasons + notification templates (migration 0010) ==========
+INSERT INTO moderation_reasons (code, description_localized, applies_to, is_active) VALUES
+ ('prohibited_species', '{"ru":"Запрещённый к продаже вид","en":"Prohibited species"}',                 'LISTING', TRUE),
+ ('incomplete_info',    '{"ru":"Недостаточно информации","en":"Incomplete information"}',                 'LISTING', TRUE),
+ ('poor_photos',        '{"ru":"Некачественные или чужие фото","en":"Poor-quality or non-original photos"}','LISTING', TRUE),
+ ('suspected_fraud',    '{"ru":"Подозрение на мошенничество","en":"Suspected fraud"}',                    'LISTING', TRUE),
+ ('price_violation',    '{"ru":"Нарушение правил цены","en":"Pricing policy violation"}',                 'LISTING', TRUE),
+ ('wrong_category',     '{"ru":"Неверная категория/рынок","en":"Wrong category/market"}',                 'LISTING', TRUE),
+ ('duplicate',          '{"ru":"Дубликат объявления","en":"Duplicate listing"}',                          'LISTING', TRUE),
+ ('animal_welfare',     '{"ru":"Нарушение благополучия животных","en":"Animal-welfare violation"}',        'LISTING', TRUE),
+ ('policy_violation',   '{"ru":"Иное нарушение правил","en":"Other policy violation"}',                   'LISTING', TRUE)
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO notification_templates (name, type, subject_template, body_template, language, is_active) VALUES
+ ('user_verify_code', 'SMS', NULL, 'ZooLink: код подтверждения {{code}}. Действует {{ttl_min}} мин.', 'ru', TRUE),
+ ('user_verify_code', 'SMS', NULL, 'ZooLink: your verification code is {{code}}. Valid for {{ttl_min}} min.', 'en', TRUE),
+ ('listing_approved', 'EMAIL', 'Ваше объявление одобрено', 'Объявление «{{listing_title}}» одобрено и опубликовано.', 'ru', TRUE),
+ ('listing_approved', 'EMAIL', 'Your listing is approved', 'Your listing "{{listing_title}}" was approved and published.', 'en', TRUE),
+ ('listing_rejected', 'EMAIL', 'Объявление отклонено', 'Объявление «{{listing_title}}» отклонено. Причина: {{reason}}.', 'ru', TRUE),
+ ('listing_rejected', 'EMAIL', 'Your listing was rejected', 'Your listing "{{listing_title}}" was rejected. Reason: {{reason}}.', 'en', TRUE),
+ ('listing_changes_requested', 'EMAIL', 'Требуются изменения', 'По объявлению «{{listing_title}}» нужны правки: {{reason}}.', 'ru', TRUE),
+ ('listing_changes_requested', 'EMAIL', 'Changes requested', 'Your listing "{{listing_title}}" needs changes: {{reason}}.', 'en', TRUE),
+ ('listing_expired', 'EMAIL', 'Срок объявления истёк', 'Объявление «{{listing_title}}» истекло. Продлите его в личном кабинете.', 'ru', TRUE),
+ ('listing_expired', 'EMAIL', 'Your listing expired', 'Your listing "{{listing_title}}" has expired. Renew it in your account.', 'en', TRUE),
+ ('report_resolved', 'EMAIL', 'Ваша жалоба рассмотрена', 'Жалоба на {{entity_type}} рассмотрена. Решение: {{decision}}.', 'ru', TRUE),
+ ('report_resolved', 'EMAIL', 'Your report was reviewed', 'Your report on the {{entity_type}} was reviewed. Decision: {{decision}}.', 'en', TRUE)
+ON CONFLICT (name, type, language) DO NOTHING;

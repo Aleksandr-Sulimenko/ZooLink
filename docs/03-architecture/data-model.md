@@ -137,7 +137,7 @@ CREATE TABLE listings (
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    price_cents INTEGER,
+    price_cents BIGINT, -- money is stored in minor units (kopecks) as BIGINT, never FLOAT/INTEGER: INTEGER overflows on livestock-scale deals
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     location_point GEOGRAPHY(POINT, 4326),
@@ -253,6 +253,7 @@ contracts are specified in the linked specs. They were added per the schema audi
 | `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |
 | `notification_logs` | `specs/13-notification-domain.md` | Delivery log (SENT/DELIVERED/FAILED/BOUNCED) |
 | `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Process entity for transfer state machine (distinct from `animal_ownership_history`, the settled log). Animal ownership is locked during MVP. |
+| `digital_assets` | `../04-decisions/0010-nft-digital-assets-hooks.md` | NFT/tokenization readiness hook (ADR-0010). Empty in MVP; gated by `feature_toggles('digital_assets')`. On-chain mint/indexer is Фаза 2+. |
 
 Lifecycle/state columns added to existing tables: `listings.status` + `listings.moderation_status`
 (see `specs/statemachines/listing_state_machine.md`), `users.status` (see
@@ -281,10 +282,12 @@ Used for:
 ## Patterns for Handling Special Data
 
 ### Geospatial Data
-- Primary: a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS)
-- Fallback option: separate latitude/longitude columns (not included in the current schema, but can be added via ALTER TABLE)
+> Note: the SQL snippets in this doc are illustrative; `database_schema.sql` is the source of truth and already
+> includes `lat`/`lng`, `status`/`moderation_status` and the other audited columns.
+- **MVP primary:** `lat`/`lng` DOUBLE columns + Haversine + bounding-box prefilter (in the schema; ADR-0009).
+- **Фаза 2+ option:** a `location_point` column of type GEOGRAPHY(POINT, 4326) (requires PostGIS; already reserved in the schema).
 - Search radius: a `search_radius_m` column in meters
-- Indexes: a GIST index for efficient Distance Within operations and KNN search
+- Indexes: B-tree on lat/lng (MVP); a GiST index on `location_point` when PostGIS is enabled
 - Units: Meters for distances, SRID 4326 (WGS84) for coordinates
 
 ### Multilingualism

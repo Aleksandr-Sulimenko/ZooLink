@@ -33,7 +33,7 @@ These integrations are required for the MVP to function.
   - Fallback: Alternative auth methods available
 
 ### 2. SMS Gateway
-- **Provider**: Twilio (or similar with free tier)
+- **Provider**: **SMS.RU** (RF default; alternatives SMSC.RU / MTS Exolve — see ADR-0008). Twilio is RF-blocked.
 - ** Purpose**: Send verification codes for phone number authentication
 - ** Data exchanged**: Phone number, verification code
 - ** Security**: Uses HTTPS with API keys stored in secret management
@@ -58,7 +58,7 @@ These integrations are required for the MVP to function.
   - Future: Switch to self-hosted OSM with PostGIS for unlimited use
 
 ### 4. Email Service
-- **Provider**: SendGrid (or similar)
+- **Provider**: **Unisender** (RF default; alternative Mailopost — see ADR-0008). SendGrid is RF-blocked.
 - ** Purpose**: Send transactional emails only
   - Email verification (optional)
   - Moderation results (approve/reject)
@@ -93,7 +93,7 @@ These integrations are planned for later phases.
 
 ### 6. Payment Gateway
 - **Purpose**: Process payments for monetization features (Boost, premium profiles, escrow)
-- **Providers Considered**: Stripe, PayPal, Yandex.Kassa
+- **Provider (RF default)**: **ЮKassa + СБП** (alternatives Т-Касса / CloudPayments — see ADR-0008). Stripe/PayPal are RF-blocked and must not be used. Requires 54-ФЗ fiscalization.
 - **Data exchanged**: Payment details, transaction metadata
 - **Security**: PCI DSS compliance via certified gateway (we don't handle raw card data)
 - **Integration**: API-based, webhooks for payment status
@@ -188,7 +188,7 @@ These integrations are planned for later phases.
 ### 14. Analytics and Monitoring
 - **Purpose**: Improve observability and business intelligence
 - **Providers Considered**: 
-  - Application Performance Monitoring: Datadog, New Relic
+  - Application Performance Monitoring: **Prometheus + Grafana / VictoriaMetrics** (RF default, self-hostable; see ADR-0008); Datadog/New Relic only where billing is accessible
   - Log Aggregation: ELK Stack, Splunk
   - Error Tracking: Sentry, Rollbar
   - Business Intelligence: Tableau, Power BI, or open-source (Metabase, Superset)

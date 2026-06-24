@@ -137,7 +137,7 @@ CREATE TABLE listings (
     listing_type VARCHAR(20) NOT NULL CHECK (listing_type IN ('sale', 'breeding', 'show', 'adoption', 'stud_service')),
     title_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
     description_localized JSONB NOT NULL DEFAULT '{"en": "", "ru": ""}'::jsonb,
-    price_cents INTEGER,
+    price_cents BIGINT, -- деньги в минорных единицах (копейках) как BIGINT, никогда FLOAT/INTEGER: INTEGER переполняется на сделках масштаба livestock
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     location_point GEOGRAPHY(POINT, 4326),
@@ -253,6 +253,7 @@ CREATE TABLE users (
 | `notification_templates` | `specs/13-notification-domain.md` | По языкам; FK на `supported_languages` |
 | `notification_logs` | `specs/13-notification-domain.md` | Журнал доставки (SENT/DELIVERED/FAILED/BOUNCED) |
 | `ownership_transfers` | `specs/statemachines/ownership_transfer_state_machine.md` | Процессная сущность стейт-машины передачи (в отличие от `animal_ownership_history` — журнала свершившихся фактов). Смена владения заблокирована в MVP. |
+| `digital_assets` | `../04-decisions/0010-nft-digital-assets-hooks.md` | Хук готовности к NFT/токенизации (ADR-0010). Пустая в MVP; гейтится `feature_toggles('digital_assets')`. On-chain mint/indexer — Фаза 2+. |
 
 Колонки жизненного цикла/состояния, добавленные в существующие таблицы: `listings.status` +
 `listings.moderation_status` (см. `specs/statemachines/listing_state_machine.md`), `users.status`
@@ -281,10 +282,12 @@ CREATE TABLE users (
 ## Паттерны обработки специальных данных
 
 ### Геопространственные данные
-- Основное: колонка `location_point` типа GEOGRAPHY(POINT, 4326) (требует PostGIS)
-- Резервный вариант: отдельные широта/долгота колонки (не включены в текущую схему, но можно добавить через ALTER TABLE)
+> Примечание: SQL-сниппеты в этом документе иллюстративны; источник истины — `database_schema.sql`, где уже есть
+> `lat`/`lng`, `status`/`moderation_status` и прочие колонки из аудита.
+- **MVP, основное:** колонки `lat`/`lng` DOUBLE + Haversine + предфильтр bounding box (в схеме; ADR-0009).
+- **Фаза 2+, опционально:** колонка `location_point` типа GEOGRAPHY(POINT, 4326) (требует PostGIS; уже зарезервирована в схеме).
 - Радиус поиска: колонка `search_radius_m` в метрах
-- Индексы: GIST индекс для эффективных операций Distance Within и KNN поиска
+- Индексы: B-tree по lat/lng (MVP); GiST по `location_point` при включении PostGIS
 - Единицы: Метры для расстояний, SRID 4326 (WGS84) для координат
 
 ### Мультиязычность

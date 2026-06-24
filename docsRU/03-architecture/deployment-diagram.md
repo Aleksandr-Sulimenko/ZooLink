@@ -3,6 +3,22 @@
 ## Цель
 Показывает физическое развертывание артефактов на инфраструктурных узлах.
 
+> ⚠️ **MVP vs Target State.** Эта диаграмма показывает **целевое развёртывание (Фаза 2+)**: мульти-зональный
+> кластер Kubernetes с HPA/VPA/Cluster Autoscaler. Согласно [ADR-0001](../04-decisions/0001-tech-stack.md) и
+> [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md) **MVP НЕ использует Kubernetes**.
+>
+> **Топология развёртывания MVP (Фаза 1):**
+> - 1–2 VM (или один managed-хост) с **Docker Compose**: `api` (монолит NestJS, 1–N реплик), `postgres`,
+>   `redis`, `minio` (S3-совместимое), фоновый `worker` (вычитка outbox, задачи, cron).
+> - **Reverse proxy** (Nginx / Caddy / Traefik): терминирует TLS, отдаёт статику SPA + CDN.
+> - **Изоляция через Docker-сети:** публичен только reverse proxy; порты PostgreSQL/Redis/MinIO **никогда** не
+>   публикуются в интернет (только внутренняя сеть).
+> - **Провайдеры — РФ-набор** (см. [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)): объектное хранилище =
+>   Yandex Object Storage / VK Cloud / Selectel / self-hosted MinIO; CDN = Yandex/VK/Selectel; мониторинг =
+>   Prometheus + Grafana.
+>
+> Kubernetes, HPA/VPA, мульти-зональный DR и read-реплики ниже — **только Фаза 2+**.
+
 ## Описание диаграммы
 ```mermaid
 graph TD
@@ -17,7 +33,7 @@ graph TD
     %% CDN Layer
     subgraph CDN_Layer[Сеть доставки контента]
         direction TB
-        CDN_Edge["Крайние узлы CDN<br/>(CloudFront, Cloudflare)"]
+        CDN_Edge["Крайние узлы CDN<br/>(Yandex/VK/Selectel CDN — ADR-0008)"]
     end
 
     %% Load Balancing
@@ -99,11 +115,11 @@ graph TD
     %% External Services
     subgraph External_Services
         direction TB
-        SMS_Gateway["Провайдер SMS<br/>*(API Twilio)*"]
-        Email_Service["Провайдер email<br/>*(API SendGrid)*"]
+        SMS_Gateway["Провайдер SMS<br/>*(SMS.RU — ADR-0008)*"]
+        Email_Service["Провайдер email<br/>*(Unisender — ADR-0008)*"]
         Maps_Service["Провайдер карт<br/>*(API Yandex.Maps)*"]
-        OAuth_Providers["Провайдеры OAuth<br/>*(Google, Apple и др.)*"]
-        Monitoring_Service["Внешний мониторинг<br/>*(Datadog, New Relic)*"]
+        OAuth_Providers["Провайдеры OAuth<br/>*(Google, Apple, Telegram, VK)*"]
+        Monitoring_Service["Мониторинг<br/>*(Prometheus+Grafana / Sentry — ADR-0008)*"]
     end
 
     %% Relationships

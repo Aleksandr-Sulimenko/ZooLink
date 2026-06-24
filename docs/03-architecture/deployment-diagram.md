@@ -3,6 +3,22 @@
 ## Purpose
 Shows the physical deployment of artifacts on infrastructure nodes.
 
+> ⚠️ **MVP vs Target State.** This diagram depicts the **Target deployment (Фаза 2+)**: a multi-zone
+> Kubernetes cluster with HPA/VPA/Cluster Autoscaler. Per [ADR-0001](../04-decisions/0001-tech-stack.md)
+> and [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md), the **MVP does NOT use Kubernetes**.
+>
+> **MVP deployment topology (Фаза 1):**
+> - 1–2 VMs (or one managed host) running **Docker Compose**: `api` (NestJS monolith, 1–N replicas),
+>   `postgres`, `redis`, `minio` (S3-compatible), a background `worker` (outbox drain, jobs, cron).
+> - A **reverse proxy** (Nginx / Caddy / Traefik) terminating TLS and serving the static SPA build + CDN.
+> - **Network isolation via Docker networks:** only the reverse proxy is public; PostgreSQL/Redis/MinIO ports
+>   are **never** published to the internet (internal network only).
+> - **Providers are RF-appropriate** (see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md)): object storage
+>   = Yandex Object Storage / VK Cloud / Selectel / self-hosted MinIO; CDN = Yandex/VK/Selectel; monitoring =
+>   Prometheus + Grafana.
+>
+> Kubernetes, HPA/VPA, multi-zone DR and read replicas below are **Фаза 2+ only**.
+
 ## Diagram Description
 ```mermaid
 graph TD
@@ -17,7 +33,7 @@ graph TD
     %% CDN Layer
     subgraph CDN_Layer[Content Delivery Network]
         direction TB
-        CDN_Edge["CDN Edge Nodes<br/>(CloudFront, Cloudflare)"]
+        CDN_Edge["CDN Edge Nodes<br/>(Yandex/VK/Selectel CDN — ADR-0008)"]
     end
 
     %% Load Balancing
@@ -99,11 +115,11 @@ graph TD
     %% External Services
     subgraph External_Services
         direction TB
-        SMS_Gateway["SMS Provider<br/>(Twilio API)"]
-        Email_Service["Email Provider<br/>(SendGrid API)"]
+        SMS_Gateway["SMS Provider<br/>(SMS.RU — ADR-0008)"]
+        Email_Service["Email Provider<br/>(Unisender — ADR-0008)"]
         Maps_Service["Maps Provider<br/>(Yandex.Maps API)"]
-        OAuth_Providers["OAuth Providers<br/>(Google, Apple, etc.)"]
-        Monitoring_Service["External Monitoring<br/>(Datadog, New Relic)"]
+        OAuth_Providers["OAuth Providers<br/>(Google, Apple, Telegram, VK)"]
+        Monitoring_Service["Monitoring<br/>(Prometheus+Grafana / Sentry — ADR-0008)"]
     end
 
     %% Relationships

@@ -45,6 +45,25 @@ Enable specialized logic for matching animals for breeding (mating) based on var
 - Location-based matching uses same geo-search as marketplace domains.
 - We distinguish between "breeding" listings (animals for mating) and "sale" listings (offspring for sale).
 
+## Breeding eligibility (MVP — normative)
+Matching in the MVP is **stateless search/filter** (no `matches`/`match_history`/`match_feedback` tables — those are
+Фаза 2+). A candidate animal B is an eligible breeding partner for animal A iff **all** hard predicates hold;
+"compatibility score" is a Фаза 2+ ranking, not a gate.
+
+| # | Hard predicate (all must hold) | Field(s) |
+|---|---|---|
+| 1 | Same species | `A.species_id = B.species_id` |
+| 2 | Opposite sex | `A.sex <> B.sex` (one Male, one Female) |
+| 3 | Both intact (not neutered) | `reproductive_status = 'INTACT'` for A and B |
+| 4 | Both opted into breeding search | `is_visible_in_breeding_search = true` for A and B |
+| 5 | Both active | `is_active = true AND deactivated_at IS NULL` |
+| 6 | Different owners | `A.owner_id <> B.owner_id` (no self-match) |
+| 7 | Within radius | Haversine(A.location, B.location) ≤ requested radius (1–100 km) |
+
+- **Breed:** same `breed_id` is a *ranking boost*, not a hard filter (cross-breed allowed unless a future rule says otherwise).
+- **Age:** minimum breeding age is a Фаза 2+ refinement (needs per-species config); not gated in MVP.
+- `reproductive_status` ∈ {INTACT, NEUTERED, UNKNOWN}; `UNKNOWN` is **not** eligible (predicate 3 requires INTACT).
+
 ## NFR Traceability
 This specification addresses the following Non-Functional Requirements:
 - **Performance (NFR-PERF)**: Breeding search with 50k animals returns in <1s for 95% of requests (see docs/02-requirements/nfr/performance.md)
@@ -60,9 +79,9 @@ This specification addresses the following Non-Functional Requirements:
   - Search filters include species, breed, age, sex, health status, pedigree, location, and owner preferences
   - Map-based search with radius selector (1-100 km)
   - Search results display key breeding attributes (pedigree, health certifications, show titles)
-  - Clear indication of match quality/compatibility score
-  - Ability to save searches and set up alerts for new matches
-  - Direct contact reveal after moderation (phone, Telegram/VK links)
+  - Clear indication of match quality/compatibility score *(Фаза 2+; MVP shows eligible/not via the hard predicates above)*
+  - Ability to save searches *(MVP)*; alerts for new matches *(Фаза 2+)*
+  - Direct contact reveal after moderation (phone, Telegram/VK links) — see [16-contact-exchange.md](16-contact-exchange.md)
   - Option to convert animal profile to breeding listing with one click
 
 **UC-MT-02:** As a user concerned about privacy and control, I want to manage my animal's visibility in breeding searches so that I can protect my information and comply with personal preferences.
@@ -79,7 +98,7 @@ This specification addresses the following Non-Functional Requirements:
   - Moderation queue loads in <2s with clear status indicators
   - Breeding listing details show all required attributes for review (pedigree, health certificates, titles)
   - One-click approval/rejection with optional comments
-  - Bulk moderation options for similar listings
+  - Bulk moderation options for similar listings *(Фаза 2+; MVP = one-by-one)*
   - Clear compliance checklist for Russian animal breeding regulations
   - Notification system for users when listing status changes
   - Audit trail of moderation actions for accountability
