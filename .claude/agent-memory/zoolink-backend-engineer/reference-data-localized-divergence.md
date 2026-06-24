@@ -1,23 +1,40 @@
 ---
 name: reference-data-localized-divergence
-description: Reference-data code still uses flat name_ru/name_en but contract canon (B0.4) now mandates nameLocalized LocalizedString — open code↔contract gap
+description: RESOLVED 2026-06-23 (A2/migration 0018) — reference-data localized flat→JSONB name_localized, provenance+sort_order, audit entity_id_int; code now conforms to nameLocalized contract
 metadata:
   type: project
 ---
 
-**Open code↔contract divergence found 2026-06-23 (doc↔code sweep, flag a/b).**
+**RESOLVED 2026-06-23 — A2 (ADMIN_PHASE_ACTION_PLAN), migration `20260623_0018_reference_data_localized_provenance.sql`.**
 
-`admin-api.yaml` (updated by B0.1/B0.4 owner-decisions 2026-06-23) now mandates for `ReferenceDataEntry` / Create / Update:
-- `nameLocalized: LocalizedString {en, ru}` (single object) — NOT flat `name_ru`/`name_en`.
-- camelCase bodies (B0.1).
+The flat-`name_ru`/`name_en` vs contract-`nameLocalized` divergence is closed. What shipped:
 
-But the implemented code still uses flat snake_case `name_ru`/`name_en`:
-- `backend/src/modules/admin/dto/reference-data.dto.ts` (Create/Update DTOs + `ReferenceDataEntry` interface).
-- `backend/src/modules/admin/reference-data.service.ts` (`toEntry` mapping ~74, search ~97, form template ~131, create ~182).
+- **Schema (migration 0018, tables +0 → 32):** species/breeds/cities migrated flat `name_ru`/`name_en`
+  → `name_localized JSONB {ru,en}` (backfilled, flat columns DROPPED — single source of truth, owner-decision #3);
+  added `sort_order INTEGER DEFAULT 0`, `created_by`/`updated_by` (nullable `FK→users(id) ON DELETE SET NULL`,
+  agent-as-principal ready); per-locale `GIN ((name_localized -> 'xx'))` indexes. Added `audit_log.entity_id_int INTEGER`
+  (+ partial index) for INT-keyed lookup entities (entity_id is UUID; INT lookups now audited by real id).
+  `created_by`/`updated_by` are added in the **bottom ALTER mirror block** of `database_schema.sql`, NOT inline in
+  CREATE TABLE — species/breeds/cities are defined (line ~17) BEFORE `users` (line ~106), so an inline FK would
+  break a fresh build. (`name_localized`/`sort_order` are safe inline; they have no forward FK.)
 
-**Underlying schema** (`species`/`breeds`/`cities`) stores flat `name_ru VARCHAR(100)` + `name_en VARCHAR(100)` (schema lines 16/17, 26/27, 36/37) — NOT JSONB. So conforming the API to `nameLocalized` is either: (a) map flat columns ⇄ `{en,ru}` at the service boundary (cheap, no schema change), OR (b) migrate columns to `name_localized` JSONB (Owner-decision #3 says migrate flat→JSONB for lookups — that's A2 scope). The API-shape fix (a) can ship independently of the column migration.
+- **Code:** `modules/admin/dto/reference-data.dto.ts` now has `LocalizedStringDto` + `nameLocalized` (Create/Update/
+  entry) + `sortOrder`; `reference-data.service.ts` resolves localization per API_CONVENTIONS §6 — ADMIN reads return
+  `nameLocalized` (both locales), PUBLIC reads return resolved `name` string via `resolveLang(Accept-Language)`
+  (en fallback, default ru). `getById` is `@Public() + @UseGuards(OptionalJwtGuard)` so an admin token still yields
+  both locales; controller sets `Vary: Accept-Language`. Audit uses `entityIdInt` (added to `AuditEntry` + audit-log.service).
+  JSONB search uses Prisma `{ name_localized: { path: ['ru'], string_contains } }`.
 
-NOT fixed in the A0a change (out of scope, non-trivial, belongs with A2/admin-slice). Contract is canon here (deliberate owner-decision), so code must follow — this is a real backend TODO, not a contract bug.
+- **Contract:** `admin-api.yaml ReferenceDataEntry` now declares both `name` (resolved, public) and nullable
+  `nameLocalized` (admin) + `sortOrder`; Create/Update gained `sortOrder`.
 
-INT types are already correct: `speciesId`/`cityId`/`id` are INT in both DTO and contract (✅).
-Pagination envelope `{items, meta: PageMeta}` is correct in `lib/pagination/page.ts` (✅).
+- **Seed:** `migrations/0011` + `database_schema.sql` seed blocks rewritten to insert `name_localized` JSONB;
+  cities NOT-EXISTS dedup now matches on `name_localized->>'ru'`. `npm run seed` idempotent ×2 (CI runs seed×2).
+
+Validation: migration ran ×2 idempotent on live PG; negative tests passed (name_localized NOT NULL reject,
+created_by FK reject, audit append-only still rejects UPDATE, AGENT principal + entity_id_int accepted). Unit 180 green,
+admin e2e 13 green, lint/typecheck/build clean.
+
+Still flat-camelCase NOTE (out of A2 scope): the GET list/getById ops in admin-api.yaml carry `x-required-roles: [ADMIN]`
+but rbac-matrix + code make reference reads PUBLIC — pre-existing contract divergence, flagged for B0/doc-keeper.
+See [[adr-0011-actor-snapshot-invariants]].
