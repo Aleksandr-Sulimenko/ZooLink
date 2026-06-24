@@ -42,6 +42,15 @@ export const envSchema = z.object({
     .optional()
     .or(z.literal('')),
 
+  // Retention job (D2, ADMIN_PHASE_ACTION_PLAN.md). Worker-only periodic pass:
+  //  - RETENTION_TICK_CRON: cron expression for the tick (default hourly). Read at decorator-eval
+  //    time by RetentionExpireJob (@nestjs/schedule decorators cannot read DI), so it is a
+  //    deployment-time constant; still declared here so its shape is documented and validated.
+  //  - RETENTION_GRACE_DAYS: deactivation grace before erase_user runs (spec 01 / data-governance.md;
+  //    30-day grace is the documented default).
+  RETENTION_TICK_CRON: z.string().min(1).default('0 * * * *'),
+  RETENTION_GRACE_DAYS: z.coerce.number().int().positive().default(30),
+
   // Providers (ADR-0008). Empty credential → that adapter runs in stub mode.
   SMS_PROVIDER: z.string().default('smsru'),
   SMSRU_API_ID: z.string().optional().default(''),
@@ -57,6 +66,15 @@ export const envSchema = z.object({
   OAUTH_GOOGLE_CLIENT_ID: z.string().optional().default(''),
   OAUTH_GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
   OAUTH_APPLE_CLIENT_ID: z.string().optional().default(''),
+  // Sign in with Apple uses a client-secret JWT signed with an ES256 .p8 key, so it needs three
+  // additional values beyond the client id (D3 / OPS-11 — env FORM only; the adapter is deferred).
+  // Form chosen: the .p8 contents go in OAUTH_APPLE_PRIVATE_KEY (mounted as a secret file and read
+  // into the env), matching how every other secret is handled here (no file paths in env, no key
+  // material in the repo). Optional in dev/test; for a real prod Apple integration all three are
+  // required together — enforced by the .superRefine below.
+  OAUTH_APPLE_TEAM_ID: z.string().optional().default(''),
+  OAUTH_APPLE_KEY_ID: z.string().optional().default(''),
+  OAUTH_APPLE_PRIVATE_KEY: z.string().optional().default(''),
   OAUTH_TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
   OAUTH_VK_CLIENT_ID: z.string().optional().default(''),
   OAUTH_VK_CLIENT_SECRET: z.string().optional().default(''),
@@ -93,6 +111,25 @@ export function validateEnv(config: Record<string, unknown>): Env {
     throw new Error(
       'Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: required in production (min 32 chars)',
     );
+  }
+  // D3 / OPS-11: Sign in with Apple is all-or-nothing. The adapter is deferred (stub-on-empty), but if
+  // any Apple credential is supplied in production, the full set must be present so the form is never
+  // half-configured. All-empty = Apple OAuth simply off (stub-in-dev / 503-in-prod, like other providers).
+  if (parsed.data.NODE_ENV === 'production') {
+    const apple = {
+      OAUTH_APPLE_CLIENT_ID: parsed.data.OAUTH_APPLE_CLIENT_ID,
+      OAUTH_APPLE_TEAM_ID: parsed.data.OAUTH_APPLE_TEAM_ID,
+      OAUTH_APPLE_KEY_ID: parsed.data.OAUTH_APPLE_KEY_ID,
+      OAUTH_APPLE_PRIVATE_KEY: parsed.data.OAUTH_APPLE_PRIVATE_KEY,
+    };
+    const set = Object.entries(apple).filter(([, v]) => v !== '');
+    if (set.length > 0 && set.length < Object.keys(apple).length) {
+      const missing = Object.entries(apple)
+        .filter(([, v]) => v === '')
+        .map(([k]) => `  - ${k}: required when any OAUTH_APPLE_* is set in production`)
+        .join('\n');
+      throw new Error(`Invalid environment configuration:\n${missing}`);
+    }
   }
   return parsed.data;
 }

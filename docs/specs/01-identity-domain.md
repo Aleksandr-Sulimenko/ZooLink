@@ -126,7 +126,7 @@ Concrete endpoints implementing the recovery/role/erasure bullets above (contrac
 | `PATCH /admin/users/{userId}/role` | ADMIN | Sets `users.role` to any of the 7 canonical roles. Audit-logged (`identity.role_changed`, before/after). **Revokes ALL refresh families** of the target (round-4). Self-demotion of the last ADMIN is allowed in MVP (see Open Questions). |
 | `POST /admin/users/{userId}/rebind` | ADMIN | Re-binds exactly one identifier: `newPhone` (re-hashed), or an `oauthProvider`+`oauthId`, or clears an OAuth id. 409 if the new identifier is already taken. Audit-logged (`identity.identifier_rebound`, reason recorded). Revokes all target sessions. No silent takeover — actor is the ADMIN. |
 | `POST /admin/users/{userId}/erase` | ADMIN | Runs `erase_user` (data-governance.md §2): anonymise PII, release `phone_hash`/`oauth_*`/`email`, NULL `avatar_url`, redact `notification_logs.recipient/content`, revoke sessions, stamp `erased_at`, status→DEACTIVATED. Idempotent (already-erased ⇒ 200 no-op). Audit `user.erased` retained under legal hold. |
-| `POST /me/erase` | user | Self right-to-erasure: deactivates immediately (if ACTIVE) and records the request; the anonymisation runs after the 30-day grace (retention job / ADMIN). MVP has no scheduler — see Open Questions. |
+| `POST /me/erase` | user | Self right-to-erasure: deactivates immediately (if ACTIVE) and records the request; the anonymisation runs after the 30-day grace via the **retention job** (worker-only, D2) or an ADMIN trigger. |
 
 **`erase_user(user_id)` field actions (authoritative — mirrors data-governance.md §1 PII inventory):**
 `phone_hash`→NULL, `oauth_google_id`/`oauth_apple_id`/`oauth_telegram_id`/`oauth_vk_id`→NULL, `email`→NULL,
@@ -153,6 +153,20 @@ Concrete endpoints implementing the recovery/role/erasure bullets above (contrac
 > same rule already applied to `notification_prefs` (consistency, no NOT-NULL violation — the column is `NOT NULL`), and
 > needs **no schema change** (columns already exist). Latent today (contact-exchange not yet built, columns always NULL)
 > but closes the gap before it can leak.
+
+> **ЧТО/ПОЧЕМУ/ПОЧЕМУ ТАК ЛУЧШЕ (D2, normative — retention job closes "MVP has no scheduler"):**
+> **ЧТО:** the 30-day-grace anonymisation is now run automatically by a worker-only **retention job**
+> (`backend/src/lib/scheduler/retention.service.ts`, scheduled by `RetentionExpireJob` under a PG
+> advisory lock; configurable via `RETENTION_TICK_CRON`/`RETENTION_GRACE_DAYS`, default hourly tick /
+> 30-day grace). Each tick: DEACTIVATED accounts with `deactivated_at < now() - grace` and
+> `erased_at IS NULL` → `erase_user` (same authoritative field actions as the ADMIN trigger; actor =
+> **system**, `actor_id = NULL`, `principal_type` defaults HUMAN — platform automation, not an AI-agent
+> decision); the pass also auto-expires ACTIVE listings past `expires_at` (GAP-012). **ПОЧЕМУ:** the
+> old text ("MVP has no scheduler — see Open Questions") left ФЗ-152 right-to-erasure dependent on a
+> manual ADMIN action with no SLA. **ПОЧЕМУ ТАК ЛУЧШЕ:** erasure-after-grace now happens without human
+> intervention (ФЗ-152 timeliness), the job is idempotent (a re-run skips already-erased / within-grace
+> rows) and single-instance-safe (advisory lock, forward-compatible with a scaled worker fleet), and it
+> needs **no schema change** — it reuses `status`/`deactivated_at`/`erased_at` already present.
 
 ### Phone-OTP activation flow (round-7/Phase-2, normative)
 - Registration that sends the OTP in the same request creates the account **directly in

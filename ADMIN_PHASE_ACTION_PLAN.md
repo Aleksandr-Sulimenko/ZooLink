@@ -128,8 +128,8 @@ ADR-0011 (agent-principal) — выход A0a, ссылается из A1/B0
 ## ФАЗА D — 🟢 Stage (после форм из A/B)
 | ID | Действие | Источник | Статус |
 |----|----------|----------|--------|
-| **D2** | Авто-экспирация — **реализация** поверх B7-scheduler-формы | GAP-012 | ⏳ |
-| **D3** | OAuth google/apple/vk — адаптеры; **расширить env под Apple** (`TEAM_ID`/`KEY_ID`/`.p8`-mount) | DIV-7, OPS-11 | ⏳ |
+| **D2** | Авто-экспирация — **реализация** поверх B7-scheduler-формы | GAP-012 | ✅ (2026-06-24: `RetentionService` (lib/scheduler) под B7 advisory-lock — (а) ACTIVE-листинги `expires_at<now()`→EXPIRED (set-based parametrized SQL; approval-gate триггер пропускает →EXPIRED; дормант пока Listings не ставит expires_at), (б) DEACTIVATED `deactivated_at<now()-grace` & `erased_at IS NULL`→`erase_user` (актёр=system, principal HUMAN-default; mirror AdminUserService field-actions + inline session-revoke, без auth-module в worker); `RETENTION_GRACE_DAYS`/`RETENTION_TICK_CRON` env, isTest-guard, идемпотентно; интеграционные на live PG 4✅ — verify within-grace/within-expiry НЕ трогаются; spec01 «MVP has no scheduler» закрыт; миграций НЕ нужно; RU spec01/data-governance pending → doc-keeper) |
+| **D3** | OAuth google/apple/vk — адаптеры; **расширить env под Apple** (`TEAM_ID`/`KEY_ID`/`.p8`-mount) | DIV-7, OPS-11 | 🔄 (2026-06-24: **env-форма Apple ✅** — `OAUTH_APPLE_TEAM_ID`/`OAUTH_APPLE_KEY_ID`/`OAUTH_APPLE_PRIVATE_KEY` (.p8-контент в env-var, mount-как-секрет-файл паттерн как у прочих секретов — без путей/ключей в репо); optional dev/test, prod required-вместе если задан хоть один (superRefine); `.env.example` синхрон. **Реальные адаптеры google/apple/vk остаются defer** (stub-on-empty/prod-503; нужны живые секреты, аддитивны) — трек-пометка) |
 | **D4** | reference-CRUD-аудит (read-видимость → поднять в B0.6/B8) + operator-password-policy spec | GAP-006-sub | ⏳ |
 
 ## ФАЗА E — ⚪ Реальный defer (tracked)
