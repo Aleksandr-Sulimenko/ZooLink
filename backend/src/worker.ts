@@ -14,7 +14,7 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   const logger = await app.resolve(PinoLogger);
-  logger.log('Worker started (no jobs registered yet — Phase 0 skeleton)');
+  logger.log('Worker started (outbox relay + scheduler registered)');
 }
 
 void bootstrap();

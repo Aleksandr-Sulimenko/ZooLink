@@ -322,6 +322,7 @@ contracts are specified in the linked specs. They were added per the schema audi
 |---|---|---|
 | `moderation_reasons` | `specs/12-moderation-domain.md` | Admin-configurable reason codes (lookup) |
 | `moderation_decisions` | `specs/12-moderation-domain.md` · `../04-decisions/0011-agent-principal-actor-model.md` | Append-only audit trail (UPDATE/DELETE blocked by trigger). ADR-0011 actor-snapshot (`actor_principal_type` HUMAN/AGENT, `actor_role`) + human-override chain (`supersedes_decision_id` self-ref FK ON DELETE RESTRICT, `is_human_override`, biconditional `chk_moddec_override`) |
+| `decision_templates` | `specs/12-moderation-domain.md` | B10 Admin-extensible dictionary of canned REJECT/CHANGES_REQUESTED notes (TABLE, not enum). INT id; `body_localized` JSONB {ru,en}; `applies_to_decision` ∈ {REJECTED, CHANGES_REQUESTED}; `market` (ADR-0002); optional `related_reason_code` FK → `moderation_reasons.code` (ON DELETE SET NULL); `sort_order`/`is_active`/provenance; UNIQUE (market, code); per-locale GIN; updated_at trigger. A2/A3 reference-data shape. FORM now; selection at decision time ships with the Moderation domain. |
 | `payment_transactions` | `specs/14-payment-domain.md` | `amount_minor BIGINT` (minor units, never FLOAT); `idempotency_key` UNIQUE |
 | `refunds` | `specs/14-payment-domain.md` | Linked to `payment_transactions` |
 | `notification_templates` | `specs/13-notification-domain.md` | Per-language; FK to `supported_languages` |

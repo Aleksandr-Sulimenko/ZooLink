@@ -30,6 +30,8 @@ const MIGRATIONS_DIR = resolve(__dirname, '../../migrations');
 const SEED_FILES = [
   '20260618_0011_seed_reference_data.sql',
   '20260617_0010_seed_reasons_templates.sql',
+  // decision_templates seed needs moderation_reasons (0010) present first (related_reason_code FK).
+  '20260624_0022_decision_templates.sql',
 ];
 
 const COUNT_TABLES = [
@@ -40,6 +42,7 @@ const COUNT_TABLES = [
   'feature_toggles',
   'moderation_reasons',
   'notification_templates',
+  'decision_templates',
 ];
 
 async function main(): Promise<void> {

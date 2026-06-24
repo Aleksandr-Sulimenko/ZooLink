@@ -8,6 +8,7 @@ import { AuditModule } from './lib/audit/audit.module';
 import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module';
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { OutboxRelayModule } from './lib/outbox/outbox-relay.module';
+import { SchedulerModule } from './lib/scheduler/scheduler.module';
 
 /**
  * Worker context — shares the platform foundation with the API but hosts no HTTP layer.
@@ -25,6 +26,7 @@ import { OutboxRelayModule } from './lib/outbox/outbox-relay.module';
     FeatureToggleModule,
     OutboxModule,
     OutboxRelayModule,
+    SchedulerModule,
   ],
 })
 export class WorkerModule {}

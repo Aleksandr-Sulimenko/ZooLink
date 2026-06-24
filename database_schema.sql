@@ -1245,6 +1245,38 @@ INSERT INTO genetic_markers (code, name_localized, market, sort_order) VALUES
   ('disease_resistance', '{"ru": "Маркер устойчивости к болезни","en": "Disease-resistance marker"}'::jsonb,  'livestock', 40)
 ON CONFLICT (market, code) DO NOTHING;
 
+-- ========== B10: moderation decision-templates (migration 0022) ==========
+-- INT-keyed Admin-extensible dictionary of canned REJECT/CHANGES_REQUESTED notes (spec 12 round-5),
+-- in the A2/A3 reference-data shape (body_localized JSONB; sort_order; provenance; market ADR-0002;
+-- soft-delete; per-locale GIN; (market, code) uniqueness). Defined here (after users + moderation_reasons)
+-- because created_by/updated_by → users(id) and related_reason_code → moderation_reasons(code). These are
+-- notes (free prose), distinct from the mandatory moderation_reasons taxonomy. FORM now; selection at
+-- decision time (ModerationActionRequest.templateCode) ships with the Moderation domain. NOT an enum
+-- (rewrite-test = YES — a template add would force a contract+schema rewrite otherwise).
+CREATE TABLE IF NOT EXISTS decision_templates (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) NOT NULL,
+    body_localized JSONB NOT NULL DEFAULT '{"ru": "", "en": ""}'::jsonb,
+    applies_to_decision VARCHAR(20) NOT NULL
+        CHECK (applies_to_decision IN ('REJECTED', 'CHANGES_REQUESTED')),
+    market VARCHAR(10) NOT NULL DEFAULT 'pet' CHECK (market IN ('pet', 'livestock')),
+    related_reason_code VARCHAR(50) REFERENCES moderation_reasons(code) ON DELETE SET NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (market, code)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_templates_body_localized_en ON decision_templates USING GIN ((body_localized -> 'en'));
+CREATE INDEX IF NOT EXISTS idx_decision_templates_body_localized_ru ON decision_templates USING GIN ((body_localized -> 'ru'));
+DROP TRIGGER IF EXISTS update_decision_templates_updated_at ON decision_templates;
+CREATE TRIGGER update_decision_templates_updated_at BEFORE UPDATE ON decision_templates
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- NOTE: the decision_templates SEED lives further down, AFTER the moderation_reasons seed block —
+-- related_reason_code FKs moderation_reasons(code), which is seeded by migration 0010 below.
+
 -- ========== Round-5 operations (moderation queue / identity language / notification delivery; migration 0009) ==========
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_enqueued_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS assigned_to     UUID REFERENCES users(id) ON DELETE SET NULL;
@@ -1281,6 +1313,20 @@ INSERT INTO moderation_reasons (code, description_localized, applies_to, is_acti
  ('animal_welfare',     '{"ru":"Нарушение благополучия животных","en":"Animal-welfare violation"}',        'LISTING', TRUE),
  ('policy_violation',   '{"ru":"Иное нарушение правил","en":"Other policy violation"}',                   'LISTING', TRUE)
 ON CONFLICT (code) DO NOTHING;
+
+-- B10 decision_templates seed (idempotent: ON CONFLICT (market, code) DO NOTHING) — mirrors migration 0022.
+-- Placed AFTER moderation_reasons seed: related_reason_code FKs moderation_reasons(code).
+INSERT INTO decision_templates (code, body_localized, applies_to_decision, market, related_reason_code, sort_order) VALUES
+  ('incomplete_info_changes',
+   '{"ru": "Пожалуйста, дополните объявление недостающей информацией (порода, возраст, документы) и отправьте на повторную модерацию.", "en": "Please complete the listing with the missing details (breed, age, documents) and resubmit for moderation."}'::jsonb,
+   'CHANGES_REQUESTED', 'pet', 'incomplete_info', 10),
+  ('poor_photos_changes',
+   '{"ru": "Замените фотографии на качественные и оригинальные снимки самого животного.", "en": "Please replace the photos with high-quality, original images of the animal itself."}'::jsonb,
+   'CHANGES_REQUESTED', 'pet', 'poor_photos', 20),
+  ('prohibited_species_reject',
+   '{"ru": "Объявление отклонено: продажа данного вида запрещена правилами платформы и законодательством.", "en": "Listing rejected: the sale of this species is prohibited by platform rules and applicable law."}'::jsonb,
+   'REJECTED', 'pet', 'prohibited_species', 30)
+ON CONFLICT (market, code) DO NOTHING;
 
 INSERT INTO notification_templates (name, type, subject_template, body_template, language, is_active) VALUES
  ('user_verify_code', 'SMS', NULL, 'ZooLink: код подтверждения {{code}}. Действует {{ttl_min}} мин.', 'ru', TRUE),

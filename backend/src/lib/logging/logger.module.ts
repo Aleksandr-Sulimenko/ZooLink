@@ -22,6 +22,20 @@ import { AppConfigService } from '../../config/app-config.service';
             res.setHeader('x-request-id', id);
             return id;
           },
+          // B8 observability: stamp the acting principal (HUMAN|AGENT) onto every request log line
+          // once a guard has attached req.user. Lets an operator (human or AI agent) trace who acted
+          // — and follow an agent→human-override chain via the shared x-request-id (reqId). Only
+          // non-PII identity fields are logged here; PII stays redacted by the `redact` block below.
+          customProps: (req) => {
+            const principal = (req as { user?: { userId?: string; role?: string; principalType?: string } }).user;
+            return principal
+              ? {
+                  principalType: principal.principalType,
+                  actorId: principal.userId,
+                  actorRole: principal.role,
+                }
+              : {};
+          },
           // PII redaction (FZ-152 / data-governance.md): never log secrets or personal data.
           redact: {
             paths: [

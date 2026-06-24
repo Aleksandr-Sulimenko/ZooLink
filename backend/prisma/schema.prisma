@@ -367,6 +367,7 @@ model moderation_reasons {
   applies_to            String                 @default("ANY") @db.VarChar(20)
   is_active             Boolean                @default(true)
   created_at            DateTime               @default(now()) @db.Timestamptz(6)
+  decision_templates    decision_templates[]
   moderation_decisions  moderation_decisions[]
 }
 
@@ -656,6 +657,8 @@ model users {
   content_reports_content_reports_resolved_byTousers              content_reports[]          @relation("content_reports_resolved_byTousers")
   conversations_conversations_participant_a_idTousers             conversations[]            @relation("conversations_participant_a_idTousers")
   conversations_conversations_participant_b_idTousers             conversations[]            @relation("conversations_participant_b_idTousers")
+  decision_templates_decision_templates_created_byTousers         decision_templates[]       @relation("decision_templates_created_byTousers")
+  decision_templates_decision_templates_updated_byTousers         decision_templates[]       @relation("decision_templates_updated_byTousers")
   favorites                                                       favorites[]
   feature_toggles                                                 feature_toggles[]
   genetic_markers_genetic_markers_created_byTousers               genetic_markers[]          @relation("genetic_markers_created_byTousers")
@@ -735,6 +738,28 @@ model health_certifications {
   updated_at                                    DateTime @default(now()) @db.Timestamptz(6)
   users_health_certifications_created_byTousers users?   @relation("health_certifications_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
   users_health_certifications_updated_byTousers users?   @relation("health_certifications_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
+
+  @@unique([market, code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model decision_templates {
+  id                                         Int                 @id @default(autoincrement())
+  code                                       String              @db.VarChar(50)
+  body_localized                             Json                @default("{\"en\": \"\", \"ru\": \"\"}")
+  applies_to_decision                        String              @db.VarChar(20)
+  market                                     String              @default("pet") @db.VarChar(10)
+  related_reason_code                        String?             @db.VarChar(50)
+  sort_order                                 Int                 @default(0)
+  is_active                                  Boolean             @default(true)
+  created_by                                 String?             @db.Uuid
+  updated_by                                 String?             @db.Uuid
+  created_at                                 DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                 DateTime            @default(now()) @db.Timestamptz(6)
+  users_decision_templates_created_byTousers users?              @relation("decision_templates_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
+  moderation_reasons                         moderation_reasons? @relation(fields: [related_reason_code], references: [code], onUpdate: NoAction)
+  users_decision_templates_updated_byTousers users?              @relation("decision_templates_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
 
   @@unique([market, code])
 }

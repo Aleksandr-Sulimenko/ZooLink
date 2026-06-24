@@ -285,6 +285,21 @@ erDiagram
         TIMESTAMPTZ created_at
         %% append-only (immutable); ADR-0011 actor-snapshot + human-override chain (supersedes_decision_id self-ref)
     }
+    decision_templates {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB body_localized
+        VARCHAR_20 applies_to_decision
+        VARCHAR_10 market
+        VARCHAR_50 related_reason_code FK
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% B10 Admin-extensible canned-note dictionary (spec 12); UK (market, code)
+    }
 
     %% Payment Domain
     payment_transactions {
@@ -501,6 +516,7 @@ erDiagram
     users ||..o{ moderation_decisions : "decides"
     moderation_reasons ||..o{ moderation_decisions : "categorizes"
     moderation_decisions |o..o{ moderation_decisions : "human-override supersedes (ADR-0011)"
+    moderation_reasons |o..o{ decision_templates : "related_reason_code (optional)"
     users ||..o{ payment_transactions : "pays"
     payment_transactions ||..o{ refunds : "refunded by"
     payment_transactions |o..o{ listings : "settles (optional)"
