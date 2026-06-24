@@ -43,30 +43,47 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 ---
 
 ## Фаза 0 — Каркас и платформенный фундамент
-- [ ] `backend/` NestJS-скелет: package.json, tsconfig, nest-cli, eslint/prettier, npm-скрипты (start/build/lint/typecheck/test).
-- [ ] `config/`: zod-валидация всех env из `.env.example`; падать при отсутствии обязательных.
-- [ ] `lib/db`: PrismaService (connection pool, graceful shutdown) + Kysely instance на том же пуле; PgBouncer-совместимость.
-- [ ] `prisma db pull` из БД (database_schema.sql) → `schema.prisma`; `generate`; зафиксировать команду в README.
-- [ ] **RFC7807** global exception filter + `Problem` schema; `ValidationPipe` (whitelist); `PageMeta` util; `Idempotency-Key` интерсептор; `ETag`/`If-Match` хелпер; `@nestjs/throttler`+Redis.
-- [ ] Логирование Pino (request-id, **PII-redaction** по `data-governance.md`); `/metrics` (Prometheus); Sentry init.
-- [ ] Health: `GET /health/live`, `GET /health/ready` (PG+Redis).
-- [ ] `worker.ts` каркас (отдельный bootstrap) + общий код с api.
-- [ ] Seed-runner: применяет reference-data + `moderation_reasons` + `notification_templates` (миграции 0010) в dev/test.
-- [ ] docker-compose dev поднимается: `cp .env.example .env` → `docker compose up -d` → миграции → health 200.
-- [ ] CI `ci.yml` активировать (lint+typecheck+`migrate deploy`-check+unit на PG-service+security-гейты).
-- **DoD Фазы 0:** `docker compose up` даёт зелёный `/health/ready`; CI зелёный; Prisma client типизирован из канон-схемы.
+- [x] `backend/` NestJS-скелет: package.json, tsconfig, nest-cli, eslint(flat v9)/prettier, npm-скрипты (start/build/lint/typecheck/test).
+- [x] `config/`: zod-валидация всех env из `.env.example`; падать при отсутствии обязательных (fail-fast, типизированный `AppConfigService`).
+- [x] `lib/db`: PrismaService (connection pool, graceful shutdown) + Kysely instance (выделенный pg-пул; Prisma свой пул не экспонирует — задокументировано); PgBouncer-совместимость.
+- [x] `prisma db pull` из БД (database_schema.sql) → `schema.prisma` (31 модель); `generate`; команда зафиксирована в `backend/README.md`.
+- [x] **RFC7807** global exception filter + `Problem` schema; `ValidationPipe` (whitelist); `PageMeta` util; `Idempotency-Key` интерсептор; `ETag`/`If-Match` хелпер; `@nestjs/throttler`+Redis.
+- [x] Логирование Pino (request-id, **PII-redaction** по `data-governance.md`); `/metrics` (Prometheus, prom-client); Sentry init (no-op без DSN).
+- [x] Health: `GET /health/live`, `GET /health/ready` (PG+Redis) — version-neutral, проверено `200`.
+- [x] `worker.ts` каркас (отдельный bootstrap, `worker.module.ts`) + общий код с api.
+- [x] Seed-runner (`npm run seed`, `src/seed.ts`): применяет идемпотентные seed-миграции — reference-data (новая `0011`) + `moderation_reasons`/`notification_templates` (`0010`); guard от прод-БД. Найден+исправлен баг идемпотентности `cities` (нет уникального ключа → `WHERE NOT EXISTS` в `0011` и `database_schema.sql`).
+- [x] docker-compose dev поднимается: `docker compose up -d --build` → весь стек `healthy`, `https://localhost/health/ready` → 200. Исправлены баги канона: Dockerfile не доносил сгенерированный Prisma-клиент в runtime; proxy не получал `PUBLIC_DOMAIN` (Caddy крэшил); worker наследовал HTTP-healthcheck; `.env.example` JWT-плейсхолдеры <32; minio gating `service_started`.
+- [x] CI `ci.yml` активирован: install→`db:generate`→lint→typecheck→build→unit(coverage)→apply `database_schema.sql`→**drift-check** `schema.prisma`→seed×2; отдельный security-джоб (npm audit/Semgrep/Trivy). Убран ошибочный `prisma migrate deploy` (мы на SQL-canon + introspect, ADR-0007).
+- **DoD Фазы 0 ✅:** `docker compose up` → зелёный `/health/ready`; Prisma client типизирован из канон-схемы; CI-гейт активен (drift-check сторожит док↔код); seed идемпотентен. Testcontainers-тесты возможны (Docker установлен).
 
 ## Фаза 1 — Кросс-каттинг / платформа
-- [ ] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
-- [ ] **AuthZ:** `RolesGuard` читает `x-required-roles`; `PoliciesGuard` (CASL) + object-level ownership по `rbac-matrix.md`.
-- [ ] **Провайдеры (порты+адаптеры):** `SmsProvider`(SMS.RU), `EmailProvider`(Unisender), `MapsProvider`(Yandex), `ObjectStorage`(S3/MinIO), `PaymentProvider`(stub, за `feature_toggles.payments`), `Metrics`. Выбор вендора через env.
-- [ ] **Feature-toggle сервис:** чтение `feature_toggles`, **детерминированный rollout** (`hash(key+user_id)%100`), флип только ADMIN + запись в `audit_log`.
-- [ ] **Outbox-инфра:** транзакционный writer в `outbox_events`; relay в worker (poll/`pg_notify`, at-least-once, идемпотентные консьюмеры, backoff, parking); типы событий из `event-catalog.md`.
-- [ ] **Audit-log сервис:** запись привилегированных действий (append-only).
-- **DoD Фазы 1:** аутентификация/авторизация работают end-to-end на тест-эндпоинте; outbox-событие доходит до тест-консьюмера идемпотентно; провайдеры мокаются в тестах.
+- [x] **Auth-core:** JWT access(15м)/refresh(7д) с family-ротацией и reuse-detection (`refresh_tokens`); `JwtGuard`.
+- [x] **AuthZ:** `RolesGuard` читает `x-required-roles`; `PoliciesGuard` (CASL) + object-level ownership по `rbac-matrix.md`.
+- [x] **Провайдеры (порты+адаптеры):** `SmsProvider`(SMS.RU), `EmailProvider`(Unisender), `MapsProvider`(Yandex), `ObjectStorage`(S3/MinIO), `PaymentProvider`(stub, за `feature_toggles.payments`), `Metrics`(существующий `MetricsService`). Выбор вендора через env; пустой креденшл → адаптер уходит в stub-режим (комм-каналы), S3 всегда live (env-обязателен), payments всегда stub в MVP. `lib/providers/*` (порты+фабрики `@Global`), собственный SigV4-presigner для S3 (без AWS SDK) — **проверен round-trip PUT/GET на живом MinIO**. Новые env: `SMS_FROM`, `UNISENDER_LIST_ID`/`EMAIL_FROM`/`EMAIL_FROM_NAME`, `PAYMENT_PROVIDER`/`YOOKASSA_*` (синхронно в `env.validation.ts` + `.env.example`).
+- [x] **Feature-toggle сервис:** `FeatureToggleService` (`lib/feature-toggle/`) — read-through кэш (TTL 30с), **детерминированный rollout** (`sha256(key:subject)%100`, монотонный); `flip` только ADMIN, атомарно в транзакции с записью в `audit_log`; partial-rollout не течёт на анонимов. `@Global` модуль.
+- [x] **Outbox-инфра:** `OutboxService.publish(tx, event)` — транзакционный writer (`lib/outbox/`, `@Global`); `OutboxRelay` (worker-only, `OutboxRelayModule`) — polling-relay с **claim-with-lease** (atomic `UPDATE … FOR UPDATE SKIP LOCKED RETURNING`, обработка вне блокировки строки), at-least-once, идемпотентные консьюмеры (`OUTBOX_CONSUMERS`, регистрируются доменами Фазы 2), экспоненциальный **backoff** (10·2ⁿ, cap 1ч) + **parking**/dead-letter после 8 попыток. БД: миграция `0012` (+attempts/last_error/next_attempt_at/dead_lettered_at, `idx_outbox_ready`), **+bugfix**: снят ошибочный `updated_at`-триггер на `outbox_events` (ломал любой UPDATE relay). Claim/lease/process проверены на живом PG.
+- [x] **Audit-log сервис:** `AuditLogService` (`lib/audit/`, `@Global`) — append-only INSERT, опц. tx-клиент для атомарности; ADR-0006 agent-as-principal (actor_id может быть AGENT-юзер). Инвариант append-only + rollout-CHECK проверены на живом PG (UPDATE/DELETE → `audit_log is append-only`; rollout=101 → reject).
+- **DoD Фазы 1 — ✅ выполнен и подтверждён тестами:** auth/authz e2e (`test/auth.e2e-spec.ts`: 401/200/403/200 на `/v1/auth/whoami`+`operator-check`); outbox round-trip + идемпотентная переотправка на живом PG (`test/outbox.e2e-spec.ts`); провайдеры мокаются/стабятся в unit. Итог: **69 unit + 8 e2e** зелёные.
+- **Code-review remediation (round-7, 2026-06-18, всё закрыто до Фазы 2):**
+  - HIGH: `updated_at`-триггеры теперь по факту наличия колонки (миграция 0013) — починены `animal_ownership_history`/`messages`, добавлен `digital_assets`.
+  - MEDIUM: `ProviderError` → RFC7807 **503 `UPSTREAM_UNAVAILABLE`** в `ProblemExceptionFilter` (сообщение апстрима только в лог, не клиенту) + unit-тест; интеграционные/e2e тесты добавлены и **подключены в CI** (PG+Redis сервисы, отдельный шаг).
+  - LOW: снят избыточный `idx_outbox_unprocessed` (миграция 0014); добавлены комментарии-гарды «секрет в URL — не логировать» в SMS.RU/Yandex адаптеры.
 
 ## Фаза 2 — Домены (порядок = MVP happy-path и зависимости)
-1. [ ] **Identity** (`auth-api`, спека 01): регистрация (SMS OTP), OAuth (G/Apple/TG/VK), сессии/recovery, роли, `erase_user`. Уникальность phone_hash(HMAC)/oauth.
+1. [x] **Identity** (`auth-api`, спека 01): регистрация (SMS OTP), OAuth (G/Apple/TG/VK), сессии/recovery, роли, `erase_user`. Уникальность phone_hash(HMAC)/oauth. **Домен закрыт (slices 1–4); остаются tracked-пункты 2b/account-linking/scheduler — см. ниже.**
+   - [x] **Slice 1 — passwordless phone OTP:** `register/phone` (202, OTP via SmsProvider) + `verify-phone` (200, ACTIVE + session); phone_hash=HMAC-SHA256+pepper (base64url), OTP в Redis (TTL 5м/cooldown 60с/lockout 5×→15м); **per-IP rate-limit** на обоих эндпоинтах (5/15м register, 15/15м verify); **audit_log** на register/verify(ok/fail/lockout); verify только из {UNVERIFIED,PENDING} (race-guard); is_active синхронизируется со status. Контракт `auth-api` приведён к round-4 (passwordless, INT cityId, no phoneHash leak, 7 ролей) EN+RU; стейт-машина/traceability/data-model/glossary синхронизированы EN+RU. 91 unit + 12 e2e. Сессии (refresh/logout) — из Фазы 1.
+   - [~] **Slice 2 — OAuth:** `POST /auth/register/oauth/:provider` (200 login / 201 register) через порт `OAuthProvider` + реестр (real-если-сконфигурён / stub-в-dev / **reject-в-prod** для несконфигуренных — безопасно); OAuth-identity = verified → юзер сразу `ACTIVE`; find-or-create по `oauth_<provider>_id` (unique, P2002-race→login), block SUSPENDED/DEACTIVATED (403), audit oauth_register/login, per-IP throttle (20/15м). **Telegram-адаптер реализован полностью** (HMAC-проверка, без сети, unit-тест). 100 unit + 15 e2e.
+     - [ ] **Slice 2b (tracked, не выпало):** реальные адаптеры **Google** (id_token/JWKS), **Apple** (JWT/JWKS), **VK** (code exchange) — нужны живые секреты; сейчас stub-в-dev/reject-в-prod. Env `OAUTH_*` уже в контракте.
+     - [ ] **Account-linking (tracked):** телефон-юзер и OAuth-юзер с одним email = пока РАЗНЫЕ аккаунты (email не unique); объединение/привязка — отдельное решение (ADR при реализации).
+   - [x] **Slice 3 — профиль `/me`:** `GET /me` (+weak ETag, If-None-Match→304), `PATCH /me` (If-Match обязателен — 428/412, optimistic concurrency API_CONVENTIONS §10), `POST /me` deactivate (status→DEACTIVATED, 30-дн grace, revoke сессий, idempotent), `POST /me/reactivate` (в пределах grace). audit profile_updated/account_deactivated/reactivated. Контракт `UpdateProfileRequest`/`/me` приведён к round-4 (passwordless, INT cityId, If-Match) EN+RU; `UserProfile`-маппер вынесен в util. 111 unit + 20 e2e.
+     - [x] **(закрыт Slice-4):** auth-путь для разлогиненного DEACTIVATED-аккаунта решён через email-OTP recovery (`/auth/recover/email/verify` реактивирует в пределах grace). Статус-чек живого access-токена у DEACTIVATED (короткий 15-мин TTL митигирует) — возможный guard позже (tracked).
+   - [x] **Slice 4 — recovery + `erase_user` (ФЗ-152) + role-elevation:**
+     - **Email-OTP recovery:** `POST /auth/recover/email/request` (всегда 202 — без перечисления аккаунтов; OTP на verified email) + `POST /auth/recover/email/verify` (200 → сессия; реактивирует DEACTIVATED в пределах grace; SUSPENDED/после-grace → 403). Reuse OtpService под отдельным Redis-namespace `recover:email` (тот же TTL/cooldown/lockout); per-IP throttle (5/15м request, 15/15м verify); audit recovery_requested/succeeded/locked_out; EMAIL_PROVIDER (Unisender/stub).
+     - **`erase_user` (ФЗ-152):** `POST /admin/users/:id/erase` (ADMIN) + `POST /me/erase` (self → deactivate+request). Анонимизация-на-месте в транзакции: phone_hash/oauth_*/email→NULL, full_name→`'[deleted]'`, avatar_url/last_login→NULL, notification_prefs→default, status→DEACTIVATED, `erased_at`=now; `notification_logs.recipient`→`'[erased]'`/content→NULL; revoke сессий; audit `user.erased` (append-only сохраняется). Идемпотентно (повтор = no-op). Новая колонка `users.erased_at` (миграция 0015, идемпотентна, прогнана на живом PG дважды).
+     - **Role-elevation:** `PATCH /admin/users/:id/role` (ADMIN, `@Roles('ADMIN')`) → меняет `users.role`, **revoke ВСЕ refresh-семейства** (round-4), audit role_changed (before/after); no-op если роль не меняется.
+     - **Admin rebind:** `POST /admin/users/:id/rebind` (ADMIN) — перепривязка phone(re-hash)/oauth-id или clear; 409 при занятом идентификаторе; revoke сессий; audit identifier_rebound (с reason). Без тихого захвата (актёр = ADMIN).
+     - Контракт `auth-api.yaml` (6 новых операций) + схемы/`UserIdParam` EN+RU; спека 01 (Slice-4 нормативная таблица + поля erase_user), data-model (erased_at), ERD, glossary (4 термина), traceability — все EN+RU синхронно. **137 unit + 29 e2e, все gates зелёные.**
+     - **Tracked (не выпало, apex):** (a) **grace-scheduler** для авто-`erase_user` после 30 дней — в MVP нет cron-задачи; `/me/erase` деактивирует + фиксирует запрос, фактическая анонимизация запускается ADMIN или retention-job (нужен worker-cron позже); (b) `notification_logs.recipient` NOT NULL → используем tombstone `'[erased]'` вместо NULL (схема > проза data-governance §1); (c) S3-объект аватара НЕ удаляется (ObjectStorage-порт без `delete`) — `avatar_url` обнуляется, физическое удаление объекта = tracked при добавлении delete в порт; (d) защита от перебора email при recovery опирается на ts-uniform 400/202 — без полной constant-time гарантии (Redis-cooldown существует только для реальных аккаунтов — приемлемо для MVP).
 2. [ ] **Admin / reference-data** (`admin-api`, спека 06): species/breeds/cities/supported_languages/toggles CRUD (ADMIN), `audit_log` GET, seeding.
 3. [ ] **Animal** (`animals-api`, спека 02): CRUD, иммутабельность, **pedigree-целостность**, JSONB-контракты, soft-delete + каскад на листинги.
 4. [ ] **Media** (спека 17): `POST /uploads` (pre-signed), attach к листингу/аватару, валидация, варианты, **EXIF-strip**, orphan-cleanup (worker).
@@ -100,6 +117,12 @@ Pino (JSON+redaction) · class-validator · @nestjs/throttler+Redis · Jest + Te
 - [ ] API соответствует `API_CONVENTIONS.md`.
 - [ ] Ничего из Фазы 2+ не «протекло» в MVP.
 - [ ] Коммит/пуш — только по явной просьбе пользователя.
+
+## ⚠️ Security & Hardening backlog (round-6, 2026-06-18)
+Запущен режим «Исследование-доработка» backend-агента по Фазе 0. Устранены HIGH-CVE в прод-дереве (kysely→0.29, multer→2.2),
+добавлены порог покрытия и политика security-гейта CI, нормативная Kysely-заметка в ADR-0007. **Остаток (should-fix + defer-Phase-2) —
+в [`SECURITY_HARDENING_BACKLOG.md`](SECURITY_HARDENING_BACKLOG.md):** заменить заглушку Kysely `DB` на codegen-типы до гео/JSONB;
+ratchet покрытия ≥90%/домен; дожать прод-moderate CVE; SARIF/пороги для Semgrep/Trivy; гейт `/metrics`; CSP/CORS; audit_log+agent-as-principal при первом домене.
 
 ## Связанное
 [`IMPLEMENTATION_PLAYBOOK.md`](IMPLEMENTATION_PLAYBOOK.md) · [`BACKEND_MVP_BASELINE.md`](BACKEND_MVP_BASELINE.md) ·

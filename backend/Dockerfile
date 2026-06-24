@@ -22,6 +22,10 @@ WORKDIR /app
 # non-root
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps   /app/node_modules ./node_modules
+# Prisma Client is generated in the build stage only; deps' node_modules never ran
+# `prisma generate`, so bring the generated client into the slim runtime image (ADR-0007).
+COPY --from=build  /app/node_modules/.prisma        ./node_modules/.prisma
+COPY --from=build  /app/node_modules/@prisma/client ./node_modules/@prisma/client
 COPY --from=build  /app/dist          ./dist
 COPY --from=build  /app/prisma        ./prisma
 COPY package*.json ./

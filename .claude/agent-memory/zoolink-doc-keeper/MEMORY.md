@@ -1,0 +1,21 @@
+# zoolink-doc-keeper — Memory Index
+
+- [API casing canon](api-casing-canon.md) — API bodies = camelCase (owner-locked 2026-06-23); DB stays snake_case. Sort/filter params stay snake_case (§12).
+- [API conformance canon B0](api-conformance-b0.md) — pagination {items,meta:PageMeta}, RFC7807 Problem, LocalizedString{en,ru}, If-Match/ETag, 7-role enum.
+- [Contract files & RU mirrors](contract-files-mirror.md) — 12 EN contracts; favorites-api.yaml had NO RU mirror (created in B0.7). Easy to forget.
+- [camelCase conversion pitfalls](camelcase-conversion-pitfalls.md) — what NOT to rename when casing yaml (params, $ref, enum values, descriptions).
+- [B0 incidental fixes](b0-incidental-fixes.md) — drift fixed during B0 (UUID→INT lookups, sortBy→sort, settings path); B0.6 deferred items list.
+- [Skeleton compare harness](skeleton-compare-harness.md) — python snippet to verify EN↔RU yaml are structurally identical except prose.
+- [Actor agent-badge canon](actor-badge-canon.md) — ADR-0011 §6 / API_CONVENTIONS §15: actor={actorId,principalType}; B0.6 done; per-file Actor schema; override-chain fields.
+- [Role canon in BR docs](role-canon-br-sync.md) — 7 users.role, 4 role_in_org, SUPER_ADMIN out-of-enum; which BR docs drifted (identity/admin/org) + fix.
+- [FLAG → CHANGES_REQUESTED](flag-to-changes-requested.md) — moderation decision canon {APPROVED,REJECTED,CHANGES_REQUESTED}; FLAG is dead; don't touch content-report "flagging".
+- [Reference-data public read](reference-data-public-read.md) — admin-api reference GET list/byId = PUBLIC (security:[], no x-required-roles, drop 401/403); /new+CUD stay ADMIN.
+- [identity-BR phone_hash bcrypt flag](identity-br-phonehash-bcrypt-flag.md) — RESOLVED 2026-06-24 (C4): bcrypt→HMAC done EN+RU, with C3 passwordless + C5 no-auto-purge + JWT 15m/7d.
+- [animal-BR User-Stories RU gap](animal-br-userstories-ru-gap.md) — pre-existing drift: EN animal-BR has UC-AN-01..05 block; RU mirror lacks it (291 vs 243 lines). Out of C2 scope.
+- [matching MVP = eligible-set](matching-mvp-eligible-set.md) — B4: no scoring/history/feedback tables; scoring x-phase 2; ineligibilityReason 7-value enum.
+- [nfr path correction](nfr-path-correction.md) — nfr/security.md & observability.md are under docs/02-requirements/nfr, NOT docs/specs/security/nfr.
+- [dev-token contract gap](devtoken-contract-gap.md) — dev-token existed in backend code but not in auth-api.yaml; added as x-internal dev-only (B6).
+- [B9 analytics contract](b9-analytics-contract.md) — counts + series-ready (decision #6); ListingAnalytics/OrganizationAnalytics; series x-phase:2 nullable never remove; schema cols absent (residual risk).
+- [API_CONVENTIONS RU §15 lag](api-conventions-ru-lag-s15.md) — RESOLVED 2026-06-24 (final-B): RU §15 Actor added, §16 after §15, B0.6 status→done, §4 claim/lock codes.
+- [moderation-api RU B7/B10 lag](moderation-api-ru-b7b10-lag.md) — RESOLVED 2026-06-24: RU moderation-api was B0.6-only (459 vs 801 lines); full remirror (claim/lock, SLA, decision-templates, owner-result).
+- [audit entityId UUID/INT gap](audit-entityid-uuid-int-gap.md) — D4 flag: getAuditLog/AuditLogEntry entityId=uuid but reference-data is INT (entity_id_int) → INT ref-ids not id-filterable; contract-owner call.

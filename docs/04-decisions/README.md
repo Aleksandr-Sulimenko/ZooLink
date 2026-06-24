@@ -14,6 +14,7 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0008: RF-appropriate third-party provider matrix](0008-rf-provider-matrix.md)
 - [ADR-0009: MVP architecture is a modular monolith — defer microservices/K8s to Фаза 2+](0009-mvp-vs-target-architecture.md)
 - [ADR-0010: Digital-asset (NFT) readiness — schema hooks now, on-chain in Фаза 2+](0010-nft-digital-assets-hooks.md)
+- [ADR-0011: Agent-Principal Actor Model — actor snapshot, human-override, forward-compatible service-auth](0011-agent-principal-actor-model.md)
 
 ## Template
 

@@ -43,6 +43,16 @@ concrete vendors marked *Фаза 2+* are deferred but their interface is define
 | **CDN** | CloudFront, Cloudflare | **Yandex Cloud CDN** | VK Cloud CDN, Selectel CDN, Ngenix | MVP |
 | **Monitoring / APM** | Datadog, New Relic | **Prometheus + Grafana** | VictoriaMetrics, Yandex Monitoring | MVP |
 | **Error tracking** | — | **Sentry (self-hosted)** | GlitchTip | MVP |
+| **KMS / key management** | AWS KMS, GCP KMS, Azure Key Vault | **Yandex KMS** (dev = local key) | VK Cloud KMS, HashiCorp Vault (self-hosted) | Фаза 2+ (form in MVP per ADR-0012; behaviour gated) |
+
+> **ЧТО:** добавлена строка возможности **KMS / key management** в матрицу провайдеров — default
+> Yandex KMS, alt VK Cloud KMS / self-hosted Vault, dev = локальный ключ.
+> **ПОЧЕМУ:** ADR-0012 ввёл порт `CryptoService` с swap-point master-key `LocalMasterKey`→RF-KMS;
+> провайдер KMS — внешний поставщик, и по правилу этого ADR каждый внешний поставщик должен иметь
+> RF-приемлемый канон за интерфейсом (AWS/GCP/Azure KMS RF-заблокированы, как и прочие SaaS здесь).
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** канон провайдера ключей зафиксирован в одном месте (эта матрица), а не размазан
+> по ADR-0012; форма (адаптер) живёт в MVP, поведение (подключение KMS) gated — переписывания нет, и
+> RF-комплаенс (ФЗ-152: данные/ключи в РФ-инфраструктуре) сохранён.
 
 ## Consequences
 
@@ -71,6 +81,7 @@ concrete vendors marked *Фаза 2+* are deferred but their interface is define
 
 - [ADR-0001](0001-tech-stack.md): named the original (RF-blocked) defaults and the abstraction principle.
 - [ADR-0009](0009-mvp-vs-target-architecture.md): MVP infrastructure topology that hosts these providers.
+- [ADR-0012](0012-pii-at-rest-encryption.md): added the **KMS** capability row as the deferred swap-point for the PII master key (`CryptoService`).
 
 ## References
 

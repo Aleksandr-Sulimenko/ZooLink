@@ -1,0 +1,19 @@
+import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
+import { Public } from '../auth/public.decorator';
+import { MetricsService } from './metrics.service';
+
+@Public()
+@ApiExcludeController()
+@SkipThrottle()
+@Controller({ path: 'metrics', version: VERSION_NEUTRAL })
+export class MetricsController {
+  constructor(private readonly metrics: MetricsService) {}
+
+  @Get()
+  @Header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+  scrape(): Promise<string> {
+    return this.metrics.metrics();
+  }
+}

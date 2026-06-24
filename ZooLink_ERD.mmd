@@ -3,9 +3,12 @@ erDiagram
     species {
         INTEGER id PK
         VARCHAR_50 code UK
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
         VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -13,18 +16,50 @@ erDiagram
         INTEGER id PK
         INTEGER species_id FK
         VARCHAR_50 code
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
         %% UK (species_id, code)
     }
     cities {
         INTEGER id PK
-        VARCHAR_100 name_ru
-        VARCHAR_100 name_en
+        JSONB name_localized
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+    }
+    health_certifications {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB name_localized
+        VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% UK (market, code)
+    }
+    genetic_markers {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB name_localized
+        VARCHAR_10 market
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% UK (market, code)
     }
     supported_languages {
         CHAR_2 code PK
@@ -57,6 +92,7 @@ erDiagram
         BOOLEAN is_active
         TIMESTAMPTZ last_login_at
         TIMESTAMPTZ deactivated_at
+        TIMESTAMPTZ erased_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
     }
@@ -242,8 +278,27 @@ erDiagram
         VARCHAR_20 decision
         VARCHAR_50 reason FK
         TEXT notes
+        VARCHAR_10 actor_principal_type
+        VARCHAR_20 actor_role
+        UUID supersedes_decision_id FK
+        BOOLEAN is_human_override
         TIMESTAMPTZ created_at
-        %% append-only (immutable)
+        %% append-only (immutable); ADR-0011 actor-snapshot + human-override chain (supersedes_decision_id self-ref)
+    }
+    decision_templates {
+        INTEGER id PK
+        VARCHAR_50 code
+        JSONB body_localized
+        VARCHAR_20 applies_to_decision
+        VARCHAR_10 market
+        VARCHAR_50 related_reason_code FK
+        INTEGER sort_order
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% B10 Admin-extensible canned-note dictionary (spec 12); UK (market, code)
     }
 
     %% Payment Domain
@@ -359,20 +414,37 @@ erDiagram
         TIMESTAMPTZ expires_at
         UUID rotated_from
         TIMESTAMPTZ revoked_at
+        INET ip_address
+        TEXT user_agent
+        TIMESTAMPTZ last_used_at
+        VARCHAR_40 revoked_reason
     }
     audit_log {
         UUID id PK
         UUID actor_id FK
         VARCHAR_20 actor_role
+        VARCHAR_10 actor_principal_type
         VARCHAR_100 action
         VARCHAR_40 entity_type
         UUID entity_id
+        INTEGER entity_id_int
         JSONB before_data
         JSONB after_data
         INET ip_address
         TEXT user_agent
         TIMESTAMPTZ created_at
         %% append-only
+    }
+    service_credentials {
+        UUID id PK
+        UUID agent_user_id FK
+        VARCHAR_120 label
+        VARCHAR_255 secret_hash
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ revoked_at
+        UUID rotated_from FK
+        %% ADR-0011 §5.3 agent service-auth FORM ONLY (gated)
     }
 
     %% Extensibility / System Tables
@@ -392,6 +464,10 @@ erDiagram
         JSONB payload
         TIMESTAMPTZ processed_at
         TIMESTAMPTZ created_at
+        INTEGER attempts
+        TEXT last_error
+        TIMESTAMPTZ next_attempt_at
+        TIMESTAMPTZ dead_lettered_at
     }
 
     %% Relationships
@@ -424,6 +500,8 @@ erDiagram
     listings ||..o{ contact_reveals : "contact revealed for"
     users ||..o{ refresh_tokens : "has sessions"
     users ||..o{ audit_log : "acted (nullable)"
+    users ||..o{ service_credentials : "agent service-auth (gated)"
+    service_credentials |o..o{ service_credentials : "rotated_from (rotation chain)"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"
@@ -437,6 +515,8 @@ erDiagram
     %% Moderation / Payment / Notification Relationships
     users ||..o{ moderation_decisions : "decides"
     moderation_reasons ||..o{ moderation_decisions : "categorizes"
+    moderation_decisions |o..o{ moderation_decisions : "human-override supersedes (ADR-0011)"
+    moderation_reasons |o..o{ decision_templates : "related_reason_code (optional)"
     users ||..o{ payment_transactions : "pays"
     payment_transactions ||..o{ refunds : "refunded by"
     payment_transactions |o..o{ listings : "settles (optional)"

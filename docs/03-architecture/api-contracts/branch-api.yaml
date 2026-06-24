@@ -2,51 +2,45 @@ openapi: 3.0.3
 info:
   title: ZooLink Branch API
   version: 1.0.0
-  description: API for managing branches in ZooLink.
+  description: >
+    API for managing branches in ZooLink.
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth (§2), x-required-roles (§3),
+    RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5), If-Match/ETag on PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /branches:
     get:
       summary: List branches
       operationId: listBranches
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: organization_id
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
           description: Filter by organization ID
         - in: query
           name: city_id
-          schema:
-            type: integer
+          schema: { type: integer }
           description: Filter by city ID
         - in: query
           name: is_headquarters
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by headquarters flag
         - in: query
           name: is_active
-          schema:
-            type: boolean
+          schema: { type: boolean }
           description: Filter by active status
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
+          schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
           description: Number of items per page
       responses:
         '200':
@@ -58,123 +52,113 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Branch'
-                  total:
-                    type: integer
-                    description: Total number of branches
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Branch' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a new branch
       operationId: createBranch
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BranchCreate'
+            schema: { $ref: '#/components/schemas/BranchCreate' }
       responses:
         '201':
           description: Branch created successfully
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /branches/{id}:
     get:
       summary: Get branch by ID
       operationId: getBranchById
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Branch details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/Branch' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update branch
       operationId: updateBranch
-      security:
-        - bearerAuth: []
+      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /branches/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BranchUpdate'
+            schema: { $ref: '#/components/schemas/BranchUpdate' }
       responses:
         '200':
           description: Branch updated successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after update
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
       summary: Delete branch (soft delete)
       operationId: deleteBranch
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Branch deleted successfully
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Branch deleted successfully }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -182,26 +166,50 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     Branch:
       type: object
       required:
         - id
-        - organization_id
-        - city_id
+        - organizationId
+        - cityId
         - address
-        - is_active
-        - created_at
-        - updated_at
+        - isActive
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
           description: Unique identifier
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        city_id:
+        cityId:
           type: integer
           description: Foreign key to city for geo-search
         address:
@@ -220,34 +228,34 @@ components:
           type: object
           description: JSONB field for extensibility (branch-specific attributes)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
           description: Flag indicating headquarters
           default: false
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
-        created_at:
+        createdAt:
           type: string
           format: date-time
           description: Creation timestamp
-        updated_at:
+        updatedAt:
           type: string
           format: date-time
           description: Last update timestamp
     BranchCreate:
       type: object
       required:
-        - organization_id
-        - city_id
+        - organizationId
+        - cityId
         - address
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        city_id:
+        cityId:
           type: integer
           description: Foreign key to city for geo-search
         address:
@@ -266,22 +274,22 @@ components:
           type: object
           description: JSONB field for extensibility (branch-specific attributes)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
           description: Flag indicating headquarters
           default: false
-        is_active:
+        isActive:
           type: boolean
           description: Active status
           default: true
     BranchUpdate:
       type: object
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
           description: Foreign key to organization
-        city_id:
+        cityId:
           type: integer
           description: Foreign key to city for geo-search
         address:
@@ -299,9 +307,15 @@ components:
         metadata:
           type: object
           description: JSONB field for extensibility (branch-specific attributes)
-        is_headquarters:
+        isHeadquarters:
           type: boolean
           description: Flag indicating headquarters
-        is_active:
+        isActive:
           type: boolean
           description: Active status
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

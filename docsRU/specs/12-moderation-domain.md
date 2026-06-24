@@ -160,6 +160,81 @@ flowchart TD
 - **Аудит:** каждое решение пишет `moderation_decisions` (append-only) **и** строку `audit_log`.
 - **AI-модератор (ADR-0006):** AGENT использует тот же claim/lock-контракт; гейтится feature-флагом, в MVP выключен.
 
+## Стейт-машина claim/lock и форма контракта (B10, раунд 5, нормативно)
+
+Форма контракта заложена сейчас в `moderation-api.yaml` (ФОРМА сейчас, поведение — с доменом Moderation).
+Приводит контракт в соответствие с операциями очереди раунда 5 выше.
+
+### Стейт-машина claim/lock (на элемент очереди, относительно вызывающего принципала)
+
+```mermaid
+stateDiagram-v2
+    [*] --> FREE: enqueued (PENDING_MODERATION)
+    FREE --> CLAIMED_BY_ME: claim (POST .../claim) by me
+    FREE --> CLAIMED_BY_OTHER: claim by another principal
+    CLAIMED_BY_ME --> CLAIMED_BY_ME: re-claim (idempotent, refresh lockExpiresAt)
+    CLAIMED_BY_ME --> FREE: release (DELETE .../claim) | decision recorded
+    CLAIMED_BY_ME --> LOCK_EXPIRED: lockExpiresAt < now (MOD_LOCK_TTL)
+    CLAIMED_BY_OTHER --> LOCK_EXPIRED: holder's lockExpiresAt < now
+    CLAIMED_BY_OTHER --> FREE: holder releases | holder decides
+    LOCK_EXPIRED --> CLAIMED_BY_ME: re-claim by me
+    LOCK_EXPIRED --> CLAIMED_BY_OTHER: re-claim by another
+```
+
+- **Таблица триггеров/гвардов**
+
+| Из | Действие | Гвард | В | Иначе |
+|---|---|---|---|---|
+| FREE / LOCK_EXPIRED | claim | элемент в PENDING_MODERATION | CLAIMED_BY_ME | 404, если не в очереди |
+| CLAIMED_BY_OTHER (живой lock) | claim | — | (нет перехода) | **409 `ALREADY_CLAIMED`** (несёт текущего держателя Actor + lockExpiresAt) |
+| CLAIMED_BY_ME | claim (re-claim) | вызывающий == держатель | CLAIMED_BY_ME (обновить TTL) | — |
+| CLAIMED_BY_ME | release (DELETE) | вызывающий == держатель OR ADMIN | FREE | **409 `NOT_LOCK_HOLDER`** |
+| CLAIMED_BY_ME | submit decision | вызывающий держит живой lock | FREE (+ решение) | **409 `NOT_LOCK_HOLDER`** / **409 `ITEM_NOT_CLAIMED`**, если нет живого lock |
+
+- **TTL блокировки:** `MOD_LOCK_TTL` (по умолч. 15 мин). Истечение авто-снимает (фоновая задача не требуется —
+  истечение вычисляется из `lock_expires_at < now()`); фоновый sweep МОЖЕТ обнулять устаревшие колонки, но для
+  корректности не обязателен.
+- **Паритет AGENT:** AGENT-принципал использует идентичный claim/lock-контракт (ADR-0006, gated).
+
+### SLA / эскалация
+- `slaState ∈ {ON_TRACK, BREACHED, ESCALATED}` выводится из `waitingSeconds` относительно цели (ADR-0003: pet <4ч,
+  livestock <6ч рабочих часов — точные пороги владеет конфиг). **ESCALATED** = сработал таймаут SLA →
+  событие `Moderation.Escalated` к ADMIN; элемент **остаётся PENDING_MODERATION**, без авто-одобрения/отклонения.
+- Фильтры очереди: `market`, `slaState`, `escalated=true` (≡ `slaState=ESCALATED`), `lockState`.
+- `meta.counts` (byMarket, bySlaState) даёт счётчики-бейджи на вкладках оператора по всей отфильтрованной очереди.
+
+### Agent-transparency (решение владельца #5, зафиксировано 2026-06-24 — показывать «решено ИИ» ВСЕМ)
+- Записи операторских решений (`ModerationDecision`) уже несут agent-бейдж `Actor` (B0.6/ADR-0011 §6).
+- **Для владельца:** `GET /listings/{id}/moderation-result` → `OwnerModerationResult` несёт
+  `decidedBy.principalType` + `decidedByAgent`, чтобы **продавец** видел, решил ли ИИ или человек, плюс
+  разрешённые причину/заметки и цепочку human-override (`isHumanOverride`/`supersedesDecisionId`). Чтение владельца
+  в `listings-api` ДОЛЖНО встраивать ту же проекцию как аддитивное поле `lastModerationResult` (отмечено для
+  backend + doc-keeper).
+
+### Decision-templates = контролируемый словарь (ТАБЛИЦА, не enum) — решение о фазировании §5
+**ЧТО:** Заготовленные формулировки решений для REJECT/CHANGES_REQUESTED моделируются как reference-data — НОВАЯ
+таблица `decision_templates` (контролируемый, расширяемый админом словарь; `code` PK, `body_localized` JSONB,
+`applies_to_decision`, `market`, `related_reason_code`, `sort_order`, `is_active`, provenance) — отдаётся через
+`GET /moderation/decision-templates` и выбирается через `ModerationActionRequest.templateCode`. **НЕ enum.**
+
+**ПОЧЕМУ:** Шаблоны — это редактируемый бизнесом контент, который растёт со временем и который ИИ-агент должен
+выбирать по стабильному ключу. Это заметки (свободная проза), отличные от обязательной таксономии
+`moderation_reasons` (почему-отклонено).
+
+**ПОЧЕМУ ТАК ЛУЧШЕ для проекта:** По §5 cost-of-change — enum вынуждал бы **переписывать контракт + схему** каждый
+раз, когда оператор добавляет/правит шаблон (rewrite-test = да); таблица делает новый шаблон одной строкой данных
+с **нулевым изменением схемы/контракта**. Она зеркалит проверенную форму reference-data `moderation_reasons` и
+конвенцию A2 (`sort_order`/provenance/JSONB-локализация), сохраняет оба языка для операторского редактора (B0.4) и
+даёт AGENT стабильный `code` для выбора — agent-first, форвард-совместимо. → **миграция схемы отмечена для
+`zoolink-backend-engineer`** (НЕ реализована в этом раунде контракта).
+
+### Коды ошибок B10 (расширяют domain-specific набор API_CONVENTIONS §4)
+| code | HTTP | Когда |
+|---|---|---|
+| `ALREADY_CLAIMED` | 409 | claim на элементе с живым lock другого принципала |
+| `NOT_LOCK_HOLDER` | 409 | release/decide не-держателем |
+| `ITEM_NOT_CLAIMED` | 409 | decide на элементе без живого lock |
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

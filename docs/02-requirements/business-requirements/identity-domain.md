@@ -15,15 +15,16 @@ Manages user authentication, authorization, and profile information. This domain
      - Phone number verification (SMS code)
      - OAuth 2.0 with Google, Apple, Telegram, VK
    - Email verification is optional and does not block registration.
-   - After successful authentication, a session token (JWT) is issued with expiration 24h.
-   - Refresh tokens are stored securely and rotated on use.
+   - **End-user authentication is passwordless** (phone OTP + OAuth only); end users never set or use a password (see `docs/specs/01-identity-domain.md`).
+   - After successful authentication, an access token (JWT) is issued with expiration **15 minutes** and a refresh token with expiration **7 days**.
+   - Refresh tokens are stored securely and rotated on use (family-based rotation).
 
 2. **User Registration**
    - Minimum required fields for registration:
      - Phone number (unique) OR linked OAuth account
      - Full name (for display, not necessarily legal name)
      - City (selected from directory, used for geo-search)
-     - Password (if using phone auth; not required for OAuth)
+   - No password is collected at registration — end-user auth is passwordless (phone OTP / OAuth).
    - Optional fields at registration:
      - Email address (for notifications and recovery)
      - Avatar image (URL to external storage)
@@ -49,15 +50,15 @@ Manages user authentication, authorization, and profile information. This domain
    - Users cannot delete their account on MVP ( to preserve data integrity for listings and moderation history). Instead, they can:
      - Deactivate (profile hidden, listings withdrawn, cannot log in)
      - Later reactivate (restores profile and listings)
-   - Deactivation does not delete personal data immediately; it is retained for legal and operational reasons (e.g., dispute resolution) and purged after 30 days of inactivity per data retention policy.
+   - Deactivation does not delete personal data; it is retained for legal and operational reasons (e.g., dispute resolution). There is no automatic time-based purge. PII is removed only by an **explicit erasure** (`erase_user`, stamping `erased_at`) per ФЗ-152, on user request or admin action (migration 0015; see `docs/specs/01-identity-domain.md` and data-governance).
 
 5. **Security and Privacy**
    - No storage of passport data, INN, or other sensitive identifiers on MVP.
-   - Phone numbers are hashed in the database (bcrypt) for lookup; only last 4 digits shown in UI for verification.
+   - Phone numbers are stored as a **deterministic HMAC-SHA256(phone, server_pepper)** in `phone_hash` for unique lookup (NOT bcrypt — bcrypt is salted/non-deterministic and cannot be used for lookup); only last 4 digits shown in UI for verification.
    - OAuth tokens are stored encrypted and refreshed via provider's API.
-   - Passwords (if set) are hashed with bcrypt (cost factor 12).
+   - Passwords exist **only for operator roles** (ADMIN/MODERATOR), not for end users; when set they are hashed with bcrypt (cost factor 12) in `password_hash`.
    - All auth-related endpoints are rate-limited (max 5 attempts per 15 minutes per IP).
-   - Session tokens are invalidated on password change or explicit logout.
+   - Session tokens are invalidated on explicit logout, on password/role/status change (operator accounts), or token-reuse detection.
    - The system logs authentication events (success/failure) for audit but does not log passwords or tokens.
 
 ## User Journey: Registration and Login
@@ -125,8 +126,8 @@ sequenceDiagram
 - Acceptance Criteria:
   - Remember me option for trusted devices
   - Biometric login where available (future enhancement)
-  - Password recovery via SMS/email within 2 minutes
-  - Session persistence across browser restarts (30 days)
+  - Account recovery via phone OTP / OAuth re-link within 2 minutes (passwordless — no password recovery for end users)
+  - Session persistence across browser restarts (refresh token 7 days)
   - Clear indication of authentication status in UI
 
 **UC-ID-03:** As a privacy-conscious user, I want to control what personal information is visible so that I can use the platform comfortably while maintaining my privacy.
@@ -151,7 +152,7 @@ sequenceDiagram
 - Acceptance Criteria:
   - Login history showing location/time/device
   - Active sessions management (terminate specific sessions)
-  - Password change requires current password verification
+  - Re-authentication via phone OTP for sensitive actions (passwordless — no end-user password to verify)
   - Security alerts for new device/login attempts
   - Easy linkage/unlinking of OAuth providers
 
@@ -159,7 +160,7 @@ sequenceDiagram
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key |
-| `phone_hash` | VARCHAR(60) | No (if OAuth) | Bcrypt hash of phone number (for lookup) |
+| `phone_hash` | VARCHAR(60) | No (if OAuth) | Deterministic HMAC-SHA256(phone, server_pepper) for unique lookup (NOT bcrypt) |
 | `oauth_google_id` | VARCHAR(255) | No | Unique ID from Google |
 | `oauth_apple_id` | VARCHAR(255) | No | Unique ID from Apple |
 | `oauth_telegram_id` | VARCHAR(255) | No | Unique ID from Telegram |
@@ -169,13 +170,37 @@ sequenceDiagram
 | `avatar_url` | TEXT | No | URL to avatar in object storage |
 | `email` | VARCHAR(255) | No | For notifications (optional) |
 | `email_verified` | BOOLEAN | No | True if email confirmed via link |
-| `password_hash` | VARCHAR(60) | No (if OAuth only) | Bcrypt hash if using phone auth |
-| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER |
+| `password_hash` | VARCHAR(60) | No (operator-only) | Bcrypt hash (cost 12); set only for operator roles (ADMIN/MODERATOR) — end users are passwordless |
+| `role` | ENUM('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER') | Yes | Default: USER. 7-role canon per `docs/specs/security/rbac-matrix.md` / ADR-0011; roles are additive (BREEDER/FARMER/VETERINARIAN/GROOMER = USER + extra capabilities). `principal_type` (HUMAN\|AGENT) is orthogonal to `role` (ADR-0006). |
 | `is_active` | BOOLEAN | Yes | True = can login; False = deactivated |
 | `created_at` | TIMESTAMP | Yes | Registration timestamp |
 | `updated_at` | TIMESTAMP | Yes | Last profile update |
 | `last_login_at` | TIMESTAMP | No | For activity tracking |
 | `deactivated_at` | TIMESTAMP | No | When user chose to deactivate |
+
+> **(role-canon sync, normative) — `users.role` aligned to the 7-role canon.**
+> **WHAT:** Added `BREEDER` and `FARMER` to the `role` enum so identity-BR now lists all 7 roles
+> `{USER, MODERATOR, ADMIN, BREEDER, FARMER, VETERINARIAN, GROOMER}`, matching `database_schema.sql` and
+> `docs/specs/security/rbac-matrix.md`.
+> **WHY:** GAP-TRACE-004 — the role set was de-synchronised across three docs (identity-BR was missing BREEDER/FARMER).
+> Three sources of truth for roles is a direct risk to RBAC, which is the subject of the Admin domain.
+> **WHY BETTER for the whole project:** one role canon (validated on PG) means the RBAC matrix, CASL abilities, guards
+> and migrations all rest on a single set; additive model and `principal_type ⟂ role` (ADR-0006) are preserved.
+
+> **(GAP-TRACE-009, normative) — end-user authentication is passwordless.**
+> **WHAT:** Removed "password required when using phone auth" and password change/recovery for end users; clarified that `password_hash` exists for operator roles (ADMIN/MODERATOR) only.
+> **WHY:** GAP-TRACE-009 — the BR described a consciously rejected, non-existent flow (`auth-api.yaml` has OTP/OAuth, no `/auth/login`; `database_schema.sql` marks `password_hash` operator-only; spec 01 round-4 is passwordless). A stale BR misleads new developers/agents.
+> **WHY BETTER for the whole project:** Reduces PII/attack surface (no end-user passwords to phish, store or leak), aligns with round-4, the implemented Identity domain and ФЗ-152 minimisation.
+
+> **(GAP-TRACE-010, normative) — token TTL 15m/7d; `phone_hash` is HMAC, not bcrypt.**
+> **WHAT:** Access JWT TTL set to 15 minutes and refresh to 7 days (removed the "24h" figure); `phone_hash` corrected from bcrypt to deterministic HMAC-SHA256(phone, server_pepper). `password_hash` stays bcrypt (operator-only) — correct.
+> **WHY:** GAP-TRACE-010 — `02-requirements/` carried two mutually exclusive token figures; bcrypt for the phone hash is technically impossible as a unique-lookup key (salted/non-deterministic), contradicting `database_schema.sql` and the glossary `phone_hash (HMAC + pepper)`.
+> **WHY BETTER for the whole project:** One source of truth for sessions; a correct crypto model (HMAC = deterministic lookup + protection; bcrypt = password verification only) matching the schema validated on PG.
+
+> **(auto-purge removal, normative) — no time-based purge; erasure is explicit.**
+> **WHAT:** Removed "purged after 30 days of inactivity"; PII is removed only by explicit `erase_user` (`erased_at`) per ФЗ-152.
+> **WHY:** The BR promised an automatic retention job that does not exist; erasure is the explicit, audited `erase_user` flow (migration 0015, spec 01, data-governance).
+> **WHY BETTER for the whole project:** An honest data-retention map; explicit erasure is safer and auditable, and the BR no longer claims auto-deletion that isn't implemented.
 
 ## Non-Functional Requirements (Specific to Identity)
 - **Performance**: Authentication (login/register) must complete within 2s under normal load.

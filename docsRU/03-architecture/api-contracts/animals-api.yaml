@@ -2,96 +2,78 @@ openapi: 3.0.3
 info:
   title: ZooLink Animals API
   version: 1.0.0
-  description: API for managing animal profiles in ZooLink.
+  description: >
+    API управления профилями животных в ZooLink.
+    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
+    ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), LocalizedString (§6),
+    If-Match/ETag на мутирующих PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /animals:
     get:
-      summary: List animals with filtering
+      summary: Список животных с фильтрацией
       operationId: listAnimals
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: owner_id
-          schema:
-            type: string
-            format: uuid
-          description: Filter by owner ID (personal listings)
+          schema: { type: string, format: uuid }
+          description: Фильтр по ID владельца (личные)
         - in: query
           name: organization_id
-          schema:
-            type: string
-            format: uuid
-          description: Filter by organization ID (organizational listings)
+          schema: { type: string, format: uuid }
+          description: Фильтр по ID организации (организационные)
         - in: query
           name: species_id
-          schema:
-            type: integer
-          description: Filter by species ID
+          schema: { type: integer }
+          description: Фильтр по ID вида
         - in: query
           name: breed_id
-          schema:
-            type: integer
-          description: Filter by breed ID
+          schema: { type: integer }
+          description: Фильтр по ID породы
         - in: query
           name: sex
-          schema:
-            type: string
-            enum: [Male, Female]
-          description: Filter by sex
+          schema: { type: string, enum: [Male, Female] }
+          description: Фильтр по полу
         - in: query
           name: nickname
-          schema:
-            type: string
-          description: Filter by nickname (partial match, case-insensitive)
+          schema: { type: string }
+          description: Фильтр по кличке (частичное совпадение, без учёта регистра)
         - in: query
           name: is_active
-          schema:
-            type: boolean
-          description: Filter by active status
+          schema: { type: boolean }
+          description: Фильтр по активности
         - in: query
           name: date_of_birth_min
-          schema:
-            type: string
-            format: date
-          description: Minimum date of birth
+          schema: { type: string, format: date }
+          description: Минимальная дата рождения
         - in: query
           name: date_of_birth_max
-          schema:
-            type: string
-            format: date
-          description: Maximum date of birth
+          schema: { type: string, format: date }
+          description: Максимальная дата рождения
         - in: query
           name: owned_since_min
-          schema:
-            type: string
-            format: date
-          description: Minimum ownership date
+          schema: { type: string, format: date }
+          description: Минимальная дата владения
         - in: query
           name: owned_since_max
-          schema:
-            type: string
-            format: date
-          description: Maximum ownership date
+          schema: { type: string, format: date }
+          description: Максимальная дата владения
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Number of items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Количество элементов на странице
       responses:
         '200':
-          description: Paginated list of animals
+          description: Постраничный список животных
           content:
             application/json:
               schema:
@@ -99,153 +81,135 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Animal'
-                  total:
-                    type: integer
-                    description: Total number of animals
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Animal' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
-      summary: Create a new animal profile
+      summary: Создать новый профиль животного
       operationId: createAnimal
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/AnimalCreate'
+            schema: { $ref: '#/components/schemas/AnimalCreate' }
       responses:
         '201':
-          description: Animal created successfully
+          description: Животное успешно создано
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Animal'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Animal' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /animals/{id}:
     get:
-      summary: Get animal by ID
+      summary: Получить животное по ID
       operationId: getAnimalById
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Animal details
+          description: Детали животного
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор для отправки в If-Match на PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Animal'
-        '404':
-          description: Animal not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/Animal' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
-      summary: Update animal
+      summary: Обновить животное
       operationId: updateAnimal
-      security:
-        - bearerAuth: []
+      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /animals/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/AnimalUpdate'
+            schema: { $ref: '#/components/schemas/AnimalUpdate' }
       responses:
         '200':
-          description: Animal updated successfully
+          description: Животное успешно обновлено
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Animal'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Animal not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Animal' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
-      summary: Delete animal (soft delete via is_active=false or actual delete?)
+      summary: Удалить животное (мягкое удаление через isActive=false)
       operationId: deleteAnimal
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Animal deleted successfully
-        '404':
-          description: Animal not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Животное успешно удалено }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /animals/{id}/ownership-history:
     get:
-      summary: Get ownership history for an animal
+      summary: Получить историю владения животным
       operationId: getAnimalOwnershipHistory
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
-          description: Animal ID
+          schema: { type: string, format: uuid }
+          description: ID животного
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Number of items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Количество элементов на странице
       responses:
         '200':
-          description: Paginated list of ownership history records
+          description: Постраничный список записей истории владения
           content:
             application/json:
               schema:
@@ -253,36 +217,23 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/AnimalOwnershipHistory'
-                  total:
-                    type: integer
-                    description: Total number of ownership history records
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '404':
-          description: Animal not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/AnimalOwnershipHistory' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /animals/{id}/deactivate:
     patch:
-      summary: Deactivate an animal (soft delete)
+      summary: Деактивировать животное (мягкое удаление)
       operationId: deactivateAnimal
-      security:
-        - bearerAuth: []
+      description: Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10) вместо If-Match.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       requestBody:
         required: false
         content:
@@ -292,32 +243,27 @@ paths:
               properties: {}
       responses:
         '200':
-          description: Animal deactivated successfully
+          description: Животное успешно деактивировано
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Animal'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Animal not found
+              schema: { $ref: '#/components/schemas/Animal' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /animals/{id}/reactivate:
     patch:
-      summary: Reactivate an animal
+      summary: Реактивировать животное
       operationId: reactivateAnimal
-      security:
-        - bearerAuth: []
+      description: Эндпоинт перехода состояния — сохраняет guard-based 409 (API_CONVENTIONS §10) вместо If-Match.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       requestBody:
         required: false
         content:
@@ -327,19 +273,16 @@ paths:
               properties: {}
       responses:
         '200':
-          description: Animal reactivated successfully
+          description: Животное успешно реактивировано
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Animal'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
-        '404':
-          description: Animal not found
+              schema: { $ref: '#/components/schemas/Animal' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -347,367 +290,375 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     Animal:
       type: object
       required:
         - id
-        - species_id
+        - speciesId
         - sex
-        - date_of_birth
-        - is_active
-        - created_at
-        - updated_at
-        - health_records
-        - reproductive_data
+        - dateOfBirth
+        - isActive
+        - createdAt
+        - updatedAt
+        - healthRecords
+        - reproductiveData
       properties:
         id:
           type: string
           format: uuid
-          description: Unique identifier
-        owner_id:
+          description: Уникальный идентификатор
+        ownerId:
           type: string
           format: uuid
           nullable: true
-          description: Foreign key to user (nullable if organization_id set)
-        organization_id:
+          description: Внешний ключ на пользователя (null если задан organizationId)
+        organizationId:
           type: string
           format: uuid
           nullable: true
-          description: Foreign key to organization (nullable if owner_id set)
-        species_id:
+          description: Внешний ключ на организацию (null если задан ownerId)
+        speciesId:
           type: integer
-          description: Foreign key to species
-        breed_id:
+          description: Внешний ключ на вид (INT-справочник)
+        breedId:
           type: integer
           nullable: true
-          description: Foreign key to breed (nullable if custom/other)
-        breed_text_localized:
-          type: object
-          description: 'Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})'
-          additionalProperties:
-            type: string
-            maxLength: 100
-        nickname_localized:
-          type: object
-          description: 'Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})'
-          additionalProperties:
-            type: string
-            maxLength: 50
+          description: Внешний ключ на породу (INT-справочник; null если кастомная/иная)
+        breedTextLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Текст кастомной породы, если breedId null, для ревью модератором (LocalizedString {en, ru})
+        nicknameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Отображаемое имя (LocalizedString {en, ru})
         sex:
           type: string
           enum: [Male, Female]
-          description: Sex of the animal
-        date_of_birth:
+          description: Пол животного
+        dateOfBirth:
           type: string
           format: date
-          description: Date of birth
-        description_localized:
-          type: object
-          description: 'Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})'
-          additionalProperties:
-            type: string
-            maxLength: 100
-        microchip_id:
+          description: Дата рождения
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+        microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Microchip ID
-        tattoo_brand_id:
+          description: ID микрочипа
+        tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Tattoo/brand ID (for livestock)
-        is_active:
+          description: ID тату/тавро (для скота)
+        isActive:
           type: boolean
-          description: Active status (visible for new listings when true)
-        owned_since:
+          description: Активность (видно для новых объявлений при true)
+        ownedSince:
           type: string
           format: date
           nullable: true
-          description: Date when current owner acquired the animal
-        mother_id:
+          description: Дата приобретения животного текущим владельцем
+        motherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to mother for pedigree tracking
-        father_id:
+          description: Ссылка на мать для отслеживания родословной
+        fatherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to father for pedigree tracking
-        health_records:
+          description: Ссылка на отца для отслеживания родословной
+        healthRecords:
           type: array
           items:
             type: object
             properties:
               type:
                 type: string
-                description: Type of health record (e.g., vaccination, deworming)
+                description: Тип записи здоровья (напр., вакцинация, дегельминтизация)
               detail:
                 type: string
-                description: Detail of the health record (e.g., Rabies, Panacur)
+                description: Детали записи здоровья (напр., Rabies, Panacur)
               date:
                 type: string
                 format: date
-                description: Date of the health event
+                description: Дата события здоровья
               provider:
                 type: string
-                description: Provider/veterinary clinic
-          description: Array of health record objects
+                description: Поставщик/ветклиника
+          description: Массив объектов записей здоровья
           default: []
-        reproductive_data:
+        reproductiveData:
           type: array
           items:
             type: object
             properties:
               event:
                 type: string
-                description: Event type (e.g., heat_start, mating)
+                description: Тип события (напр., heat_start, mating)
               date:
                 type: string
                 format: date
-                description: Date of the event
-              partner_id:
+                description: Дата события
+              partnerId:
                 type: string
                 format: uuid
                 nullable: true
-                description: Foreign key to partner animal (if applicable)
-          description: Array of reproductive data objects (for females)
+                description: Внешний ключ на животное-партнёра (если применимо)
+          description: Массив объектов репродуктивных данных (для самок)
           default: []
-        created_at:
+        createdAt:
           type: string
           format: date-time
-          description: Creation timestamp
-        updated_at:
+          description: Метка создания
+        updatedAt:
           type: string
           format: date-time
-          description: Last update timestamp
-        deactivated_at:
+          description: Метка последнего обновления
+        deactivatedAt:
           type: string
           format: date-time
           nullable: true
-          description: Timestamp when animal was deactivated (soft delete)
+          description: Метка времени деактивации животного (мягкое удаление)
     AnimalCreate:
       type: object
       required:
-        - species_id
+        - speciesId
         - sex
-        - date_of_birth
+        - dateOfBirth
       properties:
-        owner_id:
+        ownerId:
           type: string
           format: uuid
           nullable: true
-          description: Foreign key to user (set if personal ownership, null if organization ownership)
-        organization_id:
+          description: Внешний ключ на пользователя (задан при личном владении, null при организационном)
+        organizationId:
           type: string
           format: uuid
           nullable: true
-          description: Foreign key to organization (set if organizational ownership, null if personal ownership)
-        species_id:
+          description: Внешний ключ на организацию (задан при организационном владении, null при личном)
+        speciesId:
           type: integer
-          description: Foreign key to species
-        breed_id:
+          description: Внешний ключ на вид (INT-справочник)
+        breedId:
           type: integer
           nullable: true
-          description: Foreign key to breed (nullable if custom/other)
-        breed_text_localized:
-          type: object
-          description: 'Custom breed text if breed_id is null (for moderator review) - JSONB with language keys (e.g., {"en": "Text", "ru": "Текст"})'
-          additionalProperties:
-            type: string
-            maxLength: 100
-        nickname_localized:
-          type: object
-          description: 'Display name - JSONB with language keys (e.g., {"en": "Nickname", "ru": "Кличка"})'
-          additionalProperties:
-            type: string
-            maxLength: 50
+          description: Внешний ключ на породу (INT-справочник; null если кастомная/иная)
+        breedTextLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Текст кастомной породы, если breedId null, для ревью модератором (LocalizedString {en, ru})
+        nicknameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Отображаемое имя (LocalizedString {en, ru})
         sex:
           type: string
           enum: [Male, Female]
-          description: Sex of the animal
-        date_of_birth:
+          description: Пол животного
+        dateOfBirth:
           type: string
           format: date
-          description: Date of birth
-        description_localized:
-          type: object
-          description: 'Color/coat pattern and other description - JSONB with language keys (e.g., {"en": "Brown coat", "ru": "Коричневая шерсть"})'
-          additionalProperties:
-            type: string
-            maxLength: 100
-        microchip_id:
+          description: Дата рождения
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+        microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Microchip ID
-        tattoo_brand_id:
+          description: ID микрочипа
+        tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Tattoo/brand ID (for livestock)
-        owned_since:
+          description: ID тату/тавро (для скота)
+        ownedSince:
           type: string
           format: date
           nullable: true
-          description: Date when current owner acquired the animal
-        mother_id:
+          description: Дата приобретения животного текущим владельцем
+        motherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to mother for pedigree tracking
-        father_id:
+          description: Ссылка на мать для отслеживания родословной
+        fatherId:
           type: string
           format: uuid
           nullable: true
-          description: Reference to father for pedigree tracking
-        health_records:
+          description: Ссылка на отца для отслеживания родословной
+        healthRecords:
           type: array
           items:
             type: object
             properties:
               type:
                 type: string
-                description: Type of health record (e.g., vaccination, deworming)
+                description: Тип записи здоровья (напр., вакцинация, дегельминтизация)
               detail:
                 type: string
-                description: Detail of the health record (e.g., Rabies, Panacur)
+                description: Детали записи здоровья (напр., Rabies, Panacur)
               date:
                 type: string
                 format: date
-                description: Date of the health event
+                description: Дата события здоровья
               provider:
                 type: string
-                description: Provider/veterinary clinic
-          description: Array of health record objects
+                description: Поставщик/ветклиника
+          description: Массив объектов записей здоровья
           default: []
-        reproductive_data:
+        reproductiveData:
           type: array
           items:
             type: object
             properties:
               event:
                 type: string
-                description: Event type (e.g., heat_start, mating)
+                description: Тип события (напр., heat_start, mating)
               date:
                 type: string
                 format: date
-                description: Date of the event
-              partner_id:
+                description: Дата события
+              partnerId:
                 type: string
                 format: uuid
                 nullable: true
-                description: Foreign key to partner animal (if applicable)
-          description: Array of reproductive data objects (for females)
+                description: Внешний ключ на животное-партнёра (если применимо)
+          description: Массив объектов репродуктивных данных (для самок)
           default: []
-        is_active:
+        isActive:
           type: boolean
-          description: Active status
+          description: Активность
           default: true
     AnimalUpdate:
       type: object
       properties:
-        nickname:
+        nicknameLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Отображаемое имя (LocalizedString {en, ru})
+        descriptionLocalized:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+        microchipId:
           type: string
           maxLength: 50
           nullable: true
-          description: Display name
-        color_coat:
-          type: string
-          maxLength: 100
-          nullable: true
-          description: Color/coat pattern
-        microchip_id:
+          description: ID микрочипа
+        tattooBrandId:
           type: string
           maxLength: 50
           nullable: true
-          description: Microchip ID
-        tattoo_brand_id:
-          type: string
-          maxLength: 50
-          nullable: true
-          description: Tattoo/brand ID (for livestock)
-        health_records:
+          description: ID тату/тавро (для скота)
+        healthRecords:
           type: array
           items:
             type: object
             properties:
               type:
                 type: string
-                description: Type of health record (e.g., vaccination, deworming)
+                description: Тип записи здоровья (напр., вакцинация, дегельминтизация)
               detail:
                 type: string
-                description: Detail of the health record (e.g., Rabies, Panacur)
+                description: Детали записи здоровья (напр., Rabies, Panacur)
               date:
                 type: string
                 format: date
-                description: Date of the health event
+                description: Дата события здоровья
               provider:
                 type: string
-                description: Provider/veterinary clinic
-          description: Array of health record objects
-        reproductive_data:
+                description: Поставщик/ветклиника
+          description: Массив объектов записей здоровья
+        reproductiveData:
           type: array
           items:
             type: object
             properties:
               event:
                 type: string
-                description: Event type (e.g., heat_start, mating)
+                description: Тип события (напр., heat_start, mating)
               date:
                 type: string
                 format: date
-                description: Date of the event
-              partner_id:
+                description: Дата события
+              partnerId:
                 type: string
                 format: uuid
                 nullable: true
-                description: Foreign key to partner animal (if applicable)
-          description: Array of reproductive data objects (for females)
-        owned_since:
+                description: Внешний ключ на животное-партнёра (если применимо)
+          description: Массив объектов репродуктивных данных (для самок)
+        ownedSince:
           type: string
           format: date
           nullable: true
-          description: Date when current owner acquired the animal
-        is_active:
+          description: Дата приобретения животного текущим владельцем
+        isActive:
           type: boolean
-          description: Active status
+          description: Активность
     AnimalOwnershipHistory:
       type: object
       required:
         - id
-        - animal_id
-        - owner_id
-        - start_date
-        - created_at
+        - animalId
+        - ownerId
+        - startDate
+        - createdAt
       properties:
         id:
           type: string
           format: uuid
-          description: Unique identifier
-        animal_id:
-            type: string
-            format: uuid
-            description: Foreign key to animal
-        owner_id:
+          description: Уникальный идентификатор
+        animalId:
           type: string
           format: uuid
-          description: Foreign key to user
-        start_date:
+          description: Внешний ключ на животное
+        ownerId:
+          type: string
+          format: uuid
+          description: Внешний ключ на пользователя
+        startDate:
           type: string
           format: date
-          description: Start date of ownership
-        end_date:
+          description: Дата начала владения
+        endDate:
           type: string
           format: date
           nullable: true
-          description: End date of ownership (nullable if current)
-        transfer_reason:
+          description: Дата окончания владения (null если текущее)
+        transferReason:
           type: string
           nullable: true
-          description: Reason for ownership transfer
-        created_at:
+          description: Причина передачи владения
+        createdAt:
           type: string
           format: date-time
-          description: Creation timestamp
+          description: Метка создания
+  responses:
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

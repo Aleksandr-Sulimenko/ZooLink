@@ -2,55 +2,49 @@ openapi: 3.0.3
 info:
   title: ZooLink Branch API
   version: 1.0.0
-  description: API for managing branches in ZooLink.
+  description: >
+    API управления филиалами в ZooLink.
+    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth (§2), x-required-roles (§3),
+    ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5), If-Match/ETag на PATCH (§10).
 servers:
   - url: /api/v1
     description: ZooLink API v1
+security:
+  - bearerAuth: []
 paths:
   /branches:
     get:
-      summary: List branches
+      summary: Список филиалов
       operationId: listBranches
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: organization_id
-          schema:
-            type: string
-            format: uuid
-          description: Filter by organization ID
+          schema: { type: string, format: uuid }
+          description: Фильтр по ID организации
         - in: query
           name: city_id
-          schema:
-            type: integer
-          description: Filter by city ID
+          schema: { type: integer }
+          description: Фильтр по ID города
         - in: query
           name: is_headquarters
-          schema:
-            type: boolean
-          description: Filter by headquarters flag
+          schema: { type: boolean }
+          description: Фильтр по флагу головного офиса
         - in: query
           name: is_active
-          schema:
-            type: boolean
-          description: Filter by active status
+          schema: { type: boolean }
+          description: Фильтр по активности
         - in: query
           name: page
-          schema:
-            type: integer
-            minimum: 1
-            default: 1
-          description: Page number for pagination
+          schema: { type: integer, minimum: 1, default: 1 }
+          description: Номер страницы для пагинации
         - in: query
           name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Number of items per page
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: Количество элементов на странице
       responses:
         '200':
-          description: Paginated list of branches
+          description: Постраничный список филиалов
           content:
             application/json:
               schema:
@@ -58,123 +52,113 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/Branch'
-                  total:
-                    type: integer
-                    description: Total number of branches
-                  page:
-                    type: integer
-                    description: Current page number
-                  limit:
-                    type: integer
-                    description: Items per page
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+                    items: { $ref: '#/components/schemas/Branch' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     post:
-      summary: Create a new branch
+      summary: Создать новый филиал
       operationId: createBranch
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BranchCreate'
+            schema: { $ref: '#/components/schemas/BranchCreate' }
       responses:
         '201':
-          description: Branch created successfully
+          description: Филиал успешно создан
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '400':
-          description: Bad request (validation error)
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /branches/{id}:
     get:
-      summary: Get branch by ID
+      summary: Получить филиал по ID
       operationId: getBranchById
+      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Branch details
+          description: Детали филиала
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор для отправки в If-Match на PATCH (§10)
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
+              schema: { $ref: '#/components/schemas/Branch' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
-      summary: Update branch
+      summary: Обновить филиал
       operationId: updateBranch
-      security:
-        - bearerAuth: []
+      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /branches/{id}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/BranchUpdate'
+            schema: { $ref: '#/components/schemas/BranchUpdate' }
       responses:
         '200':
-          description: Branch updated successfully
+          description: Филиал успешно обновлён
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после обновления
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
-        '400':
-          description: Bad request (validation error)
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+              schema: { $ref: '#/components/schemas/Branch' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     delete:
-      summary: Delete branch (soft delete)
+      summary: Удалить филиал (мягкое удаление)
       operationId: deleteBranch
-      security:
-        - bearerAuth: []
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Branch deleted successfully
-        '404':
-          description: Branch not found
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden (insufficient permissions)
+        '204': { description: Филиал успешно удалён }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth:
@@ -182,126 +166,156 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    LocalizedString:
+      type: object
+      properties:
+        en: { type: string }
+        ru: { type: string }
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
     Branch:
       type: object
       required:
         - id
-        - organization_id
-        - city_id
+        - organizationId
+        - cityId
         - address
-        - is_active
-        - created_at
-        - updated_at
+        - isActive
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
           format: uuid
-          description: Unique identifier
-        organization_id:
+          description: Уникальный идентификатор
+        organizationId:
           type: string
           format: uuid
-          description: Foreign key to organization
-        city_id:
+          description: Внешний ключ на организацию
+        cityId:
           type: integer
-          description: Foreign key to city for geo-search
+          description: Внешний ключ на город для гео-поиска
         address:
           type: string
-          description: Detailed branch address
+          description: Детальный адрес филиала
         phone:
           type: string
           maxLength: 30
-          description: Branch phone (optional)
+          description: Телефон филиала (опционально)
         email:
           type: string
           maxLength: 255
           format: email
-          description: Branch email (optional)
+          description: Email филиала (опционально)
         metadata:
           type: object
-          description: JSONB field for extensibility (branch-specific attributes)
+          description: JSONB-поле расширяемости (атрибуты конкретного филиала)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
-          description: Flag indicating headquarters
+          description: Флаг головного офиса
           default: false
-        is_active:
+        isActive:
           type: boolean
-          description: Active status
+          description: Активность
           default: true
-        created_at:
+        createdAt:
           type: string
           format: date-time
-          description: Creation timestamp
-        updated_at:
+          description: Метка создания
+        updatedAt:
           type: string
           format: date-time
-          description: Last update timestamp
+          description: Метка последнего обновления
     BranchCreate:
       type: object
       required:
-        - organization_id
-        - city_id
+        - organizationId
+        - cityId
         - address
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
-          description: Foreign key to organization
-        city_id:
+          description: Внешний ключ на организацию
+        cityId:
           type: integer
-          description: Foreign key to city for geo-search
+          description: Внешний ключ на город для гео-поиска
         address:
           type: string
-          description: Detailed branch address
+          description: Детальный адрес филиала
         phone:
           type: string
           maxLength: 30
-          description: Branch phone (optional)
+          description: Телефон филиала (опционально)
         email:
           type: string
           maxLength: 255
           format: email
-          description: Branch email (optional)
+          description: Email филиала (опционально)
         metadata:
           type: object
-          description: JSONB field for extensibility (branch-specific attributes)
+          description: JSONB-поле расширяемости (атрибуты конкретного филиала)
           default: {}
-        is_headquarters:
+        isHeadquarters:
           type: boolean
-          description: Flag indicating headquarters
+          description: Флаг головного офиса
           default: false
-        is_active:
+        isActive:
           type: boolean
-          description: Active status
+          description: Активность
           default: true
     BranchUpdate:
       type: object
       properties:
-        organization_id:
+        organizationId:
           type: string
           format: uuid
-          description: Foreign key to organization
-        city_id:
+          description: Внешний ключ на организацию
+        cityId:
           type: integer
-          description: Foreign key to city for geo-search
+          description: Внешний ключ на город для гео-поиска
         address:
           type: string
-          description: Detailed branch address
+          description: Детальный адрес филиала
         phone:
           type: string
           maxLength: 30
-          description: Branch phone (optional)
+          description: Телефон филиала (опционально)
         email:
           type: string
           maxLength: 255
           format: email
-          description: Branch email (optional)
+          description: Email филиала (опционально)
         metadata:
           type: object
-          description: JSONB field for extensibility (branch-specific attributes)
-        is_headquarters:
+          description: JSONB-поле расширяемости (атрибуты конкретного филиала)
+        isHeadquarters:
           type: boolean
-          description: Flag indicating headquarters
-        is_active:
+          description: Флаг головного офиса
+        isActive:
           type: boolean
-          description: Active status
+          description: Активность
+  responses:
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

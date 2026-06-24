@@ -115,6 +115,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
   - Does NOT reveal exact address; users arrange meetup via revealed contacts.
   - Owner/representative can see in analytics: "Your listing was viewed X times, contacts shown Y times."
   - **Note**: For organization-linked listings, the contacts shown may belong to an organization representative rather than the individual creator.
+  - **Contract status (B9, GAP-011)**: the seller analytics endpoint `GET /listings/{id}/analytics` is **defined as a contract** (`listings-api.yaml`, `ListingAnalytics`) — counts now (`views`, `contactReveals`, `lastActivityAt`) with a **series-ready** `series` field (`x-phase:2`, additive). Implementation is scheduled for the frontend phase (form now, behaviour later — owner-decision #6). See `API_CONVENTIONS.md` §16.
 
 ### 6. Special Rules by Listing Type
 - **SALE**:

@@ -54,9 +54,9 @@ components:
     Favorite:
       type: object
       properties:
-        id:         { type: string, format: uuid }
-        listing_id: { type: string, format: uuid }
-        created_at: { type: string, format: date-time }
+        id:        { type: string, format: uuid }
+        listingId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
     PageMeta:
       type: object
       properties:

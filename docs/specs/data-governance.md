@@ -17,6 +17,7 @@ Make data governance implementable. Provides the **PII inventory**, the **erasur
 |---|---|---|
 | `users.phone_hash` | identifier (keyed HMAC) | NULL |
 | `users.contact_phone`, `users.contact_telegram` | contact PII | NULL |
+| `users.contact_prefs` | contact-visibility setting | reset to column default |
 | `users.email` | contact PII | NULL |
 | `users.full_name` | personal | → `'[deleted]'` tombstone |
 | `users.avatar_url` | personal media | delete object from S3, NULL |
@@ -32,7 +33,8 @@ Logs must **mask** all of the above (no raw phone/email/token/full_name in logs)
 ## 2. Erasure / anonymisation procedure
 Right-to-erasure (ФЗ-152) is reconciled with traceability as **anonymise-in-place, keep the UUID**:
 1. User requests deletion → account `status = DEACTIVATED`, **30-day grace** (recoverable).
-2. After grace, run `erase_user(user_id)`:
+2. After grace, run `erase_user(user_id)` — triggered automatically by the worker-only **retention job**
+   (D2; `RETENTION_GRACE_DAYS`, default 30) or manually by an ADMIN; actor = **system** for the job run:
    - anonymise `users` PII per the table above (UUID retained so FK RESTRICT rows stay valid).
    - NULL `notification_logs.recipient/content` for that user; delete S3 avatar.
    - **Retained under legal hold (NOT erased):** `audit_log`, `moderation_decisions` (append-only),

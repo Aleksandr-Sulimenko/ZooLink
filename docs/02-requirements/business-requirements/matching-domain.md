@@ -11,6 +11,25 @@ Handles specialized logic for finding compatible mates for breeding purposes. Th
 - **Genetic Compatibility**: Analysis of genetic markers to avoid inbreeding and promote desirable traits.
 - **Health Compatibility**: Matching animals with complementary health profiles to minimize inherited disease risk.
 
+## MVP scope vs Фаза 2 (normative — aligned with spec 05)
+> **ЧТО:** the MVP delivers matching as a **stateless eligible-set search**, not a scored ranking.
+> A candidate is shown iff it passes the hard predicates in
+> [`specs/05-matching-domain.md` §"Breeding eligibility"](../../specs/05-matching-domain.md)
+> (same species · opposite sex · both INTACT · both breeding-visible · both active · different
+> owners · within radius). There are **no** `matches` / `match_history` / `match_feedback` tables in
+> MVP; the API surface for them (`GET /matching/{id}`, `GET /matching/history`,
+> `POST /matching/{id}/feedback`) and every scoring field (`compatibilityScore`, `scoreBreakdown`,
+> `minScore`) are marked `x-phase: 2` and are null/absent in MVP (see `matching-api.yaml`).
+> **ПОЧЕМУ:** the contract and the data-model must not promise a scoring engine the MVP does not
+> build; `compatibilityScore` returned as a real number would be a silent doc↔code lie. Eligibility
+> is a pure predicate over existing animal fields and needs no new persistence.
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** the eligible-set is forward-compatible — Фаза 2 adds ranking *on top of* the
+> same predicate set and the same response shapes (additive `compatibilityScore`/`scoreBreakdown`),
+> so no rewrite of the contract, schema or actor model is forced (IMPLEMENTATION_PLAYBOOK §5).
+> **Sections 2 (Matching Factors & Weighting), 5 (Assisted Reproduction scoring), the
+> Compatibility Score concept, and the conceptual `matches`/score `Data Model` below describe the
+> Фаза 2 design**; they are retained as forward design, not MVP behaviour.
+
 ## Business Rules
 ### 1. Matching Eligibility
 - Only animals of opposite sexes can be matched (for natural breeding; AI/ET may have different rules in future).
@@ -22,7 +41,7 @@ Handles specialized logic for finding compatible mates for breeding purposes. Th
 - Animals must be of the same species and breed (cross-breed matching reserved for Фаза 2+ with explicit user consent).
 - Two animals can be matched if they belong to different owners (i.e., different users and/or different organizations). Matching logic may be configured to allow or disallow matches between animals owned by the same organization (via a feature flag or organization setting).
 
-### 2. Matching Factors & Weighting
+### 2. Matching Factors & Weighting *(Фаза 2+ — scoring engine; not in MVP eligible-set)*
 The matching algorithm considers these factors with configurable weights (weights may vary by species/breed):
 
 #### Genetic Factors (30% weight)
@@ -126,7 +145,9 @@ The matching algorithm considers these factors with configurable weights (weight
   - Genetic data used in matching is never exposed directly (only interpreted as risk/trait classifications)
   - Location used for matching is never shown in match suggestions (only distance category)
 
-## Data Model (Conceptual)
+## Data Model (Conceptual) *(Фаза 2+ — the `matches` table and score columns do not exist in MVP)*
+> MVP matching is stateless (no `matches`/`match_history`/`match_feedback` tables — spec 05). The
+> table below is the Фаза 2 persistence design once scoring lands.
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | UUID | Yes | Primary key (match instance) |

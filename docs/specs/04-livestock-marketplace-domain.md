@@ -10,6 +10,8 @@ status: "Approved"
 ## Outcome
 Enable listing, searching, and managing advertisements for agricultural livestock (cattle, horses, sheep, goats, pigs, poultry, etc.). Support operations like sale, breeding, leasing, and exhibition. Ensure compliance with Russian livestock trading regulations and animal identification requirements.
 
+> **Leasing — form now / behaviour Фаза 2 (B3):** `leasing` exists as a selectable `listings.listing_type` enum value (migration 0021); leasing-specific rules/flow are deferred to Фаза 2. See `business-requirements/livestock-marketplace.md`.
+
 ## Scope & Boundaries
 **In Scope:**
 - Livestock listings with species-specific attributes (ear tag, passport, birth certificate, health test results, productivity metrics)

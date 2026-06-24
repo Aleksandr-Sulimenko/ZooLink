@@ -10,7 +10,13 @@
       "Bash(git show *)",
       "Read(//tmp/**)",
       "Bash(git checkout *)",
-      "Bash(grep -E \"\\\\.\\(md\\)$\")"
+      "Bash(grep -E \"\\\\.\\(md\\)$\")",
+      "Bash(git checkout *)"
+    ],
+    "ask": [
+      "Bash(/home/asulimenko/Project/RLM/digest-rlm *)",
+      "Bash(npx tsx /home/asulimenko/Project/RLM/run-digest.ts *)",
+      "Bash(cd /home/asulimenko/Project/RLM && npx tsx run-digest.ts *)"
     ]
   }
 }
