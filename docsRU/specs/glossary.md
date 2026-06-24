@@ -85,6 +85,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 **Moderation Reason**  
 Настраиваемый код причины (`moderation_reasons`), выбираемый при решении/жалобе.
 
+**Decision Template**  
+Редактируемая, управляемая админом заготовленная формулировка решения (`decision_templates`, B10): оператор (HUMAN или AGENT) выбирает её по стабильному `code`, чтобы заполнить заметки решения REJECTED / CHANGES_REQUESTED. Контролируемая **таблица reference-data** (`body_localized` JSONB, `applies_to_decision`, `market`, опц. `related_reason_code`), **а не** enum — отличается от обязательной таксономии **Moderation Reason** (почему-отклонено); шаблон — это проза, которую отправляет актёр. Форма сейчас; выбор при решении приходит с доменом Moderation.
+
 **Payment Transaction / Refund**  
 Платёж (`payment_transactions`) и его возврат (`refunds`). Суммы — **минорные единицы** (BIGINT), никогда не float.
 
@@ -154,6 +157,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 
 **Pre-moderation (Пре-модерация)**  
 Рабочий процесс (ADR-0003), при котором объявление не видно публично до одобрения модератором/агентом (`PENDING_MODERATION` → `ACTIVE`).
+
+**Lock state (состояние блокировки, claim/lock)**  
+Состояние эксклюзивности элемента очереди модерации относительно вызывающего принципала: `FREE`, `CLAIMED_BY_ME`, `CLAIMED_BY_OTHER`, `LOCK_EXPIRED` (B10, spec 12). Модератор (HUMAN или AGENT) **захватывает** элемент, получая эксклюзивную блокировку (`assigned_to`/`locked_at`/`lock_expires_at`, TTL `MOD_LOCK_TTL` ≈ 15 мин), чтобы два принципала не решали один элемент; конкурирующий захват → `409 ALREADY_CLAIMED`. Отдаётся как фильтр/поле очереди `lockState`.
 
 ## Концепции данных и архитектуры
 

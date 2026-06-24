@@ -85,6 +85,9 @@ An append-only audit record (`moderation_decisions`) of a moderator/agent's deci
 **Moderation Reason**  
 A configurable reason code (`moderation_reasons`) selectable when deciding/reporting.
 
+**Decision Template**  
+An editable, admin-managed canned decision-note (`decision_templates`, B10): the operator (HUMAN or AGENT) picks one by a stable `code` to populate the notes of a REJECTED / CHANGES_REQUESTED decision. A controlled **reference-data table** (`body_localized` JSONB, `applies_to_decision`, `market`, optional `related_reason_code`), **not** an enum — distinct from the mandatory **Moderation Reason** taxonomy (why-rejected); a template is the prose the actor sends. Form now; selection at decision time ships with the Moderation domain.
+
 **Payment Transaction / Refund**  
 A payment (`payment_transactions`) and its refund (`refunds`). Amounts are **minor units** (BIGINT), never floats.
 
@@ -154,6 +157,9 @@ The **fixable** moderation outcome: the moderator/agent asks the seller to amend
 
 **Pre-moderation**  
 The workflow (ADR-0003) where a listing is not publicly visible until a moderator/agent approves it (`PENDING_MODERATION` → `ACTIVE`).
+
+**Lock state** (claim/lock)  
+The exclusivity state of a moderation-queue item relative to the calling principal: `FREE`, `CLAIMED_BY_ME`, `CLAIMED_BY_OTHER`, `LOCK_EXPIRED` (B10, spec 12). A moderator (HUMAN or AGENT) **claims** an item to gain an exclusive lock (`assigned_to`/`locked_at`/`lock_expires_at`, TTL `MOD_LOCK_TTL` ≈ 15 min) so two principals cannot decide the same item; a competing claim → `409 ALREADY_CLAIMED`. Surfaced as the `lockState` queue filter/field.
 
 ## Data & Architecture Concepts
 

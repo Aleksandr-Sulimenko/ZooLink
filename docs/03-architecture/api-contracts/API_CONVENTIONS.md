@@ -69,6 +69,9 @@ Standard `code` values: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` (401), `FORB
 `CONFLICT` (409), `RATE_LIMITED` (429), `INTERNAL` (500), `UPSTREAM_UNAVAILABLE` (503). Domain-specific codes extend
 this set and are listed in each domain spec's "Error Handling" section (see `specs/error_handling/standard_error_format.md`).
 Every operation must document at least `400, 401, 403, 404, 500` referencing `Problem` (public ones omit 401/403).
+- **Moderation claim/lock (B10, `specs/12-moderation-domain.md`):** `ALREADY_CLAIMED` (409, claim on an item
+  with another principal's live lock), `NOT_LOCK_HOLDER` (409, release/decide by a non-holder),
+  `ITEM_NOT_CLAIMED` (409, decide on an item with no live lock).
 
 ## 5. Pagination (list endpoints)
 Query params `page` (1-based, default 1) and `limit` (default 20, max 100). Response envelope:

@@ -68,6 +68,9 @@ Problem:
 `CONFLICT` (409), `RATE_LIMITED` (429), `INTERNAL` (500), `UPSTREAM_UNAVAILABLE` (503). Доменные коды расширяют набор
 и перечислены в секции «Error Handling» каждой доменной спеки (см. `specs/error_handling/standard_error_format.md`).
 Каждая операция документирует минимум `400, 401, 403, 404, 500` со ссылкой на `Problem` (публичные опускают 401/403).
+- **Claim/lock модерации (B10, `specs/12-moderation-domain.md`):** `ALREADY_CLAIMED` (409, claim на элементе с
+  живым lock другого принципала), `NOT_LOCK_HOLDER` (409, release/decide не-держателем), `ITEM_NOT_CLAIMED`
+  (409, decide на элементе без живого lock).
 
 ## 5. Пагинация (list-эндпоинты)
 Query-параметры `page` (с 1, по умолчанию 1) и `limit` (по умолчанию 20, макс 100). Конверт ответа:
@@ -131,6 +134,7 @@ ISO 4217: `{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` 
 - [ ] `429` + заголовки на чувствительных
 - [ ] mutating PATCH поддерживает `If-Match` (§10); небезопасный POST принимает `Idempotency-Key` (§11)
 - [ ] list-операции используют §12 sort/filter; публичные read шлют `ETag`/`Cache-Control` (§13)
+- [ ] ответы/события с актёром используют `Actor {actorId, principalType}` (§15); без плоских actor-uuid
 
 ## 10. Оптимистичная конкуренция (mutating PATCH)
 Каждый ресурс отдаёт **`ETag`** (weak, из `updated_at`) на GET. `PATCH`/`PUT`, изменяющий существующий ресурс,
@@ -163,6 +167,36 @@ moderation decide, payment confirm — сохраняют guard-based `409`.)
 Устаревшие операции/схемы помечаются `deprecated: true`, сервер шлёт `Deprecation` + `Sunset`. Схемы чата
 (`Conversation`/сообщения) депрекированы в MVP (Фаза 2+, ADR-0005) и должны быть помечены.
 
+## 15. Представление актёра (`{ actorId, principalType }` — agent-badge)
+Любой ответ или доменное событие, **называющее актёра** (решения модерации, записи аудита, админ-действия и любой
+будущий payload со штампом актёра), ОБЯЗАН нести актёра как общий объект **`Actor`** — `{ actorId, principalType }`
+(+ опционально `actorDisplayName`) — никогда как голый uuid `actorId`. `principalType ∈ {HUMAN, AGENT}` — это
+**снимок на момент записи** `users.principal_type` (контракт-зеркало снимка схемы §1 в
+[ADR-0011](../../04-decisions/0011-agent-principal-actor-model.md)), чтобы потребитель отличал решённое человеком от
+решённого агентом без второго запроса.
+```yaml
+Actor:
+  type: object
+  required: [actorId, principalType]
+  properties:
+    actorId:          { type: string, format: uuid }
+    principalType:    { type: string, enum: [HUMAN, AGENT] }   # снимок на момент действия (ADR-0011 §1)
+    actorDisplayName: { type: string, nullable: true }         # опциональная метка для операторского UI
+```
+Для **журнала решений модерации** форма актёра дополнительно несёт цепочку human-override (ADR-0011 §2/§3):
+`actorRole` (снимок роли при принятии решения), `supersedesDecisionId` и `isHumanOverride` (ненулевые вместе —
+HUMAN-отмена ссылается на отменяемое решение; исходная строка агента никогда не мутируется).
+- **ЧТО:** каждый ответ/событие с актёром использует `Actor {actorId, principalType}` (+ override-поля в журнале
+  модерации); legacy-плоские uuid `moderatorId`/`performedBy`/`resolvedBy`/`updatedBy` заменены.
+- **ПОЧЕМУ:** операторский UI / регуляторный экспорт / нижестоящий сервис должны отличать человека от агента без
+  второго запроса, а форма ответа должна совпадать с правдивым append-only снимком схемы (ADR-0011 §1/§6).
+- **ПОЧЕМУ ТАК ЛУЧШЕ для проекта в целом:** замыкает петлю схема↔контракт (снимок бесполезен, если API его прячет);
+  форвард-совместимо с нулевой стоимостью (`principalType` = `HUMAN` для каждого MVP-ответа, поэтому принятие сейчас
+  избегает ломающего изменения контракта при активации агентов — ADR-0006); одна форма `Actor` для всех потребителей
+  и codegen-таргетов; поддерживает ещё открытый продуктовый вопрос, видят ли конечные пользователи «решено ИИ»
+  (данные присутствуют независимо от выбора отображения).
+> Query-фильтры, выбирающие по актёру, принимают скалярный `actorId` (фильтруем по id, не по объекту).
+
 ## 16. Конверт аналитики (счётчики сейчас, series-ready) — зафиксировано владельцем (решение #6, 2026-06-24)
 Ответы аналитики — это **снимки-счётчики сейчас** с формой **series-ready**: каждая схема аналитики — плоский
 объект счётчиков (напр. `views`, `contactReveals`, `totalListings`, `countsByStatus`, `countsByMarket`) **плюс
@@ -184,8 +218,10 @@ B0 привёл все 12 контрактов к этому документу:
 `matching-api`), RFC7807 `Problem` на каждом non-2xx (§4), `LocalizedString {en, ru}` (§6, плоские `name_ru/name_en`
 и freeform-JSONB-карты убраны), `If-Match`/`ETag` (§10) на мутирующих admin/moderation PATCH, и 7-ролевой enum (§3)
 в `admin-api`. `favorites-api.yaml` получил RU-зеркало.
-**Отложено (B0.6, блокировано ADR-0011):** форма актёра в ответе `{ actorId, principalType }` (agent-badge) на
-ответах moderation/audit **пока не** применена — трекается в `ADMIN_PHASE_ACTION_PLAN.md` B0.6.
+**B0.6 выполнено (2026-06-23, ADR-0011 §6):** форма актёра в ответе `Actor {actorId, principalType}` (agent-badge,
+§15) применена к ответам moderation/audit/admin со штампом актёра — `moderation-api` (`ModerationDecision.actor` +
+`actorRole`/`supersedesDecisionId`/`isHumanOverride`, `ContentReport.resolvedBy`) и `admin-api`
+(`AuditLogEntry.actor`, `ModerationLogEntry.actor`, `ModerationActionResponse.actor`, `SystemSetting.updatedBy`).
 `API_CONVENTIONS.md` — единый нормативный источник.
 **B9 выполнено (2026-06-24, решение #6):** конверт аналитики (§16, счётчики + series-ready) применён —
 `listings-api` (`GET /listings/{id}/analytics`, `ListingAnalytics`) и `organization-api`
