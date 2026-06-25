@@ -18,6 +18,6 @@ import { OAuthRegistry } from './oauth/oauth.registry';
 @Module({
   controllers: [IdentityController, MeController, AdminUserController],
   providers: [IdentityService, ProfileService, RecoveryService, AdminUserService, OtpService, OAuthRegistry],
-  exports: [IdentityService],
+  exports: [IdentityService, AdminUserService],
 })
 export class IdentityModule {}

@@ -226,6 +226,17 @@ describe('Admin Reference Data (e2e)', () => {
     expect(adminIds).toContain(createdSpeciesId);
   });
 
+  it('ADMIN includeInactive=false EXCLUDES the inactive species (bool-parse regression guard)', async () => {
+    // Regression: @Type(() => Boolean) parsed the string "false" as true, silently INCLUDING inactive
+    // rows. With the @Transform fix, includeInactive=false must behave as active-only.
+    const res = await request(server())
+      .get(`/v1/reference-data/species?includeInactive=false&limit=100`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    const ids = (res.body.items as { id: number }[]).map((i) => i.id);
+    expect(ids).not.toContain(createdSpeciesId); // createdSpeciesId was deactivated above
+  });
+
   it('serves the create-form template to ADMIN', async () => {
     const res = await request(server())
       .get('/v1/reference-data/breeds/new')

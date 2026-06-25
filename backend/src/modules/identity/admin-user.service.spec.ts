@@ -15,9 +15,11 @@ const baseUser = {
   principal_type: 'HUMAN',
   status: 'ACTIVE',
   city_id: null,
+  avatar_url: null,
   email: 'ann@example.com',
   email_verified: true,
-  avatar_url: null,
+  is_active: true,
+  last_login_at: null,
   preferred_language: 'ru',
   created_at: new Date('2026-06-19T00:00:00Z'),
   updated_at: new Date('2026-06-19T00:00:00Z'),
@@ -28,6 +30,8 @@ const baseUser = {
 function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jest.Mock) {
   const findUnique = jest.fn().mockResolvedValue(user);
   const update = updateImpl ?? jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...baseUser, ...data }));
+  const findMany = jest.fn().mockResolvedValue([baseUser]);
+  const count = jest.fn().mockResolvedValue(1);
   const updateMany = jest.fn().mockResolvedValue({ count: 1 });
   const txUpdate = jest.fn().mockResolvedValue({ ...baseUser });
   const tx = { users: { update: txUpdate }, notification_logs: { updateMany } };
@@ -35,7 +39,7 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
     .fn()
     .mockImplementation((cb: (t: typeof tx) => unknown) => cb(tx));
   const prisma = {
-    users: { findUnique, update },
+    users: { findUnique, update, findMany, count },
     notification_logs: { updateMany },
     $transaction,
   } as unknown as PrismaService;
@@ -46,7 +50,7 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const auth = { logout } as unknown as AuthService;
   return {
     svc: new AdminUserService(prisma, config, audit, auth),
-    findUnique, update, updateMany, txUpdate, $transaction, record, logout,
+    findUnique, update, findMany, count, updateMany, txUpdate, $transaction, record, logout,
   };
 }
 
@@ -127,6 +131,45 @@ describe('AdminUserService.rebind', () => {
       .mockRejectedValue(new Prisma.PrismaClientKnownRequestError('e', { code: 'P2002', clientVersion: 't' }));
     const { svc } = setup(baseUser, update);
     await expect(svc.rebind(admin, 'u1', { newPhone: '+79991234567' })).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('AdminUserService.listWithRoles', () => {
+  it('returns a safe UserRoleInfo projection in the {items, meta} envelope', async () => {
+    const { svc } = setup();
+    const res = await svc.listWithRoles({ page: 1, limit: 20, skip: 0 });
+    expect(res.meta).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 });
+    const item = res.items[0];
+    expect(item).toEqual(
+      expect.objectContaining({ id: 'u1', fullName: 'Ann', role: 'USER', isActive: true, email: 'ann@example.com' }),
+    );
+    // never leaks credentials/identifiers
+    expect(item).not.toHaveProperty('phone_hash');
+    expect(item).not.toHaveProperty('passwordHash');
+    expect(item).not.toHaveProperty('oauth_google_id');
+  });
+
+  it('passes role/isActive filters and an ILIKE name/email search to Prisma', async () => {
+    const { svc, findMany, count } = setup();
+    await svc.listWithRoles({ page: 2, limit: 10, skip: 10, role: 'MODERATOR', isActive: false, search: 'ann' });
+    const expectedWhere = {
+      role: 'MODERATOR',
+      is_active: false,
+      OR: [
+        { full_name: { contains: 'ann', mode: 'insensitive' } },
+        { email: { contains: 'ann', mode: 'insensitive' } },
+      ],
+    };
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expectedWhere, skip: 10, take: 10 }),
+    );
+    expect(count).toHaveBeenCalledWith({ where: expectedWhere });
+  });
+
+  it('applies no filters when none are supplied', async () => {
+    const { svc, findMany } = setup();
+    await svc.listWithRoles({ page: 1, limit: 20, skip: 0 });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
   });
 });
 

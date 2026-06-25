@@ -41,6 +41,57 @@ info:
     (общая схема `Actor`). AuditLogEntry/ModerationLogEntry/ModerationActionResponse отдают `actor`
     (заменяя плоские `performedBy`/`moderatorId`; `performedByName` сворачивается в `actor.actorDisplayName`);
     SystemSetting.updatedBy — это `Actor`. Query-параметр аудита `actorId` заменяет `performedBy`.
+
+
+    Фильтрация аудита по INT-сущности (флаг D4 → разрешение контракт-владельцем Slice-2, нормативно).
+    ЧТО: `getAuditLog` получает query-фильтр `entityIdInt` (integer), а `AuditLogEntry` — поле
+    `entityIdInt` (integer, nullable), параллельные существующему UUID `entityId`. Ровно одно из
+    двух заполнено на строку — `entityId` для UUID-ключевых сущностей (listing/user/organization/
+    moderation-action), `entityIdInt` для INT-ключевых lookup-сущностей (entityType=reference-data:
+    species/breeds/cities/health_certifications/genetic_markers). Два query-фильтра взаимоисключающи
+    (оба → 400 VALIDATION_ERROR; `400` добавлен в ответы getAuditLog).
+    ПОЧЕМУ: `audit_log` записывает CRUD справочных данных (INT-lookup) через `entity_id_int` (миграция 0018),
+    тогда как UUID-сущности используют `entity_id` — но контракт отдавал только `format:uuid` `entityId`,
+    поэтому история изменений справочных данных D4 (спека 06) была записана, но **не фильтруема** по id её
+    субъекта. Колонка схемы уже существует (database_schema.sql: «Ровно одна заполнена на строку»);
+    контракт обязан её зеркалить, иначе просмотрщик аудита не сможет добраться до сущностей справочных данных.
+    ПОЧЕМУ ЛУЧШЕ: контракт теперь совпадает с источником истины (схема A2/0018 `entity_id`+`entity_id_int`),
+    замыкает контур чтения D4 (write→read) без новой абстракции и без поломки существующих UUID-потребителей
+    (`entityIdInt` чисто аддитивен); типизированное разделение (uuid vs int) форвард-совместимо — любой новый
+    INT-lookup, добавленный в реестр датасетов, аудируем и фильтруем без изменения контракта.
+    Рассмотренная альтернатива: единый полиморфный `entityRef {type, id}` строкой — отклонён как ломающее
+    переоформление существующих потребителей `entityId` и ненужная абстракция над схемой, которая уже
+    ключует два id-пространства в раздельных колонках.
+
+
+    Реконсиляция словаря аудита (расхождение контракт↔код Slice-2 → исправление doc-first, нормативно).
+    ЧТО: write-сторона `audit_log` хранит **более богатый словарь**, чем контракт моделировал ранее, и
+    контракт расширяется до совпадения с источником истины (database_schema.sql: `action VARCHAR(100)`
+    и `entity_type VARCHAR(40)` — свободный текст, **без CHECK-enum**):
+      (1) `actionType` был малым закрытым enum (`created/updated/deleted/approved/rejected/banned/
+          role-changed/login/logout`), но каждый домен на деле пишет **namespaced точечный глагол**
+          `{domain}.{verb}` (напр. `identity.role_changed`, `identity.recovery_succeeded`, `user.erased`,
+          `reference_data.created`, `listing.auto_expired`, `feature_toggle.flip`, `identity.oauth_login`).
+          `actionType` становится **строкой `{domain}.{verb}`** (сегменты lower_snake, через точку) с
+          `pattern` + открытым документированным **списком известных значений** (`x-known-values`) — не закрытым enum.
+      (2) `entityType` остаётся **чистым закрытым enum** голых логических имён сущностей, но набор
+          расширен до сущностей, реально появляющихся в журнале (добавлен `feature-toggle`). **Датасет**
+          справочных данных вынесен в собственное аддитивное поле `referenceDataset`, а не протаскивается
+          как хранимый суффикс `reference-data:{dataset}` — `entityType` никогда не несёт форму с двоеточием на проводе.
+    ПОЧЕМУ: код писал значения **вне** enum'ов контракта (`reference_data.created`, `identity.*`,
+    `reference-data:species`, …), что запрещено doc-code-протоколом (никакого тихого расхождения код↔doc).
+    Колонки схемы намеренно свободно-текстовые (append-only журнал, VARCHAR, не enum) именно для того,
+    чтобы словарь мог расти по доменам без миграции; контракт обязан зеркалить эту открытость, а не более
+    узкий выдуманный enum, вынуждающий лоссовый remap на стороне чтения.
+    ПОЧЕМУ ЛУЧШЕ: точечный namespace `{domain}.{verb}` информационно богат и уже единообразен по всем
+    доменам — его сохранение держит полную точность аудита (админ видит `identity.recovery_succeeded`, а не
+    лоссовый `login`) и убирает лоссовый коллапс `toActionType` на слое чтения; расширение контракта
+    чисто **аддитивно и форвард-совместимо** (глаголы нового домена не требуют изменения контракта — они
+    подходят под pattern и добавляются в `x-known-values`), и согласуется со свободно-текстовыми колонками
+    схемы и со сплитом `entityIdInt`, уже принятым выше. Сплит `referenceDataset` держит `entityType`
+    стабильным фильтруемым enum, отдавая датасет без потерь. Ужесточение write-стороны вместо этого
+    (коллапс каждого модуля к 9-значному enum) **отклонено**: оно потеряло бы аудит-информацию, перелопатило
+    бы 8+ модулей в identity/admin/scheduler/feature-toggle и противоречило бы свободно-текстовому дизайну схемы.
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -476,16 +527,67 @@ paths:
       parameters:
         - in: query
           name: entityType
-          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action] }
-          description: Фильтр по типу сущности
+          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action, feature-toggle] }
+          description: >-
+            Фильтр по голому логическому типу сущности. `reference-data` совпадает с любым справочным
+            датасетом независимо от его хранимого суффикса `reference-data:{dataset}`; сузить до одного
+            датасета — через `referenceDataset`.
+        - in: query
+          name: referenceDataset
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: >-
+            Сузить строки аудита справочных данных до одного датасета (маппится на хранимую форму
+            `audit_log.entity_type = 'reference-data:{dataset}'`). Имеет смысл только при
+            entityType=reference-data; иначе игнорируется.
         - in: query
           name: entityId
           schema: { type: string, format: uuid }
-          description: Фильтр по ID сущности
+          description: >-
+            Фильтр по **UUID** id сущности (маппится на audit_log.entity_id) — для UUID-ключевых сущностей
+            (listing/user/organization/moderation-action). Взаимоисключающий с entityIdInt.
+        - in: query
+          name: entityIdInt
+          schema: { type: integer, minimum: 1 }
+          description: >-
+            Фильтр по **INT** id сущности (маппится на audit_log.entity_id_int) — для INT-ключевых lookup-
+            сущностей (entityType=reference-data: species/breeds/cities/health_certifications/
+            genetic_markers; конвенция типов id: lookups=INT). Взаимоисключающий с entityId; передача
+            обоих → 400 VALIDATION_ERROR. Именно это делает историю CRUD справочных данных (D4) фильтруемой.
         - in: query
           name: actionType
-          schema: { type: string, enum: [created, updated, deleted, approved, rejected, banned, role-changed] }
-          description: Фильтр по типу действия
+          schema:
+            type: string
+            maxLength: 100
+            pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+            x-known-values: &auditKnownVerbs
+              - identity.register_initiated
+              - identity.phone_verified
+              - identity.verify_failed
+              - identity.verify_locked_out
+              - identity.oauth_register
+              - identity.oauth_login
+              - identity.role_changed
+              - identity.identifier_rebound
+              - identity.profile_updated
+              - identity.account_deactivated
+              - identity.account_reactivated
+              - identity.erasure_requested
+              - identity.recovery_requested
+              - identity.recovery_locked_out
+              - identity.recovery_succeeded
+              - user.erased
+              - reference_data.created
+              - reference_data.updated
+              - reference_data.activated
+              - reference_data.deactivated
+              - listing.auto_expired
+              - feature_toggle.flip
+          description: >-
+            Фильтр по точному хранимому глаголу аудита. Глаголы namespaced **`{domain}.{verb}`** (сегменты
+            lower_snake, через точку; зеркалит свободно-текстовую колонку `audit_log.action VARCHAR(100)`, без
+            DB-enum). Набор растёт аддитивно по доменам — `x-known-values` перечисляет глаголы, выдаваемые
+            сегодня (информативно, не исчерпывающе/не закрыто); потребитель может передать любое значение,
+            подходящее под `pattern`.
         - in: query
           name: actorId
           schema: { type: string, format: uuid }
@@ -522,6 +624,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/AuditLogEntry' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
@@ -630,12 +733,18 @@ components:
         Actor-badge: действующий принципал в любом actor-bearing-ответе (ADR-0011 §6). principalType — это
         снапшот users.principal_type (HUMAN|AGENT) на момент действия; он позволяет потребителю отличить
         решение человека от решения агента без второго запроса. DEFAULT HUMAN в MVP (AGENT не активен до гейта).
+        SF-1 (реконсиляция Slice-2) — ЧТО: actorId nullable. ПОЧЕМУ: audit_log.actor_id nullable по дизайну
+        схемы (ON DELETE SET NULL; системные/автоматические действия, напр. retention-job, не имеют
+        человека-актёра). ПОЧЕМУ ЛУЧШЕ: бейдж остаётся присутствующим и честным для системных строк
+        (actorId=null, principalType сохранён), вместо ложного обещания контрактом non-null uuid, которого код
+        дать не может.
       required: [actorId, principalType]
       properties:
         actorId:
           type: string
           format: uuid
-          description: Действующий принципал (users.id).
+          nullable: true
+          description: Действующий принципал (users.id). Null для системных/автоматических действий без актёра.
         principalType:
           type: string
           enum: [HUMAN, AGENT]
@@ -1396,17 +1505,46 @@ components:
           description: Уникальный идентификатор
         entityType:
           type: string
-          enum: [listing, user, organization, reference-data, moderation-action]
-          description: Тип сущности, над которой выполнено действие
+          enum: [listing, user, organization, reference-data, moderation-action, feature-toggle]
+          description: >-
+            Голый логический тип сущности, над которой выполнено действие. Для справочных данных это всегда
+            голое `reference-data`; конкретный датасет несётся отдельно в `referenceDataset` (хранимый
+            `audit_log.entity_type` может быть в суффиксной форме `reference-data:{dataset}` — здесь нормализуется).
+        referenceDataset:
+          type: string
+          enum: [species, breeds, cities, health_certifications, genetic_markers]
+          nullable: true
+          description: >-
+            Справочный датасет, когда entityType=reference-data (парсится из хранимого entity_type
+            `reference-data:{dataset}`). Null для любой не-reference-data сущности.
         entityId:
           type: string
           format: uuid
           nullable: true
-          description: ID сущности (null для системных действий)
+          description: >-
+            **UUID** id сущности, над которой выполнено действие (audit_log.entity_id), для UUID-ключевых
+            сущностей (listing/user/organization/moderation-action). Null, когда сущность — INT-ключевой
+            lookup (см. entityIdInt) или для системных действий. Ровно одно из entityId / entityIdInt
+            заполнено на строку (зеркалит database_schema.sql, миграция 0018).
+        entityIdInt:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: >-
+            **INT** id сущности, над которой выполнено действие (audit_log.entity_id_int), для INT-ключевых
+            lookup-сущностей (entityType=reference-data: species/breeds/cities/health_certifications/genetic_markers;
+            конвенция типов id: lookups=INT). Null, когда сущность UUID-ключевая (см. entityId) или для
+            системных действий. Ровно одно из entityId / entityIdInt заполнено на строку.
         actionType:
           type: string
-          enum: [created, updated, deleted, approved, rejected, banned, role-changed, login, logout]
-          description: Тип выполненного действия
+          maxLength: 100
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+          x-known-values: *auditKnownVerbs
+          description: >-
+            Точный хранимый глагол аудита (`audit_log.action`), namespaced **`{domain}.{verb}`** (напр.
+            `identity.role_changed`, `reference_data.created`, `user.erased`). Возвращается дословно —
+            информационно богатый namespace сохраняется, никогда не коллапсируется в грубую категорию.
+            `x-known-values` перечисляет глаголы, выдаваемые сегодня (информативно; набор растёт аддитивно по доменам).
         actor:
           allOf: [ { $ref: '#/components/schemas/Actor' } ]
           description: >-

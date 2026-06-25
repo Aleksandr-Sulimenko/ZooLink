@@ -167,9 +167,25 @@ status: "Approved"
   как `audit_log.entity_id` — UUID, INT-идентификатор lookup'а записывается в **`audit_log.entity_id_int`** (A2 /
   миграция 0018) с `entity_type = 'reference-data'`.
 - **Эти записи читаемы** через admin **`GET /audit/log`** (`getAuditLog`, только ADMIN — `admin-api.yaml`),
-  с фильтром по `actorId`, `entityType=reference-data` и `actionType`. Это и есть **история изменений** справочных
+  с фильтром по `actorId`, `entityType=reference-data`, `actionType` и — для INT-ключевого субъекта lookup'а —
+  **`entityIdInt`** (integer). Это и есть **история изменений** справочных
   данных в MVP — она заменяет отложенную выделенную «функцию версионирования» (UC-AD-03 перечисляет версионирование
   как стремление; журнал аудита — реализованный эквивалент для MVP).
+- **Фильтрация аудита справочных данных по id субъекта (INT) — разрешено (контракт-владелец Slice-2, нормативно).**
+  Поскольку lookup'ы справочников — **INT**, тогда как UUID-сущности используют `audit_log.entity_id`, просмотрщик
+  аудита фильтрует INT-субъекты выделенным query-параметром **`entityIdInt`** (→ `audit_log.entity_id_int`),
+  параллельным UUID **`entityId`** (→ `audit_log.entity_id`). И фильтры `getAuditLog`, и ответ `AuditLogEntry`
+  несут оба id-поля; **ровно одно заполнено на строку** (зеркалит `database_schema.sql`, миграция 0018). Два
+  фильтра **взаимоисключающи** (передача обоих → `400 VALIDATION_ERROR`).
+  - **ЧТО:** добавить фильтр + поле ответа `entityIdInt` (integer) в `GET /audit/log` / `AuditLogEntry`,
+    параллельно UUID `entityId`. **ПОЧЕМУ:** история справочных данных D4 *записывается* через `entity_id_int`,
+    но контракт отдавал только `format:uuid` `entityId`, поэтому записи справочных данных были **не фильтруемы**
+    по id их субъекта (просмотрщик аудита не мог до них добраться). **ПОЧЕМУ ТАК ЛУЧШЕ:** контракт теперь зеркалит
+    двухколоночное ключевое пространство схемы (`entity_id` UUID + `entity_id_int` INT, «ровно одна заполнена») без
+    новой инфраструктуры и **без поломки** существующих UUID-потребителей (`entityIdInt` чисто аддитивен); любой
+    новый INT-lookup, добавленный в реестр датасетов, аудируем и фильтруем без дальнейших изменений контракта.
+    Альтернатива (единый полиморфный `entityRef {type,id}`) отклонена как ломающее переоформление и ненужная
+    абстракция над схемой, которая уже разделяет два id-пространства.
 - **ЧТО:** явно зафиксировать, что правки справочников и *записываются* в `audit_log` (через `entity_id_int`), и
   *читаются обратно* через `GET /audit/log`. **ПОЧЕМУ:** GAP-006-sub отмечал, что у справочных данных не было заявленного
   контракта аудита/версионирования; заметка round-9→A3 покрывала только сторону записи. **ПОЧЕМУ ТАК ЛУЧШЕ:** путь
@@ -177,6 +193,37 @@ status: "Approved"
   админы получают полную историю кто/когда/before-after по изменениям справочников, что удовлетворяет критерий приёмки
   UC-AD-03 «история изменений» в MVP без отдельного хранилища версий. agent-as-principal (ADR-0006): бейдж
   `audit_log.actor` несёт `principalType`, поэтому правки справочников ADMIN-агентом ИИ атрибутируются идентично.
+
+### Словарь аудита namespaced и свободно-текстовый (реконсиляция контракт↔код Slice-2, нормативно)
+- **`action` — namespaced точечный глагол `{domain}.{verb}`.** Каждый домен пишет информационно богатые
+  namespaced-глаголы в `audit_log.action` (`VARCHAR(100)`, свободный текст, **без CHECK-enum**) — напр.
+  `identity.role_changed`, `identity.identifier_rebound`, `identity.recovery_succeeded`, `user.erased`,
+  `reference_data.created`, `reference_data.updated`, `listing.auto_expired`, `feature_toggle.flip`,
+  `identity.oauth_login`. Поэтому фильтр `actionType` admin **`GET /audit/log`** и поле ответа
+  `AuditLogEntry.actionType` — это **строка `{domain}.{verb}`** (`pattern ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+  с **открытым документированным списком известных значений** (`x-known-values` в `admin-api.yaml`) — **не** закрытый enum.
+  Глагол возвращается **дословно**, никогда не коллапсируется в грубую категорию.
+- **`entityType` — голый закрытый enum; справочный датасет — отдельное поле.** `entityType` ∈
+  `{listing, user, organization, reference-data, moderation-action, feature-toggle}`. Записи справочных данных
+  хранят суффиксный `audit_log.entity_type = 'reference-data:{dataset}'`; на проводе `entityType` всегда голое
+  `reference-data`, а конкретный датасет отдаётся в параллельном nullable-поле **`referenceDataset`**
+  (∈ 5 управляемых датасетов) — и фильтруется query-параметром `referenceDataset`. `entityType` никогда не несёт
+  форму с двоеточием на проводе.
+- **ЧТО:** расширить контракт аудита (`admin-api.yaml` `getAuditLog` + `AuditLogEntry`) до словаря, который
+  код реально выдаёт: `actionType` → namespaced-строка `{domain}.{verb}` + pattern + `x-known-values`;
+  enum `entityType` расширен `feature-toggle`; датасет `reference-data:{dataset}` вынесен в отдельное
+  аддитивное поле/фильтр `referenceDataset`. **ПОЧЕМУ:** просмотрщик аудита (Slice 2) вскрыл, что write-сторона
+  хранит значения **вне** прежних закрытых enum'ов (`reference_data.created`, `identity.*`,
+  `reference-data:species`, …); doc↔code-протокол запрещает тихое расхождение код↔doc, а источник истины
+  `database_schema.sql` держит `action`/`entity_type` как **свободный текст** именно для того, чтобы словарь
+  каждого домена рос без миграции. **ПОЧЕМУ ТАК ЛУЧШЕ:** namespaced-глагол — высокоточные данные аудита (админ
+  видит `identity.recovery_succeeded`, а не лоссовый `login`), слою чтения больше не нужен лоссовый remap
+  глагол→категория, а изменение **чисто аддитивно и форвард-совместимо** — глаголы нового домена не требуют
+  изменения контракта (они подходят под pattern; их значения добавляются в `x-known-values`). Сплит
+  `referenceDataset` держит `entityType` стабильным фильтруемым enum, отдавая датасет без потерь, согласованно
+  со сплитом `entityIdInt` выше. *Отклонённая альтернатива:* ужесточить write-сторону до старого 9-значного
+  enum — оно отбросило бы аудит-информацию, перелопатило бы 8+ модулей (identity/admin/scheduler/feature-toggle)
+  и противоречило бы свободно-текстовому дизайну схемы.
 
 ### Аутентификация операторов использует password-policy из security_specification.md
 - Операторские роли (**ADMIN/MODERATOR**) — **единственные** аккаунты с паролем (`users.password_hash`;

@@ -14,6 +14,11 @@ import type { AuthPrincipal, Role } from '../../lib/auth/principal';
 import { normalizePhone, phoneHash } from './phone.util';
 import { toUserProfile, type UserProfile } from './user-profile.util';
 import type { RebindDto, SetRoleDto } from './dto/identity.dto';
+import { paginate, type Paginated } from '../../lib/pagination/page';
+import type {
+  ListUsersWithRolesQueryDto,
+  UserRoleInfo,
+} from '../admin/dto/user-roles.dto';
 
 const VALID_ROLES = new Set<Role>(['USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER']);
 const OAUTH_COLUMN = {
@@ -45,6 +50,53 @@ export class AdminUserService {
     private readonly audit: AuditLogService,
     private readonly auth: AuthService,
   ) {}
+
+  /**
+   * List users with their roles for the admin Users & Roles screen (admin-api.yaml getUsersWithRoles,
+   * Admin Slice 2). Filters: role, is_active, and a name/email ILIKE search. Returns a safe projection
+   * (UserRoleInfo) — never identifiers/credentials. Erased accounts keep their tombstoned full_name
+   * ('[deleted]') and null email by design (ФЗ-152 anonymise-in-place), and remain visible to ADMIN.
+   */
+  async listWithRoles(query: ListUsersWithRolesQueryDto): Promise<Paginated<UserRoleInfo>> {
+    const where: Prisma.usersWhereInput = {};
+    if (query.role !== undefined) where.role = query.role;
+    if (query.isActive !== undefined) where.is_active = query.isActive;
+    if (query.search) {
+      const contains = query.search;
+      where.OR = [
+        { full_name: { contains, mode: 'insensitive' } },
+        { email: { contains, mode: 'insensitive' } },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      this.prisma.users.findMany({
+        where,
+        orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+        skip: query.skip,
+        take: query.limit,
+      }),
+      this.prisma.users.count({ where }),
+    ]);
+    return paginate(rows.map((u) => this.toUserRoleInfo(u)), total, query.page, query.limit);
+  }
+
+  /** Safe admin projection of a user row (UserRoleInfo) — excludes phone_hash / oauth ids / password_hash. */
+  private toUserRoleInfo(u: users): UserRoleInfo {
+    return {
+      id: u.id,
+      fullName: u.full_name,
+      email: u.email,
+      role: u.role as AuthPrincipal['role'],
+      isActive: u.is_active,
+      createdAt: u.created_at,
+      updatedAt: u.updated_at,
+      lastLoginAt: u.last_login_at,
+      deactivatedAt: u.deactivated_at,
+      cityId: u.city_id,
+      avatarUrl: u.avatar_url,
+    };
+  }
 
   /** Grant/change a role. Audit-logged; revokes ALL refresh families (round-4 "role change → revoke"). */
   async setRole(actor: AuthPrincipal, userId: string, dto: SetRoleDto): Promise<UserProfile> {

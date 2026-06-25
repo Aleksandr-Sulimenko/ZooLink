@@ -34,3 +34,49 @@ export interface AuditEntry {
   ipAddress?: string | null;
   userAgent?: string | null;
 }
+
+/**
+ * Filters for the admin audit-log read path (AuditLogService.query). All filters are optional; the
+ * caller is responsible for the mutual-exclusion check (entityId XOR entityIdInt). `action` is an
+ * exact-equality match on the stored verb (reconciled vocabulary — no LIKE remap). Pagination is
+ * offset-based.
+ */
+export interface AuditLogQuery {
+  /** Bare entity-type match: `reference-data` matches every `reference-data:%`; `feature-toggle` → `feature_toggle`. */
+  entityType?: string;
+  /** Exact entity_type equality (e.g. `reference-data:species` when a referenceDataset is given). Takes precedence. */
+  entityTypeExact?: string;
+  entityId?: string;
+  entityIdInt?: number;
+  actorId?: string;
+  /** Exact match against the stored `audit_log.action` verb (e.g. `identity.role_changed`). */
+  action?: string;
+  /** Inclusive lower bound (YYYY-MM-DD). */
+  startDate?: string;
+  /** Inclusive upper bound (YYYY-MM-DD); matched as < next-midnight. */
+  endDate?: string;
+  sortDir?: 'asc' | 'desc';
+  limit: number;
+  offset: number;
+}
+
+/** A raw audit_log row as the read query returns it (snake_case columns). */
+export interface AuditLogRow {
+  id: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  entity_id_int: number | null;
+  action: string;
+  actor_id: string | null;
+  actor_role: string | null;
+  actor_principal_type: PrincipalType;
+  after_data: unknown;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: Date;
+}
+
+export interface AuditQueryResult {
+  rows: AuditLogRow[];
+  total: number;
+}

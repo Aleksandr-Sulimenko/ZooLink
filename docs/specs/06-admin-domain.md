@@ -167,9 +167,25 @@ This specification addresses the following Non-Functional Requirements:
   `audit_log.entity_id` is UUID, the INT lookup id is recorded in **`audit_log.entity_id_int`** (A2 / migration
   0018) with `entity_type = 'reference-data'`.
 - **These entries are readable** through admin **`GET /audit/log`** (`getAuditLog`, ADMIN-only — `admin-api.yaml`),
-  filterable by `actorId`, `entityType=reference-data` and `actionType`. This is the **change history** for
-  reference data in the MVP — it replaces the deferred dedicated "versioning" feature (UC-AD-03 lists versioning as
-  an aspiration; the audit trail is the implemented MVP equivalent).
+  filterable by `actorId`, `entityType=reference-data`, `actionType`, and — for the INT-keyed lookup subject —
+  **`entityIdInt`** (integer). This is the **change history** for reference data in the MVP — it replaces the
+  deferred dedicated "versioning" feature (UC-AD-03 lists versioning as an aspiration; the audit trail is the
+  implemented MVP equivalent).
+- **Filtering reference-data audit by subject id (INT) — resolved (Slice-2 contract-owner, normative).** Because
+  reference lookups are **INT** while UUID entities use `audit_log.entity_id`, the audit-viewer filters INT
+  subjects with a dedicated **`entityIdInt`** query param (→ `audit_log.entity_id_int`), parallel to the UUID
+  **`entityId`** (→ `audit_log.entity_id`). Both `getAuditLog` filters and the `AuditLogEntry` response carry the
+  two id fields; **exactly one is populated per row** (mirrors `database_schema.sql`, migration 0018). The two
+  filters are **mutually exclusive** (supplying both → `400 VALIDATION_ERROR`).
+  - **ЧТО:** add an `entityIdInt` (integer) filter + response field to `GET /audit/log` / `AuditLogEntry`,
+    parallel to the UUID `entityId`. **ПОЧЕМУ:** the D4 reference-data history is *written* via `entity_id_int`
+    but the contract exposed only a `format:uuid` `entityId`, so reference-data entries were **not filterable**
+    by their subject id (the audit-viewer could not reach them). **ПОЧЕМУ ТАК ЛУЧШЕ:** the contract now mirrors
+    the schema's two-column key space (`entity_id` UUID + `entity_id_int` INT, "exactly one populated") with zero
+    new infrastructure and **no break** to existing UUID consumers (`entityIdInt` is purely additive); any new INT
+    lookup added to the dataset registry is auditable & filterable with no further contract change. Alternative (a
+    single polymorphic `entityRef {type,id}`) was rejected as a breaking reshape and a needless abstraction over a
+    schema that already separates the two id spaces.
 - **ЧТО:** make explicit that reference-data edits are both *written* to `audit_log` (via `entity_id_int`) and
   *read back* via `GET /audit/log`. **ПОЧЕМУ:** GAP-006-sub flagged that reference-data had no stated audit/versioning
   contract; the round-9→A3 note covered the write side only. **ПОЧЕМУ ТАК ЛУЧШЕ:** the read path closes the loop with
@@ -177,6 +193,36 @@ This specification addresses the following Non-Functional Requirements:
   who/when/before-after history of reference changes, which satisfies the UC-AD-03 "change history" acceptance criterion
   in the MVP without building a separate versioning store. agent-as-principal (ADR-0006): the `audit_log.actor` badge
   carries `principalType`, so an AI-agent admin's reference edits are attributed identically.
+
+### Audit vocabulary is namespaced and free-text (Slice-2 contract↔code reconciliation, normative)
+- **`action` is a namespaced dotted verb `{domain}.{verb}`.** Every domain writes information-rich,
+  namespaced verbs to `audit_log.action` (`VARCHAR(100)`, free text, **no CHECK enum**) — e.g.
+  `identity.role_changed`, `identity.identifier_rebound`, `identity.recovery_succeeded`, `user.erased`,
+  `reference_data.created`, `reference_data.updated`, `listing.auto_expired`, `feature_toggle.flip`,
+  `identity.oauth_login`. The admin **`GET /audit/log`** `actionType` filter and the `AuditLogEntry.actionType`
+  response field are therefore a **`{domain}.{verb}` string** (`pattern ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+  with an **open, documented known-values list** (`x-known-values` in `admin-api.yaml`) — **not** a closed enum.
+  The verb is returned **verbatim**, never collapsed to a coarse category.
+- **`entityType` is a bare closed enum; the reference dataset is a separate field.** `entityType` ∈
+  `{listing, user, organization, reference-data, moderation-action, feature-toggle}`. Reference-data writes
+  store the suffixed `audit_log.entity_type = 'reference-data:{dataset}'`; on the wire `entityType` is always the
+  bare `reference-data` and the concrete dataset is exposed in a parallel, nullable **`referenceDataset`** field
+  (∈ the 5 managed datasets) — and is filterable via a `referenceDataset` query param. `entityType` never carries
+  the colon form on the wire.
+- **ЧТО:** widen the audit contract (`admin-api.yaml` `getAuditLog` + `AuditLogEntry`) to the vocabulary the
+  code actually emits: `actionType` → namespaced `{domain}.{verb}` string + pattern + `x-known-values`;
+  `entityType` enum extended with `feature-toggle`; the `reference-data:{dataset}` dataset split into a separate
+  additive `referenceDataset` field/filter. **ПОЧЕМУ:** the audit-viewer (Slice 2) surfaced that the write-side
+  stores values **outside** the previous closed enums (`reference_data.created`, `identity.*`,
+  `reference-data:species`, …); the doc↔code protocol forbids silent code↔doc divergence, and the source-of-truth
+  `database_schema.sql` keeps `action`/`entity_type` as **free text** precisely so each domain's vocabulary grows
+  without a migration. **ПОЧЕМУ ТАК ЛУЧШЕ:** the namespaced verb is high-fidelity audit data (an admin sees
+  `identity.recovery_succeeded`, not a lossy `login`), the read layer no longer needs a lossy verb→category remap,
+  and the change is **purely additive & forward-compatible** — a new domain's verbs need zero contract change
+  (they match the pattern; their values are appended to `x-known-values`). The `referenceDataset` split keeps
+  `entityType` a stable filterable enum while exposing the dataset losslessly, consistent with the `entityIdInt`
+  split above. *Alternative rejected:* tightening the write-side to the old 9-value enum — it would discard audit
+  information, churn 8+ modules (identity/admin/scheduler/feature-toggle), and fight the schema's free-text design.
 
 ### Operator authentication uses the password policy in security_specification.md
 - Operator roles (**ADMIN/MODERATOR**) are the **only** password-bearing accounts (`users.password_hash`;

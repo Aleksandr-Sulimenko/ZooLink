@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsIn,
@@ -35,6 +35,17 @@ const MARKETS = ['pet', 'livestock'] as const;
 const CODE = /^[a-z0-9_]+$/;
 
 /**
+ * Parse a string query value 'true'/'false' into a real boolean. class-transformer's `Type(() => Boolean)`
+ * is unsafe for query strings (`Boolean("false") === true`), which silently inverted `includeInactive=false`.
+ */
+function toBool({ value }: { value: unknown }): unknown {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value; // leave anything else to @IsBoolean to reject
+}
+
+/**
  * LocalizedString {en, ru} (API_CONVENTIONS §6). Backed by the name_localized JSONB column
  * (migration 0018). Both locales are editable by an admin; at least one must be non-empty.
  */
@@ -54,7 +65,7 @@ export class LocalizedStringDto {
 export class ListReferenceDataQueryDto {
   @ApiPropertyOptional({ default: false, description: 'Include inactive entries (ADMIN only)' })
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(toBool)
   @IsBoolean()
   includeInactive: boolean = false;
 

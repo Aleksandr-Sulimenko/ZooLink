@@ -40,6 +40,58 @@ info:
     (the shared `Actor` schema). AuditLogEntry/ModerationLogEntry/ModerationActionResponse expose `actor`
     (replacing flat `performedBy`/`moderatorId`; `performedByName` folds into `actor.actorDisplayName`);
     SystemSetting.updatedBy is an `Actor`. The audit-log `actorId` query param replaces `performedBy`.
+
+
+    Audit-log INT-entity filtering (D4 flag → Slice-2 contract-owner resolution, normative).
+    WHAT: `getAuditLog` gains an `entityIdInt` (integer) query filter and `AuditLogEntry` gains an
+    `entityIdInt` (integer, nullable) field, parallel to the existing UUID `entityId`. Exactly one of
+    the two is populated per row — `entityId` for UUID-keyed entities (listing/user/organization/
+    moderation-action), `entityIdInt` for INT-keyed lookup entities (entityType=reference-data:
+    species/breeds/cities/health_certifications/genetic_markers). The two query filters are mutually
+    exclusive (both → 400 VALIDATION_ERROR; `400` added to getAuditLog responses).
+    WHY: `audit_log` records reference-data (INT lookup) CRUD via `entity_id_int` (migration 0018) while
+    UUID entities use `entity_id` — but the contract only exposed a `format:uuid` `entityId`, so the D4
+    reference-data change-history (spec 06) was written but **not filterable** by its subject id. The
+    schema column already exists (database_schema.sql: "Exactly one is populated per row"); the contract
+    must mirror it or the audit-viewer cannot reach reference-data entities.
+    WHY BETTER: the contract now matches the source of truth (schema A2/0018 `entity_id`+`entity_id_int`),
+    closes the D4 read-path loop (write→read) with no new abstraction and no break to existing UUID
+    consumers (`entityIdInt` is purely additive); the typed split (uuid vs int) is forward-compatible —
+    any new INT lookup added to the dataset registry is auditable & filterable with zero contract change.
+    Alternative considered: a single polymorphic `entityRef {type, id}` string — rejected as a breaking
+    reshape of the existing `entityId` consumers and a needless abstraction over a schema that already
+    keys the two id spaces in separate columns.
+
+
+    Audit vocabulary reconciliation (Slice-2 contract↔code divergence → doc-first fix, normative).
+    WHAT: the `audit_log` write-side stores a **richer vocabulary** than the contract previously modelled,
+    and the contract is widened to match the source of truth (database_schema.sql: `action VARCHAR(100)`
+    and `entity_type VARCHAR(40)` — free text, **no CHECK enum**):
+      (1) `actionType` was a small closed enum (`created/updated/deleted/approved/rejected/banned/
+          role-changed/login/logout`), but every domain actually writes a **namespaced dotted verb**
+          `{domain}.{verb}` (e.g. `identity.role_changed`, `identity.recovery_succeeded`, `user.erased`,
+          `reference_data.created`, `listing.auto_expired`, `feature_toggle.flip`, `identity.oauth_login`).
+          `actionType` becomes a **`{domain}.{verb}` string** (lower_snake segments, dot-separated) with a
+          `pattern` + an open, documented **known-values list** (`x-known-values`) — not a closed enum.
+      (2) `entityType` stays a **clean closed enum** of the bare logical entity names, but the set is
+          extended to the entities that actually appear on the ledger (`feature-toggle` added). The
+          reference-data **dataset** is split into its own additive `referenceDataset` field rather than
+          being smuggled in as the stored `reference-data:{dataset}` suffix — `entityType` never carries
+          the colon form on the wire.
+    WHY: code wrote values **outside** the contract enums (`reference_data.created`, `identity.*`,
+    `reference-data:species`, …), which the doc-code protocol forbids (no silent code↔doc divergence).
+    The schema columns are deliberately free text (append-only ledger, VARCHAR not enum) precisely so the
+    vocabulary can grow per domain without a migration; the contract must mirror that openness, not a
+    narrower invented enum that forces a lossy read-side remap.
+    WHY BETTER: the dotted `{domain}.{verb}` namespace is information-rich and already uniform across all
+    domains — preserving it keeps full audit fidelity (an admin sees `identity.recovery_succeeded`, not a
+    lossy `login`) and removes the read-layer's lossy `toActionType` collapse; widening the contract is
+    purely **additive & forward-compatible** (a new domain's verbs need zero contract change — they match
+    the pattern and are appended to `x-known-values`), and it is consistent with the schema's free-text
+    columns and with the `entityIdInt` split already adopted above. The `referenceDataset` split keeps
+    `entityType` a stable filterable enum while exposing the dataset losslessly. Tightening the write-side
+    instead (collapse every module to the 9-value enum) was **rejected**: it would lose audit information,
+    churn 8+ modules across identity/admin/scheduler/feature-toggle, and fight the schema's free-text design.
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -475,16 +527,66 @@ paths:
       parameters:
         - in: query
           name: entityType
-          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action] }
-          description: Filter by entity type
+          schema: { type: string, enum: [listing, user, organization, reference-data, moderation-action, feature-toggle] }
+          description: >-
+            Filter by the bare logical entity type. `reference-data` matches every reference dataset
+            regardless of its stored `reference-data:{dataset}` suffix; narrow to one dataset with
+            `referenceDataset`.
+        - in: query
+          name: referenceDataset
+          schema: { type: string, enum: [species, breeds, cities, health_certifications, genetic_markers] }
+          description: >-
+            Filter reference-data audit rows to a single dataset (maps to the stored
+            `audit_log.entity_type = 'reference-data:{dataset}'` form). Only meaningful when
+            entityType=reference-data; ignored otherwise.
         - in: query
           name: entityId
           schema: { type: string, format: uuid }
-          description: Filter by entity ID
+          description: >-
+            Filter by the **UUID** entity id (maps to audit_log.entity_id) — for UUID-keyed entities
+            (listing/user/organization/moderation-action). Mutually exclusive with entityIdInt.
+        - in: query
+          name: entityIdInt
+          schema: { type: integer, minimum: 1 }
+          description: >-
+            Filter by the **INT** entity id (maps to audit_log.entity_id_int) — for INT-keyed lookup
+            entities (entityType=reference-data: species/breeds/cities/health_certifications/
+            genetic_markers; id-type convention: lookups=INT). Mutually exclusive with entityId; supplying
+            both → 400 VALIDATION_ERROR. This is what makes reference-data CRUD history (D4) filterable.
         - in: query
           name: actionType
-          schema: { type: string, enum: [created, updated, deleted, approved, rejected, banned, role-changed] }
-          description: Filter by action type
+          schema:
+            type: string
+            maxLength: 100
+            pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+            x-known-values: &auditKnownVerbs
+              - identity.register_initiated
+              - identity.phone_verified
+              - identity.verify_failed
+              - identity.verify_locked_out
+              - identity.oauth_register
+              - identity.oauth_login
+              - identity.role_changed
+              - identity.identifier_rebound
+              - identity.profile_updated
+              - identity.account_deactivated
+              - identity.account_reactivated
+              - identity.erasure_requested
+              - identity.recovery_requested
+              - identity.recovery_locked_out
+              - identity.recovery_succeeded
+              - user.erased
+              - reference_data.created
+              - reference_data.updated
+              - reference_data.activated
+              - reference_data.deactivated
+              - listing.auto_expired
+              - feature_toggle.flip
+          description: >-
+            Filter by the exact stored audit verb. Verbs are namespaced **`{domain}.{verb}`** (lower_snake
+            segments, dot-separated; mirrors the free-text `audit_log.action VARCHAR(100)` column, no DB
+            enum). The set grows additively per domain — `x-known-values` lists the verbs emitted today
+            (informative, not exhaustive/closed); a consumer may also pass any value matching `pattern`.
         - in: query
           name: actorId
           schema: { type: string, format: uuid }
@@ -521,6 +623,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/AuditLogEntry' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
@@ -629,12 +732,17 @@ components:
         Actor-badge: the acting principal on any actor-bearing response (ADR-0011 §6). principalType is the
         write-time snapshot of users.principal_type (HUMAN|AGENT); it lets a consumer tell a human-decided from
         an agent-decided action without a second lookup. DEFAULT HUMAN in MVP (no AGENT active until gated).
+        SF-1 (Slice-2 reconciliation) — WHAT: actorId is nullable. WHY: audit_log.actor_id is nullable by
+        schema design (ON DELETE SET NULL; system/automated actions, e.g. the retention job, have no human
+        actor). WHY-BETTER: the badge stays present and honest for system rows (actorId=null, principalType
+        retained) instead of the contract falsely promising a non-null uuid the code cannot supply.
       required: [actorId, principalType]
       properties:
         actorId:
           type: string
           format: uuid
-          description: Acting principal (users.id).
+          nullable: true
+          description: Acting principal (users.id). Null for system/automated actions with no human/agent actor.
         principalType:
           type: string
           enum: [HUMAN, AGENT]
@@ -1395,17 +1503,46 @@ components:
           description: Unique identifier
         entityType:
           type: string
-          enum: [listing, user, organization, reference-data, moderation-action]
-          description: Type of entity that was acted upon
+          enum: [listing, user, organization, reference-data, moderation-action, feature-toggle]
+          description: >-
+            Bare logical entity type that was acted upon. For reference data this is always the bare
+            `reference-data`; the concrete dataset is carried separately in `referenceDataset` (the stored
+            `audit_log.entity_type` may be the suffixed `reference-data:{dataset}` form — normalised here).
+        referenceDataset:
+          type: string
+          enum: [species, breeds, cities, health_certifications, genetic_markers]
+          nullable: true
+          description: >-
+            The reference dataset, when entityType=reference-data (parsed from the stored
+            `reference-data:{dataset}` entity_type). Null for every non-reference-data entity.
         entityId:
           type: string
           format: uuid
           nullable: true
-          description: ID of entity that was acted upon (null for system-wide actions)
+          description: >-
+            **UUID** id of the entity acted upon (audit_log.entity_id), for UUID-keyed entities
+            (listing/user/organization/moderation-action). Null when the entity is an INT-keyed lookup
+            (see entityIdInt) or for system-wide actions. Exactly one of entityId / entityIdInt is
+            populated per row (mirrors database_schema.sql, migration 0018).
+        entityIdInt:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: >-
+            **INT** id of the entity acted upon (audit_log.entity_id_int), for INT-keyed lookup entities
+            (entityType=reference-data: species/breeds/cities/health_certifications/genetic_markers;
+            id-type convention: lookups=INT). Null when the entity is UUID-keyed (see entityId) or for
+            system-wide actions. Exactly one of entityId / entityIdInt is populated per row.
         actionType:
           type: string
-          enum: [created, updated, deleted, approved, rejected, banned, role-changed, login, logout]
-          description: Type of action performed
+          maxLength: 100
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+          x-known-values: *auditKnownVerbs
+          description: >-
+            The exact stored audit verb (`audit_log.action`), namespaced **`{domain}.{verb}`** (e.g.
+            `identity.role_changed`, `reference_data.created`, `user.erased`). Returned verbatim — the
+            information-rich namespace is preserved, never collapsed to a coarse category. `x-known-values`
+            lists the verbs emitted today (informative; the set grows additively per domain).
         actor:
           allOf: [ { $ref: '#/components/schemas/Actor' } ]
           description: >-
