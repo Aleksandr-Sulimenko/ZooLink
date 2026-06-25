@@ -53,6 +53,23 @@ describe('SystemSettingService.getAll', () => {
   });
 });
 
+describe('SystemSettingService.getOne', () => {
+  it('200: maps the toggle row to a SystemSetting and returns its weak ETag', async () => {
+    const { svc } = setup();
+    const { setting, etag } = await svc.getOne('payments');
+    expect(setting.key).toBe('payments');
+    expect(JSON.parse(setting.value)).toEqual({ isEnabled: false, rolloutPercentage: 0 });
+    expect(setting.updatedBy).toEqual({ actorId: 'admin-1', principalType: 'HUMAN', actorDisplayName: null });
+    // ETag is the exact validator the matching PATCH's If-Match consumes.
+    expect(etag).toBe(etagFor(toggleRow()));
+  });
+
+  it('404s for an unknown setting key', async () => {
+    const { svc } = setup(null);
+    await expect(svc.getOne('nope')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe('SystemSettingService.update', () => {
   const body = { value: JSON.stringify({ isEnabled: true, rolloutPercentage: 100 }) };
 

@@ -481,10 +481,53 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /system/settings/{key}:
+    get:
+      summary: Get a single system setting (carries the ETag for optimistic concurrency)
+      operationId: getSystemSetting
+      description: >-
+        ADMIN-only read of one setting by key. Sets a weak **ETag** response header (§10) — this is the
+        validator a client must echo as `If-Match` on the matching PATCH. Mirrors the reference-data
+        precedent `GET /reference-data/{dataset}/{id}` (GET sets the ETag the PATCH's If-Match consumes).
+        Admin read → not publicly cacheable (`Cache-Control: private, no-store`, API_CONVENTIONS §13).
+        WHAT: add `GET /system/settings/{key}` returning a single `SystemSetting` and setting the weak
+        `ETag` header. WHY: `PATCH /system/settings/{key}` requires `If-Match` =
+        `weakEtag('system-setting:{key}', updatedAt)`, but the only existing read was the collection
+        `GET /system/settings` (object map) which surfaces no ETag — so a client had no way to obtain the
+        precondition validator and the optimistic-concurrency loop (read → If-Match → PATCH) was unusable
+        end-to-end. WHY BETTER: the cleanest REST shape — it reuses the validator the service already
+        computes (`SystemSettingService.etag()`) and the exact GET-sets-ETag pattern already proven on
+        reference-data, with no transport concern leaking into the body and no change to the existing
+        collection endpoint or the `SystemSetting` schema (purely additive).
+      x-required-roles: [ADMIN]
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema: { type: string }
+          description: Setting key to read
+      responses:
+        '200':
+          description: System setting retrieved successfully
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on the matching PATCH (§10)
+            Cache-Control:
+              schema: { type: string }
+              description: 'Admin read — not publicly cacheable (§13): private, no-store'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update system setting
       operationId: updateSystemSetting
-      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      description: >-
+        Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior
+        `GET /system/settings/{key}` (the per-setting read that surfaces the validator).
       x-required-roles: [ADMIN]
       parameters:
         - in: path

@@ -481,10 +481,54 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /system/settings/{key}:
+    get:
+      summary: Получить одну системную настройку (несёт ETag для оптимистичной конкуренции)
+      operationId: getSystemSetting
+      description: >-
+        Чтение одной настройки по ключу, только ADMIN. Устанавливает weak-заголовок ответа **ETag** (§10) — это
+        валидатор, который клиент обязан вернуть как `If-Match` на соответствующем PATCH. Зеркалит прецедент
+        справочных данных `GET /reference-data/{dataset}/{id}` (GET устанавливает ETag, который потребляет
+        If-Match у PATCH). Admin-чтение → не кэшируется публично (`Cache-Control: private, no-store`,
+        API_CONVENTIONS §13).
+        ЧТО: добавить `GET /system/settings/{key}`, возвращающий одну `SystemSetting` и устанавливающий weak-
+        заголовок `ETag`. ПОЧЕМУ: `PATCH /system/settings/{key}` требует `If-Match` =
+        `weakEtag('system-setting:{key}', updatedAt)`, но единственным существующим чтением было коллекционное
+        `GET /system/settings` (object map), которое не отдаёт ETag — поэтому у клиента не было способа получить
+        валидатор предусловия, и цикл оптимистичной конкуренции (read → If-Match → PATCH) был непригоден
+        сквозным образом. ПОЧЕМУ ЛУЧШЕ: чистейшая REST-форма — переиспользует валидатор, который сервис уже
+        вычисляет (`SystemSettingService.etag()`), и точный паттерн GET-устанавливает-ETag, уже доказанный на
+        справочных данных, без утечки транспортной заботы в тело и без изменения существующего коллекционного
+        эндпоинта или схемы `SystemSetting` (чисто аддитивно).
+      x-required-roles: [ADMIN]
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema: { type: string }
+          description: Ключ настройки для чтения
+      responses:
+        '200':
+          description: Системная настройка успешно получена
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор для отправки в If-Match на соответствующем PATCH (§10)
+            Cache-Control:
+              schema: { type: string }
+              description: 'Admin-чтение — не кэшируется публично (§13): private, no-store'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Обновить системную настройку
       operationId: updateSystemSetting
-      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      description: >-
+        Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего
+        `GET /system/settings/{key}` (per-setting-чтение, отдающее валидатор).
       x-required-roles: [ADMIN]
       parameters:
         - in: path

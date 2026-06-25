@@ -35,6 +35,14 @@ describe('Admin System Settings (e2e)', () => {
     const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
     return res.body.accessToken as string;
   };
+  /** The real client loop: GET the setting, read its ETag header (the PATCH's If-Match validator). */
+  const fetchEtag = async (key: string): Promise<string> => {
+    const res = await request(server())
+      .get(`/v1/system/settings/${key}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    return res.headers['etag'];
+  };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -94,6 +102,37 @@ describe('Admin System Settings (e2e)', () => {
     });
   });
 
+  describe('GET /v1/system/settings/{key}', () => {
+    it('401 for an unauthenticated request', async () => {
+      await request(server()).get(`/v1/system/settings/${settingKey}`).expect(401);
+    });
+
+    it('403 for a non-ADMIN principal', async () => {
+      await request(server())
+        .get(`/v1/system/settings/${settingKey}`)
+        .set('Authorization', `Bearer ${userToken}`)
+        .expect(403);
+    });
+
+    it('200: returns the SystemSetting + an ETag header + private,no-store Cache-Control', async () => {
+      const res = await request(server())
+        .get(`/v1/system/settings/${settingKey}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(res.body.key).toBe(settingKey);
+      expect(JSON.parse(res.body.value as string)).toEqual({ isEnabled: false, rolloutPercentage: 0 });
+      expect(res.headers['etag']).toBeTruthy();
+      expect(res.headers['cache-control']).toBe('private, no-store');
+    });
+
+    it('404 for an unknown setting key', async () => {
+      await request(server())
+        .get('/v1/system/settings/does_not_exist_xyz')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(404);
+    });
+  });
+
   describe('PATCH /v1/system/settings/{key}', () => {
     const body = { value: JSON.stringify({ isEnabled: true, rolloutPercentage: 100 }) };
 
@@ -133,12 +172,9 @@ describe('Admin System Settings (e2e)', () => {
         .expect(404);
     });
 
-    it('200 with a valid If-Match: flips the toggle, returns SystemSetting + new ETag, writes audit', async () => {
-      // The server's weak ETag = weakEtag(`system-setting:{key}`, updated_at); compute the current one.
-      const current = await prisma.feature_toggles.findUnique({ where: { key: settingKey } });
-      expect(current).toBeTruthy();
-      const { weakEtag } = await import('../src/lib/http/etag.util');
-      const etag = weakEtag(`system-setting:${settingKey}`, current!.updated_at);
+    it('200 with a valid If-Match: GET→ETag→PATCH client loop flips the toggle + new ETag, writes audit', async () => {
+      // SF-2: obtain the If-Match from the real per-setting GET ETag header (no DB reach-around).
+      const etag = await fetchEtag(settingKey);
 
       const res = await request(server())
         .patch(`/v1/system/settings/${settingKey}`)
@@ -167,9 +203,7 @@ describe('Admin System Settings (e2e)', () => {
     });
 
     it('400 on a non-JSON value', async () => {
-      const current = await prisma.feature_toggles.findUnique({ where: { key: settingKey } });
-      const { weakEtag } = await import('../src/lib/http/etag.util');
-      const etag = weakEtag(`system-setting:${settingKey}`, current!.updated_at);
+      const etag = await fetchEtag(settingKey);
       await request(server())
         .patch(`/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)

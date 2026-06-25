@@ -224,6 +224,25 @@ This specification addresses the following Non-Functional Requirements:
   split above. *Alternative rejected:* tightening the write-side to the old 9-value enum — it would discard audit
   information, churn 8+ modules (identity/admin/scheduler/feature-toggle), and fight the schema's free-text design.
 
+### System-settings update is read-for-concurrency (per-setting GET surfaces the ETag) — SF-2, normative
+- **`PATCH /system/settings/{key}` is an optimistic-concurrency mutation** (API_CONVENTIONS §10): it requires
+  `If-Match` carrying the weak ETag `weakEtag('system-setting:{key}', updatedAt)`. The client obtains that
+  validator from a **per-setting read** — **`GET /system/settings/{key}`** (ADMIN-only) returns a single
+  `SystemSetting` and **sets the `ETag` response header**, exactly as `GET /reference-data/{dataset}/{id}` does
+  for its matching PATCH. An unknown key → **`404 NOT_FOUND`** (RFC7807); the admin read is **not publicly
+  cacheable** (`Cache-Control: private, no-store`, §13). The collection `GET /system/settings` (object map) is a
+  convenience listing and is **not** the concurrency-read — it surfaces no per-entry ETag.
+- **ЧТО:** add `GET /system/settings/{key}` (single setting + `ETag` header) and bind the PATCH `If-Match` to it.
+  **ПОЧЕМУ:** the PATCH precondition required a weak ETag, but the only read was the collection map, which exposes
+  no ETag — so a real client could not obtain the validator and the read→If-Match→PATCH loop was **unusable
+  end-to-end** (only the e2e passed, by reaching into the DB to recompute the ETag). **ПОЧЕМУ ТАК ЛУЧШЕ:** the
+  cleanest REST shape — it reuses the validator the service already computes (`SystemSettingService.etag()`) and
+  the established GET-sets-ETag precedent, with **no transport concern leaking into the response body** and **no
+  change** to the collection endpoint or the `SystemSetting` schema (purely additive). *Alternative rejected:*
+  adding a derived `etag`/`version` field to each `SystemSetting` in the collection map — it avoids a new path but
+  puts a transport-layer concern in the resource body and diverges from the reference-data precedent, so the loop
+  would be inconsistent with the rest of the admin API.
+
 ### Operator authentication uses the password policy in security_specification.md
 - Operator roles (**ADMIN/MODERATOR**) are the **only** password-bearing accounts (`users.password_hash`;
   end users are passwordless — [01-identity-domain.md](01-identity-domain.md) "Auth model"). Their credential rules are

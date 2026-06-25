@@ -63,6 +63,20 @@ export class SystemSettingService {
     return out;
   }
 
+  /**
+   * GET /system/settings/{key} — one setting by key (admin-api.yaml getSystemSetting, SF-2). Surfaces
+   * the weak ETag (= the If-Match validator the matching PATCH consumes), mirroring the reference-data
+   * GET-sets-ETag precedent. 404 (same shape as update()) for an unknown key. Reuses etag()/toSetting().
+   */
+  async getOne(key: string): Promise<{ setting: SystemSetting; etag: string }> {
+    const row = (await this.prisma.feature_toggles.findUnique({ where: { key } })) as ToggleRow | null;
+    if (!row) {
+      throw new NotFoundException({ message: `Unknown system setting '${key}'`, code: 'NOT_FOUND' });
+    }
+    const principalTypes = await this.resolvePrincipalTypes([row]);
+    return { setting: this.toSetting(row, principalTypes), etag: this.etag(row) };
+  }
+
   /** PATCH /system/settings/{key} — optimistic-concurrency update, delegated to FeatureToggleService.flip. */
   async update(
     key: string,

@@ -28,6 +28,18 @@ export class SystemSettingController {
     return this.service.getAll();
   }
 
+  @Get(':key')
+  @ApiOperation({ summary: '[ADMIN] Get one system setting (sets the ETag for the matching PATCH; 404 if unknown)' })
+  async getOne(
+    @Param('key') key: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SystemSetting> {
+    const { setting, etag } = await this.service.getOne(key);
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, no-store'); // admin read — not publicly cacheable (§13)
+    return setting;
+  }
+
   @Patch(':key')
   @ApiOperation({ summary: '[ADMIN] Update a system setting (requires If-Match; 412/428 on concurrency)' })
   async update(
