@@ -364,7 +364,12 @@ components:
           description: Дата рождения
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+          description: Свободное текстовое описание (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Дискретный атрибут цвета/окраса (соответствует столбцу БД color_coat в snake_case, API_CONVENTIONS §12); структурированный, отличается от свободного текста descriptionLocalized
         microchipId:
           type: string
           maxLength: 50
@@ -451,6 +456,7 @@ components:
         - speciesId
         - sex
         - dateOfBirth
+        - nicknameLocalized
       properties:
         ownerId:
           type: string
@@ -485,7 +491,12 @@ components:
           description: Дата рождения
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+          description: Свободное текстовое описание (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Дискретный атрибут цвета/окраса (соответствует столбцу БД color_coat в snake_case, API_CONVENTIONS §12); структурированный, отличается от свободного текста descriptionLocalized
         microchipId:
           type: string
           maxLength: 50
@@ -562,7 +573,12 @@ components:
           description: Отображаемое имя (LocalizedString {en, ru})
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Окрас/тип шерсти и прочее описание (LocalizedString {en, ru})
+          description: Свободное текстовое описание (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Дискретный атрибут цвета/окраса (соответствует столбцу БД color_coat в snake_case, API_CONVENTIONS §12); изменяемое — патчится (в отличие от неизменяемых вида/пола/даты рождения)
         microchipId:
           type: string
           maxLength: 50

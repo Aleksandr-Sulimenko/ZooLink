@@ -364,7 +364,12 @@ components:
           description: Date of birth
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Color/coat pattern and other description (LocalizedString {en, ru})
+          description: Free-text description (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Discrete color/coat attribute (maps to DB color_coat snake_case, API_CONVENTIONS §12); structured, distinct from free-text descriptionLocalized
         microchipId:
           type: string
           maxLength: 50
@@ -451,6 +456,7 @@ components:
         - speciesId
         - sex
         - dateOfBirth
+        - nicknameLocalized
       properties:
         ownerId:
           type: string
@@ -485,7 +491,12 @@ components:
           description: Date of birth
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Color/coat pattern and other description (LocalizedString {en, ru})
+          description: Free-text description (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Discrete color/coat attribute (maps to DB color_coat snake_case, API_CONVENTIONS §12); structured, distinct from free-text descriptionLocalized
         microchipId:
           type: string
           maxLength: 50
@@ -562,7 +573,12 @@ components:
           description: Display name (LocalizedString {en, ru})
         descriptionLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
-          description: Color/coat pattern and other description (LocalizedString {en, ru})
+          description: Free-text description (LocalizedString {en, ru})
+        colorCoat:
+          type: string
+          maxLength: 100
+          nullable: true
+          description: Discrete color/coat attribute (maps to DB color_coat snake_case, API_CONVENTIONS §12); mutable — patchable (unlike immutable species/sex/DoB)
         microchipId:
           type: string
           maxLength: 50

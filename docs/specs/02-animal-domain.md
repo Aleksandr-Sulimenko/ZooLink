@@ -105,6 +105,11 @@ This specification addresses the following Non-Functional Requirements:
 - `health_test_results`: `[{ "test": str (HD|ED|PRA|DNA…), "result": "clear|carrier|affected|<value>", "date": "YYYY-MM-DD", "lab": str? }]`
 - `show_titles`: `[{ "title": str, "show": str?, "date": "YYYY-MM-DD"?, "country": str?, "rank": str? }]`
 
+**Color/coat is a discrete attribute** (round-5, normative): color/coat is stored in the structured column
+`color_coat VARCHAR(100)` and exposed by the API as its own field **`colorCoat`** (camelCase ↔ DB `color_coat` snake_case,
+API_CONVENTIONS §12). It is **not** folded into the free-text `description_localized` / `descriptionLocalized`. It is
+**mutable** (patchable via `AnimalUpdate`, unlike the immutable species/sex/DoB) and optional/nullable.
+
 **Other:** `microchip_id`/`tattoo_brand_id` are **unique** (migration 0004) — supersedes earlier "warned, not enforced"
 wording; chip format SHOULD follow ISO-11784/85 (15 digits, service-validated). Correcting an immutable field
 (species/sex/DoB) requires an audit-logged admin procedure (not self-service). `breed_id` may be normalized **once**

@@ -105,6 +105,12 @@ status: "Approved"
 - `health_test_results`: `[{ "test": str (HD|ED|PRA|DNA…), "result": "clear|carrier|affected|<value>", "date": "YYYY-MM-DD", "lab": str? }]`
 - `show_titles`: `[{ "title": str, "show": str?, "date": "YYYY-MM-DD"?, "country": str?, "rank": str? }]`
 
+**Цвет/окрас — дискретный атрибут** (раунд 5, нормативно): цвет/окрас хранится в структурированном столбце
+`color_coat VARCHAR(100)` и предоставляется API как отдельное поле **`colorCoat`** (camelCase ↔ столбец БД `color_coat`
+в snake_case, API_CONVENTIONS §12). Он **не** сворачивается в свободный текст `description_localized` /
+`descriptionLocalized`. Поле **изменяемое** (патчится через `AnimalUpdate`, в отличие от неизменяемых species/sex/DoB)
+и необязательное/nullable.
+
 **Прочее:** `microchip_id`/`tattoo_brand_id` **уникальны** (миграция 0004) — заменяет прежнее «warned, not enforced»;
 формат чипа — ISO-11784/85 (15 цифр, валидируется в сервисе). Исправление неизменяемого поля (species/sex/DoB) —
 через admin-процедуру с аудитом (не self-service). `breed_id` можно один раз нормализовать custom (NULL) → directory (миграция 0008).
