@@ -130,22 +130,32 @@ erDiagram
     animal_ownership_history {
         UUID id PK
         UUID animal_id FK
-        UUID owner_id FK
+        UUID owner_id FK "nullable; exactly-one-of with organization_id (OQ-1, mig 0023)"
+        UUID organization_id FK "nullable; org-owned interval (mig 0023)"
         DATE start_date
         DATE end_date
         TEXT transfer_reason
         TIMESTAMPTZ created_at
     }
+    %% ownership_transfers: ADR-0013 MVP shape (migration 0023 landed).
     ownership_transfers {
         UUID id PK
         UUID animal_id FK
-        UUID from_user_id FK
-        UUID to_user_id FK
-        VARCHAR_20 status
-        BOOLEAN from_confirmed
-        BOOLEAN to_confirmed
-        BOOLEAN payment_confirmed
-        TEXT failure_reason
+        UUID from_user_id FK "exactly-one-of with from_organization_id"
+        UUID from_organization_id FK "from-side org (mig 0023)"
+        UUID to_user_id FK "exactly-one-of with to_organization_id"
+        UUID to_organization_id FK "to-side org (mig 0023)"
+        UUID initiated_by_user_id FK "which user initiated (NULL-safe actor for org-from, mig 0023)"
+        UUID responded_by_user_id FK "who accepted/declined (mig 0023)"
+        VARCHAR_20 status "PENDING|IN_PROGRESS|COMPLETED|FAILED|CANCELLED"
+        BOOLEAN from_confirmed "Phase-2 form"
+        BOOLEAN to_confirmed "Phase-2 form"
+        BOOLEAN payment_confirmed "Phase-2 form"
+        TEXT failure_reason "terminal reason: declined|cancelled_by_initiator|expired"
+        TEXT transfer_reason "initiator free text (mig 0023)"
+        TIMESTAMPTZ completed_at "finalized to COMPLETED (mig 0023)"
+        VARCHAR_10 initiated_by_principal_type "HUMAN|AGENT (mig 0023)"
+        VARCHAR_10 responded_by_principal_type "HUMAN|AGENT (mig 0023)"
         TIMESTAMPTZ expires_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at

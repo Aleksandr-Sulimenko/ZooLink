@@ -1,0 +1,450 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Ownership-Transfer API
+  version: 1.0.0
+  description: >
+    Animal ownership-transfer API for ZooLink (Animal Slice 2). Implements the **simplified
+    direct transfer** ratified in ADR-0013: current owner initiates → recipient (user OR
+    organization) accepts/declines; initiator may cancel a still-PENDING transfer; an
+    unaccepted transfer expires after 72h (lazy-on-read, OQ-2). On accept the animal is
+    atomically re-attributed and `animal_ownership_history` is appended in one transaction
+    (under the `app.ownership_transfer` GUC, ADR-0013 §2).
+
+    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), `/api/v1` base (§1), bearer auth (§2),
+    `x-required-roles` (§3, rbac-matrix.md), RFC7807 Problem errors (§4), `{items, meta: PageMeta}`
+    pagination (§5), `Idempotency-Key` on unsafe POST (§11), `ETag`/`If-Match` optimistic
+    concurrency on the accept/decline/cancel state-transition POSTs (§10), and the shared
+    `Actor {actorId, principalType}` form for actor-bearing fields (§15, ADR-0011 §6 — a transfer
+    may be initiated/answered by a HUMAN or AGENT principal).
+
+    The heavy verification phase (IN_PROGRESS / payment / vet / legal-CITES / two-sided ack) is
+    DEFERRED behind `feature_toggles.ownership_transfer_verification` (default off, ADR-0013 §1/§3)
+    and is NOT part of this MVP contract. `FAILED` is reserved for that Phase-2 flow; MVP terminals
+    are COMPLETED and CANCELLED only.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+security:
+  - bearerAuth: []
+paths:
+  /animals/{id}/transfers:
+    post:
+      summary: Initiate an ownership transfer of an animal
+      operationId: initiateTransfer
+      description: >
+        Creates a PENDING transfer of animal `{id}` to a recipient that is **exactly one of**
+        a user (`toUserId`) or an organization (`toOrganizationId`). Object-level rule: the
+        caller MUST be the animal's **current owner** (its present `ownerId`, or an authorized
+        org-admin of its present `organizationId`). Recipient MUST NOT be the current owner
+        (no self-transfer). At most one active PENDING transfer may exist per animal at a time;
+        a second initiate while one is PENDING → 409 `TRANSFER_ALREADY_PENDING`
+        (DB-enforced by `UNIQUE (animal_id) WHERE status='PENDING'`). `expiresAt` is set to
+        `now() + 72h` (OQ-2). The acting principal is snapshotted as `initiatedBy`
+        `{actorId, principalType}` (ADR-0011 §6).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: Animal ID whose ownership is being transferred
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11, 24h window)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferInitiate' }
+      responses:
+        '201':
+          description: Transfer created (PENDING)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator of the new transfer (send as If-Match on accept/decline/cancel, §10)
+            Location:
+              schema: { type: string }
+              description: URI of the created transfer (`/api/v1/transfers/{transferId}`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }   # malformed body
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the current owner
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found / recipient not found
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_ALREADY_PENDING
+        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / Idempotency-Key reuse w/ different body
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/accept:
+    post:
+      summary: Accept an incoming ownership transfer (recipient)
+      operationId: acceptTransfer
+      description: >
+        Recipient accepts a PENDING transfer. Object-level rule: the caller MUST be the named
+        recipient (`toUserId`, or an authorized org-admin of `toOrganizationId`). On accept, in
+        ONE transaction (ADR-0013 §3 invariant 4): the animal's `ownerId`/`organizationId` is
+        atomically re-attributed (under the `app.ownership_transfer` GUC), the transfer moves
+        PENDING → COMPLETED with `completedAt` set, `animal_ownership_history` is appended
+        (close the prior interval `endDate`, open the new interval `startDate`), and
+        `animals.ownedSince` is updated. Idempotent under `Idempotency-Key`; a replay returns the
+        stored COMPLETED transfer. `If-Match` (the transfer ETag) guards against acting on a
+        stale view (e.g. a concurrent cancel). If the transfer is past `expiresAt` it is treated
+        as expired on read (OQ-2 lazy): the accept is rejected 409 `TRANSFER_EXPIRED` and the
+        transfer is transitioned to CANCELLED(`expired`).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (§11); makes accept replay-safe
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Transfer accepted and COMPLETED (animal re-attributed, history appended)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after completion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the named recipient
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING / TRANSFER_EXPIRED
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # Idempotency-Key reuse w/ different body
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/decline:
+    post:
+      summary: Decline an incoming ownership transfer (recipient)
+      operationId: declineTransfer
+      description: >
+        Recipient declines a PENDING transfer → CANCELLED with `terminalReason='declined'`.
+        Object-level rule: the caller MUST be the named recipient (`toUserId`, or an authorized
+        org-admin of `toOrganizationId`). The animal is NOT re-attributed. The acting principal
+        is snapshotted as `respondedBy`. `If-Match` guards against acting on a stale view. A
+        decline on an already-expired transfer is accepted as a no-op equivalent to the lazy
+        expiry (the result is CANCELLED either way).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Transfer declined and CANCELLED
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the named recipient
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING (already terminal)
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/cancel:
+    post:
+      summary: Cancel a still-PENDING ownership transfer (initiator)
+      operationId: cancelTransfer
+      description: >
+        Initiator cancels a PENDING transfer → CANCELLED with `terminalReason='cancelled_by_initiator'`.
+        Object-level rule: the caller MUST be the **initiator** (the principal that created the
+        transfer; an authorized org-admin of the from-org if the initiator side was an org). The
+        animal is NOT re-attributed. `If-Match` guards against acting on a stale view (e.g. a
+        concurrent accept that already completed it).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Transfer cancelled
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the initiator
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING (already terminal)
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}:
+    get:
+      summary: Get a single ownership transfer
+      operationId: getTransferById
+      description: >
+        Read one transfer. Object-level rule: visible to the **initiator**, the **recipient**
+        (or an org-admin of either party org), and to **MODERATOR**/**ADMIN** (R). A caller who
+        is none of these → 403. If the transfer is PENDING but past `expiresAt`, the read
+        reflects it as effectively expired and transitions it to CANCELLED(`expired`) lazily
+        (OQ-2) — the returned `status` is CANCELLED with `terminalReason='expired'`.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Transfer details
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on accept/decline/cancel (§10)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers:
+    get:
+      summary: List the authenticated principal's transfers
+      operationId: listMyTransfers
+      description: >
+        Lists transfers in which the authenticated principal is a party. `role=initiated`
+        returns transfers the principal initiated; `role=incoming` returns transfers addressed
+        to the principal (or an org the principal admins). Filter by `status`. PENDING items
+        that are past `expiresAt` are surfaced as CANCELLED(`expired`) per the lazy-expiry rule
+        (OQ-2). MODERATOR/ADMIN use the moderation/admin surfaces for cross-party listing — this
+        endpoint is always principal-scoped.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: role
+          required: true
+          schema: { type: string, enum: [initiated, incoming] }
+          description: Which side of the transfer to list for the authenticated principal
+        - in: query
+          name: status
+          schema: { type: string, enum: [PENDING, COMPLETED, CANCELLED] }
+          description: Optional filter by transfer status
+        - in: query
+          name: animalId
+          schema: { type: string, format: uuid }
+          description: Optional filter by animal
+        - in: query
+          name: sort
+          schema: { type: string, example: 'created_at:desc' }
+          description: Sort `<field>:<asc|desc>` (snake_case fields, §12); default `created_at:desc`
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Paginated list of the principal's transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Transfer' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }   # missing/invalid role
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    Actor:
+      type: object
+      description: >
+        Acting principal snapshot (API_CONVENTIONS §15, ADR-0011 §6). `principalType` is the
+        write-time snapshot of `users.principal_type` — a transfer act may be performed by a
+        HUMAN or an AGENT. `HUMAN` for every MVP transfer; the form is present so agents activate
+        without a contract change (ADR-0006).
+      required: [actorId, principalType]
+      properties:
+        actorId: { type: string, format: uuid }
+        principalType: { type: string, enum: [HUMAN, AGENT] }
+        actorDisplayName: { type: string, nullable: true }
+    TransferInitiate:
+      type: object
+      description: >
+        Initiate-transfer request body. The recipient is **exactly one of** `toUserId` /
+        `toOrganizationId` (mirrors the `ownership_transfers` exactly-one-of-user/org CHECK,
+        ADR-0013 §3). Supplying both, or neither → 422.
+      required: []
+      properties:
+        toUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Recipient user (set iff transferring to a user; mutually exclusive with toOrganizationId)
+        toOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Recipient organization (set iff transferring to an org; mutually exclusive with toUserId)
+        transferReason:
+          type: string
+          nullable: true
+          maxLength: 2000
+          description: >
+            Optional free-text reason the initiator gives; persisted on the transfer and copied
+            to `animal_ownership_history.transferReason` on completion (ADR-0013 §3 delta).
+      oneOf:
+        - required: [toUserId]
+        - required: [toOrganizationId]
+    Transfer:
+      type: object
+      description: >
+        An ownership transfer (the process entity). MVP states: PENDING → {COMPLETED | CANCELLED}.
+        `IN_PROGRESS`/`FAILED` are reserved for the Phase-2 verified flow (gated, absent in MVP).
+      required:
+        - id
+        - animalId
+        - status
+        - initiatedBy
+        - createdAt
+        - updatedAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Transfer ID
+        animalId:
+          type: string
+          format: uuid
+          description: Animal being transferred
+        fromUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: From-side user (set iff the current owner at initiate was a user; exactly-one-of with fromOrganizationId)
+        fromOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: From-side organization (set iff the current owner at initiate was an org; exactly-one-of with fromUserId)
+        toUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Recipient user (exactly-one-of with toOrganizationId)
+        toOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Recipient organization (exactly-one-of with toUserId)
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, CANCELLED]
+          description: >
+            MVP lifecycle state. PENDING = awaiting recipient; COMPLETED = accepted & re-attributed;
+            CANCELLED = declined / cancelled-by-initiator / expired (see terminalReason).
+        terminalReason:
+          type: string
+          nullable: true
+          enum: [declined, cancelled_by_initiator, expired]
+          description: >
+            Why a CANCELLED transfer ended (maps to the DB `failure_reason` column, ADR-0013 §3).
+            Null while PENDING and on COMPLETED.
+        transferReason:
+          type: string
+          nullable: true
+          description: Free-text reason the initiator supplied at initiate
+        initiatedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: Principal that initiated the transfer (snapshot {actorId, principalType}, ADR-0011 §6)
+        respondedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          nullable: true
+          description: >
+            Principal that accepted/declined the transfer (null while PENDING; set on COMPLETED
+            via accept and on CANCELLED via decline; null when CANCELLED via initiator-cancel or
+            expiry).
+        expiresAt:
+          type: string
+          format: date-time
+          description: >
+            When a still-PENDING transfer is treated as expired (set to createdAt + 72h, OQ-2).
+            Expiry is evaluated lazily on the next read/action (no background worker in MVP).
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the transfer finalized to COMPLETED (null otherwise; distinct from updatedAt)
+        createdAt:
+          type: string
+          format: date-time
+          description: Initiation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last-update timestamp (backs the weak ETag)
+  responses:
+    Problem:
+      description: RFC7807 problem (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

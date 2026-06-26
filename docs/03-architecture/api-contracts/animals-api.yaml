@@ -636,10 +636,18 @@ components:
           description: Active status
     AnimalOwnershipHistory:
       type: object
+      description: >
+        A settled ownership interval (the immutable trail). The owner of an interval is **exactly
+        one of** `ownerId` (a user) or `organizationId` (an org), mirroring the animal's
+        owner/org split — ADR-0013 added org-transfer to MVP scope (OQ-1). NOTE: the backing
+        `animal_ownership_history` table currently has only `owner_id NOT NULL REFERENCES users`;
+        the `organization_id` column + exactly-one-of CHECK is an **open schema delta owned by
+        architect (ADR-0013 OQ-1, recommended option (a))** and must land before the org-transfer
+        path ships. The contract carries the org-capable shape so it does not change when that
+        delta lands.
       required:
         - id
         - animalId
-        - ownerId
         - startDate
         - createdAt
       properties:
@@ -654,7 +662,13 @@ components:
         ownerId:
           type: string
           format: uuid
-          description: Foreign key to user
+          nullable: true
+          description: Owner user for this interval (exactly-one-of with organizationId; nullable for org-owned intervals — OQ-1)
+        organizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Owner organization for this interval (exactly-one-of with ownerId; OQ-1 schema delta, architect-owned)
         startDate:
           type: string
           format: date

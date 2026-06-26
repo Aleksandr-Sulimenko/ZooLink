@@ -59,7 +59,7 @@ Org-членство — отдельная ось: `organization_users.role_in_
 | **Чужие профили** | R (публичные поля) | R (полные) | R/U/D |
 | **Роли/статус пользователя (suspend)** | — | suspend/unsuspend (по модерации) | C/R/U/D |
 | **Животные** | C/R/U/D own | R any | R/U/D any |
-| **Передача владения животным** | инициировать/подтвердить own (в MVP заблокировано) | R | R/U |
+| **Передача владения животным** ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md)) | текущий владелец инициирует/отменяет свою; названный получатель принимает/отклоняет входящую | R | R/U |
 | **Объявления** | C/R/U/D own (R любые активные) | R any (вкл. pending) | R/U/D any |
 | **Решение модерации по объявлению** | — | C (approve/reject/changes) | C |
 | **Очередь модерации** | — | R | R |
@@ -76,9 +76,25 @@ Org-членство — отдельная ось: `organization_users.role_in_
 | **Журнал аудита** | — | R (свои действия) | R all |
 | **Избранное / сохранённые поиски** | C/R/U/D own | own | own |
 
+> **(round-8, нормативно) — права передачи владения — реальные MVP-правила (ADR-0013).**
+> **ЧТО:** Заменено «инициировать/подтвердить own (в MVP заблокировано)» на фактические MVP-права: текущий владелец
+> инициирует/отменяет свою передачу; названный получатель принимает/отклоняет входящую; MODERATOR = R, ADMIN = R/U
+> (override). Строка одинакова при любом `principal_type` (ADR-0011 §7).
+> **ПОЧЕМУ:** «в MVP заблокировано» противоречило апекс-требованию (BR animal-domain:56-61, GAP-TRACE-007), которое
+> ратифицировано [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md): передача — в MVP (упрощённый прямой флоу).
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** RBAC-матрица перестаёт врать о «заблокированности»; гварды получают однозначные права
+> (initiate/cancel = инициатор-владелец, accept/decline = получатель, R/U = ADMIN); owner-lock остаётся защитой
+> в глубину (только контролируемый путь через GUC). Согласовано с [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) §1/§5.
+
 ## Правила объектного уровня (владение) — применять в сервис-слое
 - **Животное:** изменяемо только `owner_id == актор` ИЛИ актор — org-admin `organization_id`. Неизменяемые поля
   (species_id, sex, date_of_birth, breed_id) блокируются триггером независимо от роли.
+- **Передача владения** ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md)): только **текущий владелец**
+  животного (нынешний `owner_id` или org-admin нынешнего `organization_id`) может **инициировать** передачу; только
+  **названный получатель** (`to_user_id`/`to_organization_id`) может **принять** или **отклонить**; только **инициатор**
+  может **отменить** ещё `PENDING`-передачу. MODERATOR = R, ADMIN = R/U (override). Та же строка матрицы применяется
+  независимо от `principal_type` (HUMAN или AGENT может инициировать/принять; ADR-0011 §7). Триггер owner-lock в БД
+  блокирует любое изменение `owner_id`/`organization_id` **кроме** контролируемого пути передачи (GUC `app.ownership_transfer`).
 - **Объявление:** изменяемо только `seller_id == актор` ИЛИ org-admin его `organization_id`.
 - **Беседа/сообщение:** видимы только `participant_a_id`/`participant_b_id` (+ MODERATOR для ревью).
 - **Жалоба:** заявитель видит свои; MODERATOR/ADMIN видят все.
@@ -95,5 +111,6 @@ Org-членство — отдельная ось: `organization_users.role_in_
 - [Спецификация безопасности](security_specification.md) · [ADR-0001](../../04-decisions/0001-tech-stack.md) ·
   [ADR-0006](../../04-decisions/0006-ai-agents-operate-platform.md) ·
   [ADR-0011](../../04-decisions/0011-agent-principal-actor-model.md) (модель актёра-агента, канон ролей) ·
+  [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) (авторизация передачи владения в MVP) ·
   [Домен Identity](../01-identity-domain.md) · [Домен Admin](../06-admin-domain.md)
 - 🌐 EN: [docs/specs/security/rbac-matrix.md](../../../docs/specs/security/rbac-matrix.md)

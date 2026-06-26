@@ -15,6 +15,8 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0009: MVP architecture is a modular monolith — defer microservices/K8s to Фаза 2+](0009-mvp-vs-target-architecture.md)
 - [ADR-0010: Digital-asset (NFT) readiness — schema hooks now, on-chain in Фаза 2+](0010-nft-digital-assets-hooks.md)
 - [ADR-0011: Agent-Principal Actor Model — actor snapshot, human-override, forward-compatible service-auth](0011-agent-principal-actor-model.md)
+- [ADR-0012: PII-at-rest encryption](0012-pii-at-rest-encryption.md)
+- [ADR-0013: MVP Ownership Transfer — simplified direct transfer, controlled owner-lock path, deferred verification gates](0013-mvp-ownership-transfer.md)
 
 ## Template
 

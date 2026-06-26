@@ -9,15 +9,17 @@ datasource db {
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model animal_ownership_history {
-  id              String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  animal_id       String    @db.Uuid
-  owner_id        String    @db.Uuid
-  start_date      DateTime  @db.Date
-  end_date        DateTime? @db.Date
+  id              String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id       String         @db.Uuid
+  owner_id        String?        @db.Uuid
+  start_date      DateTime       @db.Date
+  end_date        DateTime?      @db.Date
   transfer_reason String?
-  created_at      DateTime  @default(now()) @db.Timestamptz(6)
-  animals         animals   @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
-  users           users     @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  organization_id String?        @db.Uuid
+  animals         animals        @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  organizations   organizations? @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users           users?         @relation(fields: [owner_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([animal_id], map: "idx_aoh_animal")
   @@index([start_date, end_date], map: "idx_aoh_dates")
@@ -450,27 +452,30 @@ model organization_users {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model organizations {
-  id                    String               @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  inn                   String?              @db.VarChar(20)
-  kpp                   String?              @db.VarChar(20)
-  address               String?
-  phone                 String?              @db.VarChar(30)
-  email                 String?              @db.VarChar(255)
-  logo_url              String?
-  name_localized        Json                 @default("{\"en\": \"\", \"ru\": \"\"}")
-  description_localized Json                 @default("{\"en\": \"\", \"ru\": \"\"}")
-  metadata              Json?                @default("{}")
-  is_active             Boolean              @default(true)
-  created_at            DateTime             @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime             @default(now()) @db.Timestamptz(6)
-  status                String               @default("PENDING_VERIFICATION") @db.VarChar(25)
-  verified_at           DateTime?            @db.Timestamptz(6)
-  suspended_at          DateTime?            @db.Timestamptz(6)
-  archived_at           DateTime?            @db.Timestamptz(6)
-  animals               animals[]
-  branches              branches[]
-  listings              listings[]
-  organization_users    organization_users[]
+  id                                                                          String                     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  inn                                                                         String?                    @db.VarChar(20)
+  kpp                                                                         String?                    @db.VarChar(20)
+  address                                                                     String?
+  phone                                                                       String?                    @db.VarChar(30)
+  email                                                                       String?                    @db.VarChar(255)
+  logo_url                                                                    String?
+  name_localized                                                              Json                       @default("{\"en\": \"\", \"ru\": \"\"}")
+  description_localized                                                       Json                       @default("{\"en\": \"\", \"ru\": \"\"}")
+  metadata                                                                    Json?                      @default("{}")
+  is_active                                                                   Boolean                    @default(true)
+  created_at                                                                  DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                                  DateTime                   @default(now()) @db.Timestamptz(6)
+  status                                                                      String                     @default("PENDING_VERIFICATION") @db.VarChar(25)
+  verified_at                                                                 DateTime?                  @db.Timestamptz(6)
+  suspended_at                                                                DateTime?                  @db.Timestamptz(6)
+  archived_at                                                                 DateTime?                  @db.Timestamptz(6)
+  animal_ownership_history                                                    animal_ownership_history[]
+  animals                                                                     animals[]
+  branches                                                                    branches[]
+  listings                                                                    listings[]
+  organization_users                                                          organization_users[]
+  ownership_transfers_ownership_transfers_from_organization_idToorganizations ownership_transfers[]      @relation("ownership_transfers_from_organization_idToorganizations")
+  ownership_transfers_ownership_transfers_to_organization_idToorganizations   ownership_transfers[]      @relation("ownership_transfers_to_organization_idToorganizations")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -490,21 +495,33 @@ model outbox_events {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model ownership_transfers {
-  id                                            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  animal_id                                     String    @db.Uuid
-  from_user_id                                  String?   @db.Uuid
-  to_user_id                                    String?   @db.Uuid
-  status                                        String    @default("PENDING") @db.VarChar(20)
-  from_confirmed                                Boolean   @default(false)
-  to_confirmed                                  Boolean   @default(false)
-  payment_confirmed                             Boolean   @default(false)
-  failure_reason                                String?
-  expires_at                                    DateTime? @db.Timestamptz(6)
-  created_at                                    DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at                                    DateTime  @default(now()) @db.Timestamptz(6)
-  animals                                       animals   @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
-  users_ownership_transfers_from_user_idTousers users?    @relation("ownership_transfers_from_user_idTousers", fields: [from_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  users_ownership_transfers_to_user_idTousers   users?    @relation("ownership_transfers_to_user_idTousers", fields: [to_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id                                                                    String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id                                                             String         @db.Uuid
+  from_user_id                                                          String?        @db.Uuid
+  to_user_id                                                            String?        @db.Uuid
+  status                                                                String         @default("PENDING") @db.VarChar(20)
+  from_confirmed                                                        Boolean        @default(false)
+  to_confirmed                                                          Boolean        @default(false)
+  payment_confirmed                                                     Boolean        @default(false)
+  failure_reason                                                        String?
+  expires_at                                                            DateTime?      @db.Timestamptz(6)
+  created_at                                                            DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at                                                            DateTime       @default(now()) @db.Timestamptz(6)
+  from_organization_id                                                  String?        @db.Uuid
+  to_organization_id                                                    String?        @db.Uuid
+  completed_at                                                          DateTime?      @db.Timestamptz(6)
+  transfer_reason                                                       String?
+  initiated_by_principal_type                                           String         @default("HUMAN") @db.VarChar(10)
+  responded_by_principal_type                                           String?        @db.VarChar(10)
+  responded_by_user_id                                                  String?        @db.Uuid
+  initiated_by_user_id                                                  String?        @db.Uuid
+  animals                                                               animals        @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  organizations_ownership_transfers_from_organization_idToorganizations organizations? @relation("ownership_transfers_from_organization_idToorganizations", fields: [from_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_from_user_idTousers                         users?         @relation("ownership_transfers_from_user_idTousers", fields: [from_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_initiated_by_user_idTousers                 users?         @relation("ownership_transfers_initiated_by_user_idTousers", fields: [initiated_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_responded_by_user_idTousers                 users?         @relation("ownership_transfers_responded_by_user_idTousers", fields: [responded_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations_ownership_transfers_to_organization_idToorganizations   organizations? @relation("ownership_transfers_to_organization_idToorganizations", fields: [to_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_to_user_idTousers                           users?         @relation("ownership_transfers_to_user_idTousers", fields: [to_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([animal_id], map: "idx_owntransfer_animal")
   @@index([status], map: "idx_owntransfer_status")
@@ -616,73 +633,75 @@ model supported_languages {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model users {
-  id                                                              String                     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  phone_hash                                                      String?                    @db.VarChar(60)
-  oauth_google_id                                                 String?                    @db.VarChar(255)
-  oauth_apple_id                                                  String?                    @db.VarChar(255)
-  oauth_telegram_id                                               String?                    @db.VarChar(255)
-  oauth_vk_id                                                     String?                    @db.VarChar(255)
-  full_name                                                       String                     @db.VarChar(100)
-  city_id                                                         Int?
-  avatar_url                                                      String?
-  email                                                           String?                    @db.VarChar(255)
-  email_verified                                                  Boolean?                   @default(false)
-  password_hash                                                   String?                    @db.VarChar(60)
-  role                                                            String                     @default("USER") @db.VarChar(20)
-  principal_type                                                  String                     @default("HUMAN") @db.VarChar(10)
-  status                                                          String                     @default("UNVERIFIED") @db.VarChar(25)
-  suspended_at                                                    DateTime?                  @db.Timestamptz(6)
-  verification_attempts                                           Int                        @default(0)
-  notification_prefs                                              Json                       @default("{\"sms\": true, \"email\": true, \"promo\": false}")
-  is_active                                                       Boolean                    @default(true)
-  last_login_at                                                   DateTime?                  @db.Timestamptz(6)
-  deactivated_at                                                  DateTime?                  @db.Timestamptz(6)
-  created_at                                                      DateTime                   @default(now()) @db.Timestamptz(6)
-  updated_at                                                      DateTime                   @default(now()) @db.Timestamptz(6)
-  contact_phone                                                   String?                    @db.VarChar(30)
-  contact_telegram                                                String?                    @db.VarChar(64)
-  contact_prefs                                                   Json                       @default("{\"show_phone\": true, \"show_telegram\": false}")
-  preferred_language                                              String                     @default("ru") @db.Char(2)
-  erased_at                                                       DateTime?                  @db.Timestamptz(6)
-  animal_ownership_history                                        animal_ownership_history[]
-  animals                                                         animals[]
-  audit_log                                                       audit_log[]
-  breeds_breeds_created_byTousers                                 breeds[]                   @relation("breeds_created_byTousers")
-  breeds_breeds_updated_byTousers                                 breeds[]                   @relation("breeds_updated_byTousers")
-  cities_cities_created_byTousers                                 cities[]                   @relation("cities_created_byTousers")
-  cities_cities_updated_byTousers                                 cities[]                   @relation("cities_updated_byTousers")
-  contact_reveals_contact_reveals_seller_idTousers                contact_reveals[]          @relation("contact_reveals_seller_idTousers")
-  contact_reveals_contact_reveals_viewer_idTousers                contact_reveals[]          @relation("contact_reveals_viewer_idTousers")
-  content_reports_content_reports_reporter_idTousers              content_reports[]          @relation("content_reports_reporter_idTousers")
-  content_reports_content_reports_resolved_byTousers              content_reports[]          @relation("content_reports_resolved_byTousers")
-  conversations_conversations_participant_a_idTousers             conversations[]            @relation("conversations_participant_a_idTousers")
-  conversations_conversations_participant_b_idTousers             conversations[]            @relation("conversations_participant_b_idTousers")
-  decision_templates_decision_templates_created_byTousers         decision_templates[]       @relation("decision_templates_created_byTousers")
-  decision_templates_decision_templates_updated_byTousers         decision_templates[]       @relation("decision_templates_updated_byTousers")
-  favorites                                                       favorites[]
-  feature_toggles                                                 feature_toggles[]
-  genetic_markers_genetic_markers_created_byTousers               genetic_markers[]          @relation("genetic_markers_created_byTousers")
-  genetic_markers_genetic_markers_updated_byTousers               genetic_markers[]          @relation("genetic_markers_updated_byTousers")
-  health_certifications_health_certifications_created_byTousers   health_certifications[]    @relation("health_certifications_created_byTousers")
-  health_certifications_health_certifications_updated_byTousers   health_certifications[]    @relation("health_certifications_updated_byTousers")
-  listings_listings_assigned_toTousers                            listings[]                 @relation("listings_assigned_toTousers")
-  listings_listings_seller_idTousers                              listings[]                 @relation("listings_seller_idTousers")
-  messages_messages_recipient_idTousers                           messages[]                 @relation("messages_recipient_idTousers")
-  messages_messages_sender_idTousers                              messages[]                 @relation("messages_sender_idTousers")
-  moderation_decisions                                            moderation_decisions[]
-  notification_logs                                               notification_logs[]
-  organization_users_organization_users_user_idTousers            organization_users[]       @relation("organization_users_user_idTousers")
-  organization_users_organization_users_invited_by_user_idTousers organization_users[]       @relation("organization_users_invited_by_user_idTousers")
-  ownership_transfers_ownership_transfers_from_user_idTousers     ownership_transfers[]      @relation("ownership_transfers_from_user_idTousers")
-  ownership_transfers_ownership_transfers_to_user_idTousers       ownership_transfers[]      @relation("ownership_transfers_to_user_idTousers")
-  payment_transactions                                            payment_transactions[]
-  refresh_tokens                                                  refresh_tokens[]
-  saved_searches                                                  saved_searches[]
-  service_credentials                                             service_credentials[]
-  species_species_created_byTousers                               species[]                  @relation("species_created_byTousers")
-  species_species_updated_byTousers                               species[]                  @relation("species_updated_byTousers")
-  cities                                                          cities?                    @relation(fields: [city_id], references: [id], onUpdate: NoAction)
-  supported_languages                                             supported_languages        @relation(fields: [preferred_language], references: [code], onUpdate: NoAction)
+  id                                                                  String                     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  phone_hash                                                          String?                    @db.VarChar(60)
+  oauth_google_id                                                     String?                    @db.VarChar(255)
+  oauth_apple_id                                                      String?                    @db.VarChar(255)
+  oauth_telegram_id                                                   String?                    @db.VarChar(255)
+  oauth_vk_id                                                         String?                    @db.VarChar(255)
+  full_name                                                           String                     @db.VarChar(100)
+  city_id                                                             Int?
+  avatar_url                                                          String?
+  email                                                               String?                    @db.VarChar(255)
+  email_verified                                                      Boolean?                   @default(false)
+  password_hash                                                       String?                    @db.VarChar(60)
+  role                                                                String                     @default("USER") @db.VarChar(20)
+  principal_type                                                      String                     @default("HUMAN") @db.VarChar(10)
+  status                                                              String                     @default("UNVERIFIED") @db.VarChar(25)
+  suspended_at                                                        DateTime?                  @db.Timestamptz(6)
+  verification_attempts                                               Int                        @default(0)
+  notification_prefs                                                  Json                       @default("{\"sms\": true, \"email\": true, \"promo\": false}")
+  is_active                                                           Boolean                    @default(true)
+  last_login_at                                                       DateTime?                  @db.Timestamptz(6)
+  deactivated_at                                                      DateTime?                  @db.Timestamptz(6)
+  created_at                                                          DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                          DateTime                   @default(now()) @db.Timestamptz(6)
+  contact_phone                                                       String?                    @db.VarChar(30)
+  contact_telegram                                                    String?                    @db.VarChar(64)
+  contact_prefs                                                       Json                       @default("{\"show_phone\": true, \"show_telegram\": false}")
+  preferred_language                                                  String                     @default("ru") @db.Char(2)
+  erased_at                                                           DateTime?                  @db.Timestamptz(6)
+  animal_ownership_history                                            animal_ownership_history[]
+  animals                                                             animals[]
+  audit_log                                                           audit_log[]
+  breeds_breeds_created_byTousers                                     breeds[]                   @relation("breeds_created_byTousers")
+  breeds_breeds_updated_byTousers                                     breeds[]                   @relation("breeds_updated_byTousers")
+  cities_cities_created_byTousers                                     cities[]                   @relation("cities_created_byTousers")
+  cities_cities_updated_byTousers                                     cities[]                   @relation("cities_updated_byTousers")
+  contact_reveals_contact_reveals_seller_idTousers                    contact_reveals[]          @relation("contact_reveals_seller_idTousers")
+  contact_reveals_contact_reveals_viewer_idTousers                    contact_reveals[]          @relation("contact_reveals_viewer_idTousers")
+  content_reports_content_reports_reporter_idTousers                  content_reports[]          @relation("content_reports_reporter_idTousers")
+  content_reports_content_reports_resolved_byTousers                  content_reports[]          @relation("content_reports_resolved_byTousers")
+  conversations_conversations_participant_a_idTousers                 conversations[]            @relation("conversations_participant_a_idTousers")
+  conversations_conversations_participant_b_idTousers                 conversations[]            @relation("conversations_participant_b_idTousers")
+  decision_templates_decision_templates_created_byTousers             decision_templates[]       @relation("decision_templates_created_byTousers")
+  decision_templates_decision_templates_updated_byTousers             decision_templates[]       @relation("decision_templates_updated_byTousers")
+  favorites                                                           favorites[]
+  feature_toggles                                                     feature_toggles[]
+  genetic_markers_genetic_markers_created_byTousers                   genetic_markers[]          @relation("genetic_markers_created_byTousers")
+  genetic_markers_genetic_markers_updated_byTousers                   genetic_markers[]          @relation("genetic_markers_updated_byTousers")
+  health_certifications_health_certifications_created_byTousers       health_certifications[]    @relation("health_certifications_created_byTousers")
+  health_certifications_health_certifications_updated_byTousers       health_certifications[]    @relation("health_certifications_updated_byTousers")
+  listings_listings_assigned_toTousers                                listings[]                 @relation("listings_assigned_toTousers")
+  listings_listings_seller_idTousers                                  listings[]                 @relation("listings_seller_idTousers")
+  messages_messages_recipient_idTousers                               messages[]                 @relation("messages_recipient_idTousers")
+  messages_messages_sender_idTousers                                  messages[]                 @relation("messages_sender_idTousers")
+  moderation_decisions                                                moderation_decisions[]
+  notification_logs                                                   notification_logs[]
+  organization_users_organization_users_user_idTousers                organization_users[]       @relation("organization_users_user_idTousers")
+  organization_users_organization_users_invited_by_user_idTousers     organization_users[]       @relation("organization_users_invited_by_user_idTousers")
+  ownership_transfers_ownership_transfers_from_user_idTousers         ownership_transfers[]      @relation("ownership_transfers_from_user_idTousers")
+  ownership_transfers_ownership_transfers_initiated_by_user_idTousers ownership_transfers[]      @relation("ownership_transfers_initiated_by_user_idTousers")
+  ownership_transfers_ownership_transfers_responded_by_user_idTousers ownership_transfers[]      @relation("ownership_transfers_responded_by_user_idTousers")
+  ownership_transfers_ownership_transfers_to_user_idTousers           ownership_transfers[]      @relation("ownership_transfers_to_user_idTousers")
+  payment_transactions                                                payment_transactions[]
+  refresh_tokens                                                      refresh_tokens[]
+  saved_searches                                                      saved_searches[]
+  service_credentials                                                 service_credentials[]
+  species_species_created_byTousers                                   species[]                  @relation("species_created_byTousers")
+  species_species_updated_byTousers                                   species[]                  @relation("species_updated_byTousers")
+  cities                                                              cities?                    @relation(fields: [city_id], references: [id], onUpdate: NoAction)
+  supported_languages                                                 supported_languages        @relation(fields: [preferred_language], references: [code], onUpdate: NoAction)
 
   @@index([city_id], map: "idx_users_city")
   @@index([role], map: "idx_users_role")

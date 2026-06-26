@@ -37,7 +37,7 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 | GAP-TRACE-004 | 🟠 Med | Identity/Admin | BR-001/006/017 | ⚠️ | Набор ролей рассинхронизирован в 3 доках (+ SUPER_ADMIN, BREEDER/FARMER) |
 | GAP-TRACE-005 | 🟠 Med | Livestock | BR-004 | ⚠️ | LEASING описан как рабочий тип, но нет в `listing_type` enum/хуке |
 | GAP-TRACE-006 | 🟠 Med | Admin/Moderation | BR-006/012 | ⚠️ | FLAG FOR REVIEW в BR vs CHANGES_REQUESTED в схеме/spec 12 |
-| GAP-TRACE-007 | 🟠 Med | Animal | BR-002 | ⚠️ | «Смена владельца запрещена в MVP» vs `ownership_transfers` в scope |
+| GAP-TRACE-007 | ✅ Resolved | Animal | BR-002 | ⚠️ | «Смена владельца запрещена в MVP» vs `ownership_transfers` в scope — **ратифицировано ADR-0013** |
 | GAP-TRACE-008 | 🟠 Med | Organization | BR-011 | ⚠️ | `role_in_org` включает MODERATOR в BR, убран миграцией |
 | GAP-TRACE-009 | 🟠 Med | Identity | BR-001 | ⚠️ | Пароль для end-users в BR vs passwordless (spec 01 round-4) |
 | GAP-TRACE-010 | 🟠 Med | Identity | BR-001 | ⚠️ | Срок JWT 24h vs 15m/7d; хэш телефона bcrypt vs HMAC |
@@ -81,12 +81,13 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 
 ## Animal (BR-002)
 
-### GAP-TRACE-007 ⚠️ «Смена владельца запрещена в MVP»
+### GAP-TRACE-007 ✅ RESOLVED (2026-06-26) — «Смена владельца запрещена в MVP»
 - **Источник:** `business-requirements/animal-domain.md:56`.
 - **Истина:** `ownership_transfers` (`database_schema.sql:490`) + `specs/statemachines/ownership_transfer_state_machine.md` + `specs/02-animal-domain.md` (transfer в scope).
 - **ЧТО:** Обновить BR: ownership transfer — поддерживаемый флоу (через `ownership_transfers`), а не «создай новый профиль».
 - **ПОЧЕМУ:** BR прямо запрещает то, что смоделировано и в плане реализации.
 - **ПОЧЕМУ ТАК ЛУЧШЕ:** Формальный transfer сохраняет историю/родословную и предотвращает дубль-регистрации, ради которых запрет и вводился.
+- **✅ Резолюция (2026-06-26):** BR↔схема/спека приведены в согласие. [ADR-0013](docs/04-decisions/0013-mvp-ownership-transfer.md) **ратифицирует transfer как in-MVP** (упрощённый прямой флоу `PENDING→COMPLETED`/`CANCELLED`); owner-lock relaxed до контролируемого пути (GUC `app.ownership_transfer`); тяжёлая верификация — за `feature_toggles.ownership_transfer_verification`. Стейт-машина (round-N), rbac-matrix (round-8) и `02-animal-domain.md` (round-6) реконсилированы EN↔RU. **Owed:** API-контракт трансфера (`animals-api.yaml`, авторство alpha-analyst) + миграция дельт `ownership_transfers` (backend) + OQ-1 (`animal_ownership_history` для org-owned) — трекаются в самом ADR-0013.
 
 ---
 

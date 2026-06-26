@@ -636,10 +636,18 @@ components:
           description: Активность
     AnimalOwnershipHistory:
       type: object
+      description: >
+        Свершившийся интервал владения (неизменяемый след). Владелец интервала — **ровно один из**
+        `ownerId` (пользователь) или `organizationId` (организация), повторяя owner/org-разделение
+        животного — ADR-0013 добавил org-передачу в scope MVP (OQ-1). ЗАМЕЧАНИЕ: подкладывающая
+        таблица `animal_ownership_history` сейчас имеет только `owner_id NOT NULL REFERENCES users`;
+        колонка `organization_id` + CHECK ровно-одно-из — **открытая дельта схемы, владелец —
+        архитектор (ADR-0013 OQ-1, рекомендованный вариант (a))**, и она должна приземлиться до
+        поставки пути org-передачи. Контракт несёт org-способную форму, чтобы не меняться при
+        приземлении этой дельты.
       required:
         - id
         - animalId
-        - ownerId
         - startDate
         - createdAt
       properties:
@@ -654,7 +662,13 @@ components:
         ownerId:
           type: string
           format: uuid
-          description: Внешний ключ на пользователя
+          nullable: true
+          description: Владелец-пользователь этого интервала (ровно-одно-из с organizationId; nullable для org-owned интервалов — OQ-1)
+        organizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Владелец-организация этого интервала (ровно-одно-из с ownerId; дельта схемы OQ-1, владелец — архитектор)
         startDate:
           type: string
           format: date

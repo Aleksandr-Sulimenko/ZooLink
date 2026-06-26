@@ -1,0 +1,450 @@
+openapi: 3.0.3
+info:
+  title: ZooLink Ownership-Transfer API
+  version: 1.0.0
+  description: >
+    API передачи владения животным для ZooLink (Animal Slice 2). Реализует **упрощённую
+    прямую передачу**, ратифицированную в ADR-0013: текущий владелец инициирует → получатель
+    (пользователь ИЛИ организация) принимает/отклоняет; инициатор может отменить ещё PENDING-передачу;
+    непринятая передача истекает через 72ч (lazy-on-read, OQ-2). При принятии животное
+    атомарно переатрибутируется и `animal_ownership_history` дописывается в одной транзакции
+    (под GUC `app.ownership_transfer`, ADR-0013 §2).
+
+    Соответствует API_CONVENTIONS.md: camelCase тела (§0), база `/api/v1` (§1), bearer-auth (§2),
+    `x-required-roles` (§3, rbac-matrix.md), RFC7807 Problem-ошибки (§4), пагинация `{items, meta: PageMeta}`
+    (§5), `Idempotency-Key` на небезопасных POST (§11), `ETag`/`If-Match` оптимистичная
+    конкуренция на accept/decline/cancel state-transition POST-ах (§10), и общая
+    форма `Actor {actorId, principalType}` для актор-несущих полей (§15, ADR-0011 §6 — передача
+    может быть инициирована/отвечена HUMAN или AGENT-принципалом).
+
+    Тяжёлая фаза верификации (IN_PROGRESS / платёж / вет / юр.-CITES / двустороннее ack)
+    ОТЛОЖЕНА за `feature_toggles.ownership_transfer_verification` (по умолчанию off, ADR-0013 §1/§3)
+    и НЕ является частью этого MVP-контракта. `FAILED` зарезервировано для этого флоу Фазы 2; терминалы
+    MVP — только COMPLETED и CANCELLED.
+servers:
+  - url: /api/v1
+    description: ZooLink API v1
+security:
+  - bearerAuth: []
+paths:
+  /animals/{id}/transfers:
+    post:
+      summary: Инициировать передачу владения животным
+      operationId: initiateTransfer
+      description: >
+        Создаёт PENDING-передачу животного `{id}` получателю, который — **ровно один из**
+        пользователь (`toUserId`) или организация (`toOrganizationId`). Объектное правило: вызывающий
+        ДОЛЖЕН быть **текущим владельцем** животного (его нынешний `ownerId`, или авторизованный
+        org-admin его нынешнего `organizationId`). Получатель НЕ ДОЛЖЕН быть текущим владельцем
+        (нет самопередачи). Максимум одна активная PENDING-передача может существовать на животное за раз;
+        вторая инициация при существующей PENDING → 409 `TRANSFER_ALREADY_PENDING`
+        (DB-enforced через `UNIQUE (animal_id) WHERE status='PENDING'`). `expiresAt` выставляется в
+        `now() + 72h` (OQ-2). Актор-принципал снапшотится как `initiatedBy`
+        `{actorId, principalType}` (ADR-0011 §6).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID животного, чьё владение передаётся
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Сгенерированный клиентом ключ для безопасного ретрая (API_CONVENTIONS §11, окно 24ч)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferInitiate' }
+      responses:
+        '201':
+          description: Передача создана (PENDING)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Слабый валидатор новой передачи (отправить как If-Match на accept/decline/cancel, §10)
+            Location:
+              schema: { type: string }
+              description: URI созданной передачи (`/api/v1/transfers/{transferId}`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }   # malformed body
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the current owner
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found / recipient not found
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_ALREADY_PENDING
+        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / Idempotency-Key reuse w/ different body
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/accept:
+    post:
+      summary: Принять входящую передачу владения (получатель)
+      operationId: acceptTransfer
+      description: >
+        Получатель принимает PENDING-передачу. Объектное правило: вызывающий ДОЛЖЕН быть названным
+        получателем (`toUserId`, или авторизованный org-admin `toOrganizationId`). При принятии, в
+        ОДНОЙ транзакции (ADR-0013 §3 инвариант 4): `ownerId`/`organizationId` животного
+        атомарно переатрибутируется (под GUC `app.ownership_transfer`), передача переходит
+        PENDING → COMPLETED с выставленным `completedAt`, `animal_ownership_history` дописывается
+        (закрыть прежний интервал `endDate`, открыть новый интервал `startDate`), и
+        `animals.ownedSince` обновляется. Идемпотентно под `Idempotency-Key`; повтор возвращает
+        сохранённую COMPLETED-передачу. `If-Match` (ETag передачи) защищает от действия по
+        устаревшему виду (например, конкурентная отмена). Если передача после `expiresAt`, она трактуется
+        как истёкшая при чтении (OQ-2 lazy): accept отклоняется 409 `TRANSFER_EXPIRED` и
+        передача переводится в CANCELLED(`expired`).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Сгенерированный клиентом ключ для безопасного ретрая (§11); делает accept replay-safe
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Передача принята и COMPLETED (животное переатрибутировано, история дописана)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый слабый валидатор после завершения
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the named recipient
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING / TRANSFER_EXPIRED
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # Idempotency-Key reuse w/ different body
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/decline:
+    post:
+      summary: Отклонить входящую передачу владения (получатель)
+      operationId: declineTransfer
+      description: >
+        Получатель отклоняет PENDING-передачу → CANCELLED с `terminalReason='declined'`.
+        Объектное правило: вызывающий ДОЛЖЕН быть названным получателем (`toUserId`, или авторизованный
+        org-admin `toOrganizationId`). Животное НЕ переатрибутируется. Актор-принципал
+        снапшотится как `respondedBy`. `If-Match` защищает от действия по устаревшему виду. Отклонение
+        уже-истёкшей передачи принимается как no-op, эквивалентный lazy-истечению (результат —
+        CANCELLED в любом случае).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Передача отклонена и CANCELLED
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the named recipient
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING (already terminal)
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}/cancel:
+    post:
+      summary: Отменить ещё-PENDING передачу владения (инициатор)
+      operationId: cancelTransfer
+      description: >
+        Инициатор отменяет PENDING-передачу → CANCELLED с `terminalReason='cancelled_by_initiator'`.
+        Объектное правило: вызывающий ДОЛЖЕН быть **инициатором** (принципал, создавший
+        передачу; авторизованный org-admin from-org, если инициирующая сторона была орг.). Животное
+        НЕ переатрибутируется. `If-Match` защищает от действия по устаревшему виду (например,
+        конкурентный accept, который её уже завершил).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /transfers/{transferId} (§10)
+      responses:
+        '200':
+          description: Передача отменена
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # caller is not the initiator
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_NOT_PENDING (already terminal)
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/{transferId}:
+    get:
+      summary: Получить одну передачу владения
+      operationId: getTransferById
+      description: >
+        Прочитать одну передачу. Объектное правило: видна **инициатору**, **получателю**
+        (или org-admin любой из сторон-орг.) и **MODERATOR**/**ADMIN** (R). Вызывающий, который
+        не является никем из них → 403. Если передача PENDING, но после `expiresAt`, чтение
+        отражает её как фактически истёкшую и переводит в CANCELLED(`expired`) lazily
+        (OQ-2) — возвращаемый `status` — CANCELLED с `terminalReason='expired'`.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: transferId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Детали передачи
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Слабый валидатор для отправки обратно как If-Match на accept/decline/cancel (§10)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers:
+    get:
+      summary: Список передач аутентифицированного принципала
+      operationId: listMyTransfers
+      description: >
+        Перечисляет передачи, в которых аутентифицированный принципал является стороной. `role=initiated`
+        возвращает передачи, которые принципал инициировал; `role=incoming` возвращает передачи, адресованные
+        принципалу (или орг., которую принципал админит). Фильтр по `status`. PENDING-элементы,
+        которые после `expiresAt`, отображаются как CANCELLED(`expired`) по правилу lazy-истечения
+        (OQ-2). MODERATOR/ADMIN используют moderation/admin-поверхности для cross-party списка — этот
+        эндпоинт всегда principal-scoped.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: role
+          required: true
+          schema: { type: string, enum: [initiated, incoming] }
+          description: Какую сторону передачи перечислять для аутентифицированного принципала
+        - in: query
+          name: status
+          schema: { type: string, enum: [PENDING, COMPLETED, CANCELLED] }
+          description: Опциональный фильтр по статусу передачи
+        - in: query
+          name: animalId
+          schema: { type: string, format: uuid }
+          description: Опциональный фильтр по животному
+        - in: query
+          name: sort
+          schema: { type: string, example: 'created_at:desc' }
+          description: Сортировка `<field>:<asc|desc>` (snake_case поля, §12); по умолчанию `created_at:desc`
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Постраничный список передач принципала
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Transfer' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }   # missing/invalid role
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        nextCursor: { type: string, nullable: true }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "about:blank" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+        errors: { type: array, items: { type: object } }
+    Actor:
+      type: object
+      description: >
+        Snapshot актора-принципала (API_CONVENTIONS §15, ADR-0011 §6). `principalType` — это
+        snapshot времени-записи `users.principal_type` — акт передачи может быть выполнен
+        HUMAN или AGENT. `HUMAN` для каждой MVP-передачи; форма присутствует, чтобы агенты активировались
+        без изменения контракта (ADR-0006).
+      required: [actorId, principalType]
+      properties:
+        actorId: { type: string, format: uuid }
+        principalType: { type: string, enum: [HUMAN, AGENT] }
+        actorDisplayName: { type: string, nullable: true }
+    TransferInitiate:
+      type: object
+      description: >
+        Тело запроса инициации передачи. Получатель — **ровно один из** `toUserId` /
+        `toOrganizationId` (повторяет CHECK ровно-одно-из-user/org таблицы `ownership_transfers`,
+        ADR-0013 §3). Указание обоих, или ни одного → 422.
+      required: []
+      properties:
+        toUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Получатель-пользователь (задаётся iff передача пользователю; взаимоисключающе с toOrganizationId)
+        toOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Получатель-организация (задаётся iff передача орг.; взаимоисключающе с toUserId)
+        transferReason:
+          type: string
+          nullable: true
+          maxLength: 2000
+          description: >
+            Опциональная свободно-текстовая причина, которую даёт инициатор; персистится на передаче и копируется
+            в `animal_ownership_history.transferReason` при завершении (дельта ADR-0013 §3).
+      oneOf:
+        - required: [toUserId]
+        - required: [toOrganizationId]
+    Transfer:
+      type: object
+      description: >
+        Передача владения (процессная сущность). Состояния MVP: PENDING → {COMPLETED | CANCELLED}.
+        `IN_PROGRESS`/`FAILED` зарезервированы для верифицированного флоу Фазы 2 (gated, отсутствуют в MVP).
+      required:
+        - id
+        - animalId
+        - status
+        - initiatedBy
+        - createdAt
+        - updatedAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID передачи
+        animalId:
+          type: string
+          format: uuid
+          description: Передаваемое животное
+        fromUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: From-сторона пользователь (задаётся iff текущий владелец при инициации был пользователем; ровно-одно-из с fromOrganizationId)
+        fromOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: From-сторона организация (задаётся iff текущий владелец при инициации был орг.; ровно-одно-из с fromUserId)
+        toUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Получатель-пользователь (ровно-одно-из с toOrganizationId)
+        toOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Получатель-организация (ровно-одно-из с toUserId)
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, CANCELLED]
+          description: >
+            Состояние жизненного цикла MVP. PENDING = ожидание получателя; COMPLETED = принято и переатрибутировано;
+            CANCELLED = отклонено / отменено-инициатором / истекло (см. terminalReason).
+        terminalReason:
+          type: string
+          nullable: true
+          enum: [declined, cancelled_by_initiator, expired]
+          description: >
+            Почему CANCELLED-передача завершилась (маппится на DB-колонку `failure_reason`, ADR-0013 §3).
+            Null пока PENDING и при COMPLETED.
+        transferReason:
+          type: string
+          nullable: true
+          description: Свободно-текстовая причина, которую инициатор указал при инициации
+        initiatedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: Принципал, инициировавший передачу (snapshot {actorId, principalType}, ADR-0011 §6)
+        respondedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          nullable: true
+          description: >
+            Принципал, принявший/отклонивший передачу (null пока PENDING; задаётся при COMPLETED
+            через accept и при CANCELLED через decline; null когда CANCELLED через initiator-cancel или
+            истечение).
+        expiresAt:
+          type: string
+          format: date-time
+          description: >
+            Когда ещё-PENDING передача трактуется как истёкшая (выставляется в createdAt + 72h, OQ-2).
+            Истечение вычисляется lazily при следующем чтении/действии (без фонового воркера в MVP).
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда передача финализирована в COMPLETED (иначе null; отлично от updatedAt)
+        createdAt:
+          type: string
+          format: date-time
+          description: Метка инициации
+        updatedAt:
+          type: string
+          format: date-time
+          description: Метка последнего обновления (подкладывает слабый ETag)
+  responses:
+    Problem:
+      description: Проблема RFC7807 (application/problem+json)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

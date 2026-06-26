@@ -60,7 +60,7 @@ Org-scoped membership is a separate axis: `organization_users.role_in_org = {OWN
 | **Other user profiles** | R (public fields) | R (full) | R/U/D |
 | **User roles / status (suspend)** | — | suspend/unsuspend (per moderation) | C/R/U/D |
 | **Animals** | C/R/U/D own | R any | R/U/D any |
-| **Animal ownership transfer** | initiate/confirm own (locked in MVP) | R | R/U |
+| **Animal ownership transfer** ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md)) | current owner initiates/cancels own; named recipient accepts/declines incoming | R | R/U |
 | **Listings** | C/R/U/D own (R any active) | R any (incl. pending) | R/U/D any |
 | **Listing moderation decision** | — | C (approve/reject/changes) | C |
 | **Moderation queue** | — | R | R |
@@ -77,9 +77,25 @@ Org-scoped membership is a separate axis: `organization_users.role_in_org = {OWN
 | **Audit log** | — | R (own actions) | R all |
 | **Favorites / saved searches** | C/R/U/D own | own | own |
 
+> **(round-8, normative) — ownership-transfer permissions are the real MVP rules (ADR-0013).**
+> **ЧТО:** Заменено «initiate/confirm own (locked in MVP)» на фактические MVP-права: текущий владелец инициирует/отменяет
+> свой трансфер; названный получатель принимает/отклоняет входящий; MODERATOR = R, ADMIN = R/U (override). Строка
+> одинакова при любом `principal_type` (ADR-0011 §7).
+> **ПОЧЕМУ:** «locked in MVP» противоречил апекс-требованию (BR animal-domain:56-61, GAP-TRACE-007), которое
+> ратифицировано [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md): трансфер — в MVP (упрощённый прямой флоу).
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** RBAC-матрица перестаёт врать о «заблокированности»; гварды получают однозначные права
+> (initiate/cancel = инициатор-владелец, accept/decline = получатель, R/U = ADMIN); owner-lock остаётся защитой
+> в глубину (только контролируемый путь через GUC). Согласовано с [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) §1/§5.
+
 ## Object-level (ownership) rules — must be enforced at service layer
 - **Animal:** mutable only by `owner_id == actor` OR actor is org-admin of `organization_id`. Immutable fields
   (species_id, sex, date_of_birth, breed_id) blocked by trigger regardless of role.
+- **Ownership transfer** ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md)): only the animal's **current
+  owner** (the present `owner_id`, or an org-admin of the present `organization_id`) may **initiate** a transfer; only
+  the **named recipient** (`to_user_id`/`to_organization_id`) may **accept** or **decline**; only the **initiator** may
+  **cancel** a still-`PENDING` transfer. MODERATOR = R, ADMIN = R/U (override). The same matrix row applies regardless of
+  `principal_type` (a HUMAN or AGENT principal may initiate/accept; ADR-0011 §7). The DB owner-lock trigger blocks any
+  `owner_id`/`organization_id` change **except** through the controlled transfer path (GUC `app.ownership_transfer`).
 - **Listing:** mutable only by `seller_id == actor` OR org-admin of the listing's `organization_id`.
 - **Conversation/message:** visible only to `participant_a_id`/`participant_b_id` (+ MODERATOR for review).
 - **Content report:** reporter sees own; MODERATOR/ADMIN see all.
@@ -97,5 +113,6 @@ Org-scoped membership is a separate axis: `organization_users.role_in_org = {OWN
 - [Security Specification](security_specification.md) · [ADR-0001](../../04-decisions/0001-tech-stack.md) ·
   [ADR-0006](../../04-decisions/0006-ai-agents-operate-platform.md) ·
   [ADR-0011](../../04-decisions/0011-agent-principal-actor-model.md) (agent-principal actor model, role canon) ·
+  [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) (MVP ownership transfer authz) ·
   [Identity Domain](../01-identity-domain.md) · [Admin Domain](../06-admin-domain.md)
 - 🌐 RU mirror: [docsRU/specs/security/rbac-matrix.md](../../../docsRU/specs/security/rbac-matrix.md)

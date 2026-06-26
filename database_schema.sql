@@ -219,15 +219,22 @@ CREATE INDEX idx_animals_father ON animals(father_id) WHERE father_id IS NOT NUL
 CREATE TABLE animal_ownership_history (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     animal_id UUID NOT NULL REFERENCES animals(id) ON DELETE RESTRICT, -- RESTRICT: preserve ownership trail (regulatory/traceability) even if animal removed
-    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    owner_id UUID REFERENCES users(id) ON DELETE RESTRICT,             -- nullable: an org-owned interval has no user owner (ADR-0013 OQ-1)
+    organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT, -- org owner for this interval (exactly-one-of with owner_id)
     start_date DATE NOT NULL,
     end_date DATE,
     transfer_reason TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- Exactly one of user/org owns an interval (mirrors animals.chk_animal_ownership; ADR-0013 OQ-1).
+    CONSTRAINT chk_aoh_owner_party CHECK (
+        (owner_id IS NOT NULL AND organization_id IS NULL) OR
+        (owner_id IS NULL AND organization_id IS NOT NULL)
+    )
 );
 
 CREATE INDEX idx_aoh_animal ON animal_ownership_history(animal_id);
 CREATE INDEX idx_aoh_owner ON animal_ownership_history(owner_id);
+CREATE INDEX idx_aoh_org ON animal_ownership_history(organization_id) WHERE organization_id IS NOT NULL;
 CREATE INDEX idx_aoh_dates ON animal_ownership_history(start_date, end_date);
 
 -- ========== Marketplace/Listings Domain ==========
@@ -503,25 +510,49 @@ CREATE INDEX idx_notiflog_status ON notification_logs(status);
 
 -- ========== Ownership Transfer (spec docs/specs/statemachines/ownership_transfer_state_machine.md) ==========
 -- Process entity for the transfer state machine (distinct from animal_ownership_history, which is the settled log).
--- NOTE: animal ownership changes are locked during MVP (see trg_animals_immutable_and_owner); this table
--- supports the documented post-MVP transfer workflow.
+-- MVP = simplified direct transfer (ADR-0013): PENDING → {COMPLETED | CANCELLED}. Ownership re-attribution is
+-- permitted ONLY through this workflow (the transfer service sets app.ownership_transfer='on' in the accept txn;
+-- see trg_animals_immutable_and_owner). IN_PROGRESS/FAILED + from/to_confirmed + payment_confirmed are reserved
+-- Phase-2 form, gated by feature_toggles.ownership_transfer_verification (default off).
 CREATE TABLE ownership_transfers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     animal_id UUID NOT NULL REFERENCES animals(id) ON DELETE RESTRICT,
     from_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
+    from_organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT, -- from-side org (exactly-one-of with from_user_id)
     to_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
+    to_organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,   -- to-side org (exactly-one-of with to_user_id)
+    initiated_by_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,         -- which user initiated (NULL-safe actor for org-from transfers)
+    responded_by_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,         -- who accepted/declined (which user)
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING'
-        CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED')),
-    from_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
-    to_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
-    payment_confirmed BOOLEAN NOT NULL DEFAULT FALSE, -- guard for ownership_transfer_state_machine
-    failure_reason TEXT,
+        CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED')), -- CANCELLED = decline/cancel/expire (ADR-0013 §3)
+    from_confirmed BOOLEAN NOT NULL DEFAULT FALSE,    -- Phase-2 two-sided ack (unused in MVP direct flow)
+    to_confirmed BOOLEAN NOT NULL DEFAULT FALSE,      -- Phase-2 two-sided ack (unused in MVP direct flow)
+    payment_confirmed BOOLEAN NOT NULL DEFAULT FALSE, -- Phase-2 verified-flow guard (unused in MVP)
+    failure_reason TEXT,                              -- terminal reason for CANCELLED: declined|cancelled_by_initiator|expired
+    transfer_reason TEXT,                             -- free-text reason the initiator gave; copied to history on completion
+    completed_at TIMESTAMP WITH TIME ZONE,            -- when finalized to COMPLETED (distinct from updated_at)
+    initiated_by_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (initiated_by_principal_type IN ('HUMAN','AGENT')), -- ADR-0011 snapshot
+    responded_by_principal_type VARCHAR(10) CHECK (responded_by_principal_type IS NULL OR responded_by_principal_type IN ('HUMAN','AGENT')),
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- Exactly one of user/org on EACH side (mirrors animals.chk_animal_ownership).
+    CONSTRAINT chk_owntransfer_from_party CHECK (
+        (from_user_id IS NOT NULL AND from_organization_id IS NULL) OR
+        (from_user_id IS NULL AND from_organization_id IS NOT NULL)
+    ),
+    CONSTRAINT chk_owntransfer_to_party CHECK (
+        (to_user_id IS NOT NULL AND to_organization_id IS NULL) OR
+        (to_user_id IS NULL AND to_organization_id IS NOT NULL)
+    )
 );
 CREATE INDEX idx_owntransfer_animal ON ownership_transfers(animal_id);
 CREATE INDEX idx_owntransfer_status ON ownership_transfers(status);
+-- At most one active PENDING transfer per animal (INV-4, ADR-0013 §3).
+CREATE UNIQUE INDEX uq_owntransfer_one_pending ON ownership_transfers(animal_id) WHERE status = 'PENDING';
+CREATE INDEX idx_owntransfer_from_org ON ownership_transfers(from_organization_id) WHERE from_organization_id IS NOT NULL;
+CREATE INDEX idx_owntransfer_to_org   ON ownership_transfers(to_organization_id)   WHERE to_organization_id IS NOT NULL;
+CREATE INDEX idx_owntransfer_to_user  ON ownership_transfers(to_user_id)           WHERE to_user_id IS NOT NULL;
 
 -- ========== Digital Assets / NFT readiness (ADR-0010) ==========
 -- Schema hook only: no minting/contracts/indexer in MVP. Behavior gated by feature_toggles ('digital_assets').
@@ -659,12 +690,16 @@ ON CONFLICT (key) DO NOTHING;
 -- (Removed the broken chk_animals_breed CHECK: it referenced a non-existent column `breed_text`
 --  and duplicated/conflicted with chk_animals_breed_dep.)
 
--- Immutable fields after creation & MVP ownership lock
+-- Immutable fields after creation + controlled ownership-transfer lock (single canonical definition).
+-- Immutable species_id/sex/date_of_birth/breed_id (breed allows the one-time custom->directory normalization).
+-- owner_id/organization_id may change ONLY through the ownership-transfer workflow, which sets the
+-- transaction-local GUC app.ownership_transfer='on' in the same txn (ADR-0013 §2, Option A). Outside that
+-- path the lock is fully in force (a stray UPDATE animals SET owner_id=... is still blocked). SET LOCAL is
+-- transaction-scoped, so the permission cannot leak to another statement/connection/pooled session.
 CREATE OR REPLACE FUNCTION trg_animals_immutable_and_owner()
 RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'UPDATE' THEN
-        -- Immutable fields
         IF OLD.species_id IS DISTINCT FROM NEW.species_id THEN
             RAISE EXCEPTION 'species_id cannot be changed after creation.';
         END IF;
@@ -674,13 +709,13 @@ BEGIN
         IF OLD.date_of_birth IS DISTINCT FROM NEW.date_of_birth THEN
             RAISE EXCEPTION 'date_of_birth cannot be changed after creation.';
         END IF;
-        IF OLD.breed_id IS DISTINCT FROM NEW.breed_id THEN
-            RAISE EXCEPTION 'breed_id cannot be changed after creation.';
+        IF OLD.breed_id IS NOT NULL AND OLD.breed_id IS DISTINCT FROM NEW.breed_id THEN
+            RAISE EXCEPTION 'breed_id cannot be changed after creation (only custom->directory normalization is allowed).';
         END IF;
-
-        -- MVP ownership lock
-        IF OLD.owner_id IS DISTINCT FROM NEW.owner_id THEN
-            RAISE EXCEPTION 'Changing ownership is not allowed during MVP phase.';
+        -- Controlled ownership change: allowed ONLY through the ownership-transfer workflow (GUC set).
+        IF (OLD.owner_id IS DISTINCT FROM NEW.owner_id OR OLD.organization_id IS DISTINCT FROM NEW.organization_id)
+           AND current_setting('app.ownership_transfer', true) IS DISTINCT FROM 'on' THEN
+            RAISE EXCEPTION 'Changing ownership is only allowed through the ownership-transfer workflow.';
         END IF;
     END IF;
     RETURN NEW;
@@ -1059,30 +1094,9 @@ CREATE INDEX IF NOT EXISTS idx_service_credentials_agent_active
 COMMENT ON TABLE service_credentials IS
   'ADR-0011 §5.3: rotatable/revocable hashed-secret store for AGENT-principal service-auth. FORM ONLY in MVP (gate off; not populated). In-monolith, never plaintext.';
 
--- Animal: relaxed breed normalization + org-ownership MVP lock
-CREATE OR REPLACE FUNCTION trg_animals_immutable_and_owner()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'UPDATE' THEN
-        IF OLD.species_id IS DISTINCT FROM NEW.species_id THEN
-            RAISE EXCEPTION 'species_id cannot be changed after creation.';
-        END IF;
-        IF OLD.sex IS DISTINCT FROM NEW.sex THEN
-            RAISE EXCEPTION 'sex cannot be changed after creation.';
-        END IF;
-        IF OLD.date_of_birth IS DISTINCT FROM NEW.date_of_birth THEN
-            RAISE EXCEPTION 'date_of_birth cannot be changed after creation.';
-        END IF;
-        IF OLD.breed_id IS NOT NULL AND OLD.breed_id IS DISTINCT FROM NEW.breed_id THEN
-            RAISE EXCEPTION 'breed_id cannot be changed after creation (only custom->directory normalization is allowed).';
-        END IF;
-        IF OLD.owner_id IS DISTINCT FROM NEW.owner_id OR OLD.organization_id IS DISTINCT FROM NEW.organization_id THEN
-            RAISE EXCEPTION 'Changing ownership is not allowed during MVP phase.';
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- Animal: trg_animals_immutable_and_owner is defined ONCE above (the controlled-transfer/GUC version,
+-- ADR-0013 §2). The previous duplicate "block all ownership change" CREATE OR REPLACE here was removed
+-- in migration 0023 — it shadowed the canonical def and physically blocked the apex transfer requirement.
 
 -- Animal: pedigree integrity (no self-parent, parent sex/species/DOB, cycle prevention)
 CREATE OR REPLACE FUNCTION enforce_pedigree_integrity()
