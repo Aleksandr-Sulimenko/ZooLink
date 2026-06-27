@@ -15,9 +15,38 @@ security:
 paths:
   /listings:
     get:
-      summary: List listings with filtering
+      summary: List & search listings (filter + geo + market)
       operationId: listListings
-      description: Public for active listings (security opt-out). Filter/sort query params stay snake_case (§12).
+      description: >
+        Public list/search over **ACTIVE** listings (anonymous reads opt out of auth). Slice 2
+        adds discovery: market filter (ADR-0002 hard split), geo radius search (Haversine +
+        bbox prefilter per `specs/07-geo-search-service.md`), species/breed filters, and a
+        whitelisted sort. Filter/sort query params stay **snake_case** (§12).
+
+        **`market` — conditional-required (ADR-0002 no-leak, see D2 note).** `market` is
+        **required** on the public/discovery path: any anonymous read, AND any request that
+        supplies geo params (`lat`/`lng`/`radius_km`). It MAY be omitted only for an
+        **authenticated owner-scoped** read whose results are already constrained to the actor's
+        own/org listings (server-side `listScope`). When required and absent → **422
+        `MARKET_REQUIRED`**. The market filter is applied via the join
+        `listings.animal_id → animals.species_id → species.market` and is **AND-intersected** —
+        it can only narrow, never widen — so **no response ever mixes markets** even with a
+        crafted `species_id`/`animal_id`/`organization_id`. *(OpenAPI cannot express this
+        conditional-required statically; it is a service-enforced invariant — see L2-1 in
+        `listing_state_machine.md`. The param is declared non-required here so authenticated
+        owner-scoped reads stay valid.)*
+
+        **Geo set (`lat`,`lng`,`radius_km`) is all-or-none.** Supplying some-but-not-all →
+        **422 `GEO_PARAMS_INCOMPLETE`**. `radius_km` outside **1–100** → **422
+        `RADIUS_OUT_OF_RANGE`**. Listings with NULL `lat`/`lng` are excluded from geo results
+        (no centroid fallback). `listings.search_radius_m` is **never** consulted as the search
+        radius (geo-spec §153). The antimeridian (±180° lng, RF Chukotka/Kamchatka) bbox is
+        split per geo-spec; near-pole `Δlng` is clamped.
+
+        **Sort whitelist:** `created_at`, `price`, `distance`, each `:asc|:desc`. `distance` is
+        valid **only** when `lat`/`lng` are present (else **400**). Unknown sort field/direction
+        → **400**. Default sort: with geo → `distance:asc` (tie-break `created_at:desc, id:asc`,
+        geo-spec §143); without geo → `created_at:desc`.
       security: []
       parameters:
         - in: query
@@ -36,6 +65,34 @@ paths:
           name: branch_id
           schema: { type: string, format: uuid }
           description: Filter by branch ID
+        - in: query
+          name: market
+          schema: { type: string, enum: [pet, livestock] }
+          description: >
+            Market filter (ADR-0002 hard split). Conditional-required (see op description):
+            required on the public/discovery path and whenever geo params are present; optional
+            on authenticated owner-scoped reads. Applied via the species join, AND-intersected —
+            results never mix markets.
+        - in: query
+          name: species_id
+          schema: { type: integer }
+          description: Filter by species (INT lookup; AND-intersected with `market`)
+        - in: query
+          name: breed_id
+          schema: { type: integer }
+          description: Filter by breed (INT lookup)
+        - in: query
+          name: lat
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+          description: Search-center latitude (WGS84). Part of the all-or-none geo set with `lng`+`radius_km`.
+        - in: query
+          name: lng
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+          description: Search-center longitude (WGS84). Part of the all-or-none geo set with `lat`+`radius_km`.
+        - in: query
+          name: radius_km
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: Search radius in km (1–100; geo-spec §152). Part of the all-or-none geo set. NOT `listings.search_radius_m`.
         - in: query
           name: listing_type
           schema: { type: string, enum: [sale, breeding, show, adoption, stud_service, leasing] }
@@ -57,6 +114,13 @@ paths:
           schema: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
           description: Currency code (ISO 4217, e.g., RUB, USD)
         - in: query
+          name: sort
+          schema: { type: string, example: 'distance:asc' }
+          description: >
+            Sort `<field>:<asc|desc>` (§12), whitelist `created_at`|`price`|`distance`.
+            `distance` requires `lat`/`lng` (else 400); unknown field/direction → 400. Default:
+            geo→`distance:asc`, else `created_at:desc`.
+        - in: query
           name: page
           schema: { type: integer, minimum: 1, default: 1 }
           description: Page number for pagination
@@ -76,7 +140,8 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Listing' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
-        '400': { $ref: '#/components/responses/Problem' }
+        '400': { $ref: '#/components/responses/Problem' }   # unknown/invalid sort; sort=distance without coords
+        '422': { $ref: '#/components/responses/Problem' }   # MARKET_REQUIRED / GEO_PARAMS_INCOMPLETE / RADIUS_OUT_OF_RANGE
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Create a new listing (DRAFT)
@@ -542,6 +607,14 @@ components:
           format: double
           nullable: true
           description: Longitude (MVP-primary geo storage; -180..180)
+        distanceM:
+          type: integer
+          nullable: true
+          readOnly: true
+          description: >
+            Distance in **meters** from the search center to this listing (Haversine, rounded).
+            Populated **only** when the request supplied `lat`/`lng` (a geo search); null
+            otherwise. Lets a `sort=distance` client render the distance. Computed, not stored.
         expiresAt:
           type: string
           format: date-time

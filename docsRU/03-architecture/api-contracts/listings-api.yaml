@@ -15,9 +15,38 @@ security:
 paths:
   /listings:
     get:
-      summary: Список объявлений с фильтрацией
+      summary: Список и поиск объявлений (фильтр + гео + рынок)
       operationId: listListings
-      description: Публично для активных объявлений (security opt-out). Query-параметры filter/sort — snake_case (§12).
+      description: >
+        Публичный список/поиск по **ACTIVE**-объявлениям (анонимные чтения opt-out от auth). Slice 2
+        добавляет discovery: фильтр рынка (ADR-0002 hard split), гео-поиск по радиусу (Haversine +
+        bbox-префильтр по `specs/07-geo-search-service.md`), фильтры по виду/породе и
+        whitelisted-сортировку. Query-параметры filter/sort остаются **snake_case** (§12).
+
+        **`market` — conditional-required (ADR-0002 no-leak, см. замечание D2).** `market`
+        **обязателен** на public/discovery-пути: любое анонимное чтение И любой запрос, который
+        передаёт гео-параметры (`lat`/`lng`/`radius_km`). Он МОЖЕТ быть опущен только для
+        **аутентифицированного owner-scoped** чтения, результаты которого уже ограничены
+        own/org-объявлениями актора (server-side `listScope`). Когда обязателен и отсутствует → **422
+        `MARKET_REQUIRED`**. Фильтр рынка применяется через join
+        `listings.animal_id → animals.species_id → species.market` и **AND-пересекается** —
+        он может только сузить, никогда не расширить — так что **ни один ответ не смешивает рынки** даже с
+        подделанным `species_id`/`animal_id`/`organization_id`. *(OpenAPI не может выразить этот
+        conditional-required статически; это service-enforced инвариант — см. L2-1 в
+        `listing_state_machine.md`. Параметр объявлен non-required здесь, чтобы аутентифицированные
+        owner-scoped чтения оставались валидны.)*
+
+        **Гео-набор (`lat`,`lng`,`radius_km`) — all-or-none.** Передача части-но-не-всех →
+        **422 `GEO_PARAMS_INCOMPLETE`**. `radius_km` вне **1–100** → **422
+        `RADIUS_OUT_OF_RANGE`**. Объявления с NULL `lat`/`lng` исключаются из гео-результатов
+        (без centroid-fallback). `listings.search_radius_m` **никогда** не используется как радиус
+        поиска (geo-spec §153). Антимеридиан (±180° lng, РФ Чукотка/Камчатка) bbox
+        разбивается по geo-spec; near-pole `Δlng` зажимается.
+
+        **Whitelist сортировки:** `created_at`, `price`, `distance`, каждый `:asc|:desc`. `distance`
+        валиден **только** когда присутствуют `lat`/`lng` (иначе **400**). Неизвестное поле/направление
+        → **400**. Сортировка по умолчанию: с гео → `distance:asc` (tie-break `created_at:desc, id:asc`,
+        geo-spec §143); без гео → `created_at:desc`.
       security: []
       parameters:
         - in: query
@@ -36,6 +65,34 @@ paths:
           name: branch_id
           schema: { type: string, format: uuid }
           description: Фильтр по ID филиала
+        - in: query
+          name: market
+          schema: { type: string, enum: [pet, livestock] }
+          description: >
+            Фильтр рынка (ADR-0002 hard split). Conditional-required (см. описание операции):
+            обязателен на public/discovery-пути и всякий раз, когда присутствуют гео-параметры; опционален
+            на аутентифицированных owner-scoped чтениях. Применяется через species-join, AND-пересекается —
+            результаты никогда не смешивают рынки.
+        - in: query
+          name: species_id
+          schema: { type: integer }
+          description: Фильтр по виду (INT lookup; AND-пересекается с `market`)
+        - in: query
+          name: breed_id
+          schema: { type: integer }
+          description: Фильтр по породе (INT lookup)
+        - in: query
+          name: lat
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+          description: Широта центра поиска (WGS84). Часть all-or-none гео-набора с `lng`+`radius_km`.
+        - in: query
+          name: lng
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+          description: Долгота центра поиска (WGS84). Часть all-or-none гео-набора с `lat`+`radius_km`.
+        - in: query
+          name: radius_km
+          schema: { type: integer, minimum: 1, maximum: 100 }
+          description: Радиус поиска в км (1–100; geo-spec §152). Часть all-or-none гео-набора. НЕ `listings.search_radius_m`.
         - in: query
           name: listing_type
           schema: { type: string, enum: [sale, breeding, show, adoption, stud_service, leasing] }
@@ -57,6 +114,13 @@ paths:
           schema: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
           description: Код валюты (ISO 4217, напр. RUB, USD)
         - in: query
+          name: sort
+          schema: { type: string, example: 'distance:asc' }
+          description: >
+            Сортировка `<field>:<asc|desc>` (§12), whitelist `created_at`|`price`|`distance`.
+            `distance` требует `lat`/`lng` (иначе 400); неизвестное поле/направление → 400. По умолчанию:
+            гео→`distance:asc`, иначе `created_at:desc`.
+        - in: query
           name: page
           schema: { type: integer, minimum: 1, default: 1 }
           description: Номер страницы для пагинации
@@ -76,7 +140,8 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Listing' }
                   meta: { $ref: '#/components/schemas/PageMeta' }
-        '400': { $ref: '#/components/responses/Problem' }
+        '400': { $ref: '#/components/responses/Problem' }   # unknown/invalid sort; sort=distance without coords
+        '422': { $ref: '#/components/responses/Problem' }   # MARKET_REQUIRED / GEO_PARAMS_INCOMPLETE / RADIUS_OUT_OF_RANGE
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Создать новое объявление (DRAFT)
@@ -542,6 +607,14 @@ components:
           format: double
           nullable: true
           description: Долгота (MVP-первичное гео-хранилище; -180..180)
+        distanceM:
+          type: integer
+          nullable: true
+          readOnly: true
+          description: >
+            Расстояние в **метрах** от центра поиска до этого объявления (Haversine, округлённое).
+            Заполняется **только** когда запрос передал `lat`/`lng` (гео-поиск); иначе null.
+            Позволяет `sort=distance`-клиенту отрисовать расстояние. Вычисляется, не хранится.
         expiresAt:
           type: string
           format: date-time

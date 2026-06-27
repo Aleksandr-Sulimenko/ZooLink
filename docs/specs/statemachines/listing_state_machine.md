@@ -154,6 +154,59 @@ C/R/U/D **own** (R any **active**); MODERATOR = **R any** (incl. pending) — **
 ADMIN = R/U/D any. Mutating contract ops therefore exclude MODERATOR from `x-required-roles`
 (D4), and object-level ownership (`seller_id==actor` or org-admin) is enforced at the service.
 
+## Listings Slice 2 — search/filter invariants & negative cases (round-N, normative)
+
+> **Source-of-truth note.** This extends `GET /v1/listings` (read-only; no migration — all
+> indexes exist). Contract: [listings-api.yaml](../../03-architecture/api-contracts/listings-api.yaml)
+> (`listListings`). Geo algorithm: [07-geo-search-service.md](../07-geo-search-service.md)
+> (Haversine + bbox prefilter; radius **1–100 km**; `search_radius_m` is NOT the search radius).
+> Market split: [ADR-0002](../../04-decisions/0002-hard-split-markets.md) (MVP = one endpoint +
+> enforced `market` filter, per [ADR-0009](../../04-decisions/0009-mvp-vs-target-architecture.md);
+> the target separate-per-market endpoints are ADR-0002 §97). This is the shared invariant list
+> for **backend-engineer** and **reviewer-qa**.
+>
+> **WHAT:** add geo (`lat`/`lng`/`radius_km`), `market`, `species_id`/`breed_id`, and a
+> whitelisted `sort` to the public listings search; add `distanceM` to the response.
+> **WHY:** discovery is a core marketplace requirement; the schema/indexes (`idx_listings_latlng`,
+> `idx_animals_species_breed`, `species.market`) and the geo algorithm already exist, but the
+> contract exposed none of it — backend had nothing to build search against.
+> **WHY-BETTER-for-the-whole-project:** keeps the hard market split (ADR-0002) enforced at the
+> contract+service so no query can leak across markets; reuses the MVP Haversine path (no PostGIS
+> until Фаза 2, ADR-0009); snake_case filter/sort (§12) and a sort whitelist keep the query
+> surface safe and codegen-stable; `distanceM` is additive (null off the geo path).
+
+### Slice-2 scope
+
+**IN:** geo radius search, market filter, species/breed filters, sort whitelist, `distanceM`.
+**Deferred (own later slices — tracked, not dropped):** **saved_searches** save/list/delete
+(`saved_searches` table exists, geo-spec §86 — Slice 3) and **address→lat/lng geocoding**
+(caller passes coords; Yandex provider for a later slice). **PostGIS** geo is Фаза 2 (ADR-0009).
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected/handled) | Enforced by | Error → HTTP / code |
+|---|---|---|---|---|
+| L2-1 | **MARKET NO-LEAK (ADR-0002, IDOR-class).** A `market=pet` search returns **zero** livestock rows (and vice-versa), even with a crafted `species_id`/`animal_id`/`organization_id`. The market filter joins `listings.animal_id → animals.species_id → species.market` and is **AND-intersected** — it can only narrow. | a request that tries to widen across markets via another filter. | service: mandatory `species.market` join clause, AND-composed; market derived not trusted from client beyond the enum | results never mix markets; n/a error (filter, not reject) |
+| L2-2 | **`market` conditional-required.** Required on the public/discovery path (anonymous read OR any geo param present); optional only for an authenticated owner-scoped read (results pre-constrained by `listScope`). | a public/geo request with no `market`. | service (the OpenAPI param is non-required; this rule is service-enforced — see D2 note) | 422 `MARKET_REQUIRED` |
+| L2-3 | **Geo set is all-or-none:** `lat`,`lng`,`radius_km` supplied together or not at all. | one or two of the three present. | service | 422 `GEO_PARAMS_INCOMPLETE` |
+| L2-4 | **Radius bounds 1–100 km** (geo-spec §152). | `radius_km` < 1 or > 100. | service (param `minimum`/`maximum` + service) | 422 `RADIUS_OUT_OF_RANGE` |
+| L2-5 | **lat/lng range** lat ∈ [−90,90], lng ∈ [−180,180]. | out-of-range coordinate. | param schema + service | 422 `VALIDATION_ERROR` |
+| L2-6 | **ACTIVE-only visibility composes with geo.** The geo clause AND `status='ACTIVE'` (public reads never see non-ACTIVE) — geo never widens visibility. | a geo search surfacing a DRAFT/PENDING/DEACTIVATED listing. | service (status filter AND geo clause) | n/a (filter) |
+| L2-7 | **Haversine boundary (±100 m tolerance, geo-spec §141):** a point just-inside the radius is included, just-outside excluded, exactly-at-radius included. | a true in-radius point dropped, or an out-of-radius point returned beyond tolerance. | service Haversine `d ≤ radius_m` with tolerance | n/a (correctness; QA boundary tests) |
+| L2-8 | **Bbox prefilter is loss-less:** the bounding-box prefilter never drops a point that the exact Haversine would keep (prefilter ⊇ result set). | a true in-radius point excluded by a too-tight bbox. | service (Δlat/Δlng per geo-spec §139) | n/a (correctness) |
+| L2-9 | **NULL coordinates excluded** from geo results — no city-centroid fallback (geo-spec §151). | a listing with NULL lat/lng appearing in a geo search. | service (geo query requires non-null lat/lng) | n/a (filter) |
+| L2-10 | **Antimeridian (±180° lng):** when the bbox crosses ±180 (RF Chukotka/Kamchatka), it is split into two lng ranges (`lng ≥ min` OR `lng ≤ max`); near-pole `Δlng` clamped to 180°. | a search near ±180° missing valid points on the wrapped side. | service (geo-spec §148–150) | n/a (correctness) |
+| L2-11 | **Sort whitelist:** only `created_at`,`price`,`distance` × `asc`/`desc`. | an unknown sort field or direction. | service (whitelist) | 400 `VALIDATION_ERROR` |
+| L2-12 | **`sort=distance` requires coordinates.** | `sort=distance` without `lat`/`lng`. | service | 400 `VALIDATION_ERROR` |
+| L2-13 | **Deterministic order:** geo → `distance_m ASC, created_at DESC, id ASC`; non-geo default `created_at DESC` (stable tie-break by `id`). | unstable pagination (rows shifting between pages). | service ORDER BY (geo-spec §143) | n/a (correctness) |
+| L2-14 | **`distanceM` populated only on a geo search;** null otherwise; meters, rounded; computed not stored. | `distanceM` set without coords, or persisted. | service (compute per request) | n/a (response shape) |
+| L2-15 | **Parameterized SQL only** (no string-built filters — ESLint-guarded, doc-code-protocol). | any geo/filter value concatenated into SQL. | service (Kysely/`$queryRaw` bindings) | n/a (security invariant) |
+| L2-16 | **`search_radius_m` is never consulted** as the geo search radius (geo-spec §153) — `radius_km` is authoritative. | service reading `listings.search_radius_m` for the radius. | service (use request `radius_km`) | n/a (correctness) |
+
+**Domain error codes (extend API_CONVENTIONS §4):** `MARKET_REQUIRED` (422),
+`GEO_PARAMS_INCOMPLETE` (422), `RADIUS_OUT_OF_RANGE` (422); plus standard `VALIDATION_ERROR`
+(400 for sort-whitelist / `distance`-without-coords; 422 for value violations).
+
 ### Reconciliations (round-N, normative)
 
 **N1 — body `sellerId` is rejected (400), not ignored.**

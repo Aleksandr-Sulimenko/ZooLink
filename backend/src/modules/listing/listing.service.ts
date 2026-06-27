@@ -31,6 +31,15 @@ const MIN_LISTING_PRICE = 0;
 /** States from which an owner soft-withdraw is allowed (L-8); terminal states reject with 409. */
 const WITHDRAWABLE: ReadonlySet<ListingStatus> = new Set(['DRAFT', 'PENDING_MODERATION', 'ACTIVE']);
 
+// ── Geo search constants (Slice 2; geo-spec 07-geo-search-service.md §137–153) ─────────────────
+const EARTH_RADIUS_M = 6_371_000;
+const M_PER_DEG_LAT = 111_320; // meters per degree latitude
+const RADIUS_KM_MIN = 1;
+const RADIUS_KM_MAX = 100;
+const BOUNDARY_TOLERANCE_M = 100; // ±100 m so "exactly at radius" is included (§141, L2-7)
+/** Whitelisted sort fields (L2-11). `distance` requires geo coords (L2-12). */
+const SORT_FIELDS = new Set(['created_at', 'price', 'distance']);
+
 /** A raw `listings` row, narrowed to the columns this slice reads/maps. */
 interface ListingRow {
   id: string;
@@ -56,6 +65,21 @@ interface ListingRow {
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  /** Only present on a geo-search raw row (computed Haversine meters); undefined on the Prisma path. */
+  distance_m?: number | null;
+}
+
+/** A validated geo-search center + radius in meters (Slice 2). */
+interface GeoSearch {
+  lat: number;
+  lng: number;
+  radiusM: number;
+}
+
+/** A whitelisted, parsed sort (L2-11). */
+interface ParsedSort {
+  field: 'created_at' | 'price' | 'distance';
+  dir: 'asc' | 'desc';
 }
 
 interface AnimalOwnerRow {
@@ -323,8 +347,131 @@ export class ListingService {
     return this.toView(row);
   }
 
-  // ── List (public ACTIVE; owner-scoped for non-active) ────────────────────────────────────────
+  // ── List & search (Slice 1 filters + Slice 2 market/geo/species/breed/sort) ──────────────────
   async list(query: ListingListQueryDto, actor: AuthPrincipal | undefined): Promise<Paginated<ListingView>> {
+    const geo = this.parseGeo(query); // L2-3/L2-4/L2-5: validates the all-or-none geo set
+    const sort = this.parseSort(query.sort, geo !== null); // L2-11/L2-12: whitelist + distance-needs-coords
+    this.assertMarketRequired(query, actor, geo); // L2-2
+
+    // The discovery path (market/species/breed join, geo, or distance sort) uses parameterized raw SQL
+    // (ADR-0007). The plain Slice-1 filter/owner-scope path stays on Prisma. Both AND-compose listScope.
+    const needsDiscovery =
+      query.market !== undefined ||
+      query.species_id !== undefined ||
+      query.breed_id !== undefined ||
+      geo !== null ||
+      sort.field === 'distance';
+
+    if (!needsDiscovery) {
+      return this.listSimple(query, actor);
+    }
+    return this.listDiscovery(query, actor, geo, sort);
+  }
+
+  /** Slice-1 path: pure `listings` filters + the Prisma listScope. */
+  private async listSimple(query: ListingListQueryDto, actor: AuthPrincipal | undefined): Promise<Paginated<ListingView>> {
+    const where = this.baseWhere(query);
+    const scope = await this.listScope(actor);
+    const finalWhere: Prisma.listingsWhereInput = scope ? { AND: [where, scope] } : where;
+    const [rows, total] = await Promise.all([
+      this.prisma.listings.findMany({
+        where: finalWhere,
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        skip: query.skip,
+        take: query.limit,
+      }) as unknown as Promise<ListingRow[]>,
+      this.prisma.listings.count({ where: finalWhere }),
+    ]);
+    return paginate(rows.map((r) => this.toView(r)), total, query.page, query.limit);
+  }
+
+  /**
+   * Slice-2 discovery path. Parameterized `$queryRaw` (Prisma.sql fragments — bound params only,
+   * ESLint-guarded, L2-15). The market filter (L2-1) is a MANDATORY AND-composed join clause
+   * `l.animal_id → a.species_id → s.market`, so it can only narrow, never widen across markets.
+   * Geo applies the bbox prefilter (L2-8) + exact Haversine (L2-7) with NULL coords excluded (L2-9).
+   */
+  private async listDiscovery(
+    query: ListingListQueryDto,
+    actor: AuthPrincipal | undefined,
+    geo: GeoSearch | null,
+    sort: ParsedSort,
+  ): Promise<Paginated<ListingView>> {
+    const conds: Prisma.Sql[] = [];
+
+    // Plain `listings` column filters.
+    if (query.animal_id !== undefined) conds.push(Prisma.sql`l.animal_id = ${query.animal_id}::uuid`);
+    if (query.seller_id !== undefined) conds.push(Prisma.sql`l.seller_id = ${query.seller_id}::uuid`);
+    if (query.organization_id !== undefined) conds.push(Prisma.sql`l.organization_id = ${query.organization_id}::uuid`);
+    if (query.branch_id !== undefined) conds.push(Prisma.sql`l.branch_id = ${query.branch_id}::uuid`);
+    if (query.listing_type !== undefined) conds.push(Prisma.sql`l.listing_type = ${query.listing_type}`);
+    if (query.is_active !== undefined) conds.push(Prisma.sql`l.is_active = ${query.is_active}`);
+    if (query.currency !== undefined) conds.push(Prisma.sql`l.currency = ${query.currency}`);
+    if (query.price_min !== undefined) conds.push(Prisma.sql`l.price_cents >= ${query.price_min}`);
+    if (query.price_max !== undefined) conds.push(Prisma.sql`l.price_cents <= ${query.price_max}`);
+
+    // L2-1: market — mandatory AND-composed species-join clause (narrow-only, never widen).
+    if (query.market !== undefined) conds.push(Prisma.sql`s.market = ${query.market}`);
+    if (query.species_id !== undefined) conds.push(Prisma.sql`a.species_id = ${query.species_id}`);
+    if (query.breed_id !== undefined) conds.push(Prisma.sql`a.breed_id = ${query.breed_id}`);
+
+    // L-5/L2-6: visibility scope, AND-composed (ACTIVE-only for anon; can only narrow).
+    const scope = await this.listScopeSql(actor);
+    if (scope) conds.push(scope);
+
+    // Geo: bbox prefilter (L2-8) + NULL-coords excluded (L2-9). Exact Haversine added below as a HAVING-like filter.
+    let distanceSelect = Prisma.sql`NULL::double precision AS distance_m`;
+    if (geo) {
+      conds.push(Prisma.sql`l.lat IS NOT NULL AND l.lng IS NOT NULL`);
+      conds.push(this.bboxSql(geo)); // bounding-box prefilter (uses idx_listings_latlng)
+    }
+
+    if (geo) {
+      // Exact Haversine distance (meters), bound params only.
+      distanceSelect = Prisma.sql`(
+        2 * ${EARTH_RADIUS_M} * asin(sqrt(
+          power(sin(radians(l.lat - ${geo.lat}) / 2), 2) +
+          cos(radians(${geo.lat})) * cos(radians(l.lat)) *
+          power(sin(radians(l.lng - ${geo.lng}) / 2), 2)
+        ))
+      ) AS distance_m`;
+    }
+
+    const whereSql = conds.length ? Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}` : Prisma.empty;
+
+    // The exact-distance filter (L2-7, ±100 m tolerance) wraps the bbox-prefiltered set.
+    const fromSql = Prisma.sql`
+      FROM listings l
+      JOIN animals a ON a.id = l.animal_id
+      JOIN species s ON s.id = a.species_id
+      ${whereSql}`;
+    const havingSql = geo
+      ? Prisma.sql`WHERE sub.distance_m <= ${geo.radiusM + BOUNDARY_TOLERANCE_M}`
+      : Prisma.empty;
+
+    const orderSql = this.orderBySql(sort);
+
+    const rows = await this.prisma.$queryRaw<ListingRow[]>`
+      SELECT * FROM (
+        SELECT l.*, ${distanceSelect}
+        ${fromSql}
+      ) sub
+      ${havingSql}
+      ${orderSql}
+      LIMIT ${query.limit} OFFSET ${query.skip}`;
+
+    const countRows = await this.prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS count FROM (
+        SELECT l.id, ${distanceSelect}
+        ${fromSql}
+      ) sub
+      ${havingSql}`;
+    const total = Number(countRows[0]?.count ?? 0n);
+
+    return paginate(rows.map((r) => this.toView(r)), total, query.page, query.limit);
+  }
+
+  private baseWhere(query: ListingListQueryDto): Prisma.listingsWhereInput {
     const where: Prisma.listingsWhereInput = {};
     if (query.animal_id !== undefined) where.animal_id = query.animal_id;
     if (query.seller_id !== undefined) where.seller_id = query.seller_id;
@@ -337,21 +484,100 @@ export class ListingService {
     if (query.price_min !== undefined) price.gte = BigInt(query.price_min);
     if (query.price_max !== undefined) price.lte = BigInt(query.price_max);
     if (price.gte !== undefined || price.lte !== undefined) where.price_cents = price;
+    return where;
+  }
 
-    // L-5: scope. Anonymous / non-operator callers see only ACTIVE listings UNLESS the row is theirs.
-    const scope = await this.listScope(actor);
-    const finalWhere: Prisma.listingsWhereInput = scope ? { AND: [where, scope] } : where;
+  /**
+   * L2-2: `market` is required on the public/discovery path — an anonymous read OR any geo request —
+   * else 422 MARKET_REQUIRED. It is optional for an authenticated read (results already constrained by
+   * the owner scope). ADMIN/MODERATOR operate cross-market and are exempt.
+   */
+  private assertMarketRequired(query: ListingListQueryDto, actor: AuthPrincipal | undefined, geo: GeoSearch | null): void {
+    if (query.market !== undefined) return;
+    if (actor && (actor.role === 'ADMIN' || actor.role === 'MODERATOR')) return;
+    const isPublic = !actor;
+    if (isPublic || geo !== null) {
+      throw new UnprocessableEntityException({ message: 'A market filter is required for this search', code: 'MARKET_REQUIRED' });
+    }
+  }
 
-    const [rows, total] = await Promise.all([
-      this.prisma.listings.findMany({
-        where: finalWhere,
-        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-        skip: query.skip,
-        take: query.limit,
-      }) as unknown as Promise<ListingRow[]>,
-      this.prisma.listings.count({ where: finalWhere }),
-    ]);
-    return paginate(rows.map((r) => this.toView(r)), total, query.page, query.limit);
+  /** Validate + normalize the all-or-none geo set (L2-3/L2-4/L2-5). null = no geo. */
+  private parseGeo(query: ListingListQueryDto): GeoSearch | null {
+    const present = [query.lat, query.lng, query.radius_km].filter((v) => v !== undefined).length;
+    if (present === 0) return null;
+    if (present !== 3) {
+      throw new UnprocessableEntityException({ message: 'lat, lng and radius_km must all be provided together', code: 'GEO_PARAMS_INCOMPLETE' });
+    }
+    const { lat, lng, radius_km } = query as { lat: number; lng: number; radius_km: number };
+    if (radius_km < RADIUS_KM_MIN || radius_km > RADIUS_KM_MAX) {
+      throw new UnprocessableEntityException({ message: `radius_km must be between ${RADIUS_KM_MIN} and ${RADIUS_KM_MAX}`, code: 'RADIUS_OUT_OF_RANGE' });
+    }
+    // lat/lng range is enforced by the DTO @Min/@Max; re-assert defensively (L2-5).
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new UnprocessableEntityException({ message: 'lat/lng out of range', code: 'VALIDATION_ERROR' });
+    }
+    return { lat, lng, radiusM: radius_km * 1000 };
+  }
+
+  /** Parse + whitelist the sort (L2-11/L2-12). `distance` requires geo coords. Default per geo presence (L2-13). */
+  private parseSort(sort: string | undefined, hasGeo: boolean): ParsedSort {
+    if (!sort) {
+      return hasGeo ? { field: 'distance', dir: 'asc' } : { field: 'created_at', dir: 'desc' };
+    }
+    const [field, dirRaw] = sort.split(':');
+    if (!SORT_FIELDS.has(field) || (dirRaw !== undefined && dirRaw !== 'asc' && dirRaw !== 'desc')) {
+      throw new BadRequestException({ message: 'sort must be <created_at|price|distance>:<asc|desc>', code: 'VALIDATION_ERROR' });
+    }
+    if (field === 'distance' && !hasGeo) {
+      throw new BadRequestException({ message: 'sort=distance requires lat/lng/radius_km', code: 'VALIDATION_ERROR' });
+    }
+    return { field: field as ParsedSort['field'], dir: dirRaw === 'asc' ? 'asc' : dirRaw === 'desc' ? 'desc' : field === 'distance' ? 'asc' : 'desc' };
+  }
+
+  /** Deterministic ORDER BY with stable tie-break (L2-13). Column whitelist (no interpolation). */
+  private orderBySql(sort: ParsedSort): Prisma.Sql {
+    const dir = sort.dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+    if (sort.field === 'distance') {
+      return Prisma.sql`ORDER BY sub.distance_m ${dir}, sub.created_at DESC, sub.id ASC`;
+    }
+    if (sort.field === 'price') {
+      return Prisma.sql`ORDER BY sub.price_cents ${dir} NULLS LAST, sub.created_at DESC, sub.id ASC`;
+    }
+    return Prisma.sql`ORDER BY sub.created_at ${dir}, sub.id ASC`;
+  }
+
+  /** Bounding-box prefilter (geo-spec §139, L2-8) — loss-less; antimeridian split (§148, L2-10). */
+  private bboxSql(geo: GeoSearch): Prisma.Sql {
+    const dLat = geo.radiusM / M_PER_DEG_LAT;
+    const cosLat = Math.cos((geo.lat * Math.PI) / 180);
+    // Near-pole clamp (cos→0): cap Δlng at 180° to avoid blow-up (§150).
+    const dLng = Math.abs(cosLat) < 1e-9 ? 180 : Math.min(180, geo.radiusM / (M_PER_DEG_LAT * Math.abs(cosLat)));
+    const latMin = geo.lat - dLat;
+    const latMax = geo.lat + dLat;
+    let lngMin = geo.lng - dLng;
+    let lngMax = geo.lng + dLng;
+    const latClause = Prisma.sql`l.lat BETWEEN ${latMin} AND ${latMax}`;
+    // Antimeridian (L2-10): if the lng window wraps past ±180, split into (lng ≥ min) OR (lng ≤ max).
+    if (lngMin < -180 || lngMax > 180) {
+      lngMin = ((lngMin + 180) % 360 + 360) % 360 - 180;
+      lngMax = ((lngMax + 180) % 360 + 360) % 360 - 180;
+      return Prisma.sql`(${latClause} AND (l.lng >= ${lngMin} OR l.lng <= ${lngMax}))`;
+    }
+    return Prisma.sql`(${latClause} AND l.lng BETWEEN ${lngMin} AND ${lngMax})`;
+  }
+
+  /** The owner/visibility scope as a SQL fragment (mirrors {@link listScope}). null = unrestricted. */
+  private async listScopeSql(actor: AuthPrincipal | undefined): Promise<Prisma.Sql | null> {
+    if (actor && (actor.role === 'ADMIN' || actor.role === 'MODERATOR')) return null;
+    const ors: Prisma.Sql[] = [Prisma.sql`l.status = 'ACTIVE'`];
+    if (actor) {
+      ors.push(Prisma.sql`l.seller_id = ${actor.userId}::uuid`);
+      const orgIds = await this.orgAdminIds(actor.userId);
+      if (orgIds.length) {
+        ors.push(Prisma.sql`l.organization_id IN (${Prisma.join(orgIds.map((o) => Prisma.sql`${o}::uuid`))})`);
+      }
+    }
+    return Prisma.sql`(${Prisma.join(ors, ' OR ')})`;
   }
 
   /**
@@ -584,6 +810,8 @@ export class ListingService {
       transactionId: row.transaction_id,
       lat: row.lat,
       lng: row.lng,
+      // L2-14: distanceM only on a geo search (raw row carries distance_m); rounded meters, else null.
+      distanceM: row.distance_m === undefined || row.distance_m === null ? null : Math.round(row.distance_m),
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

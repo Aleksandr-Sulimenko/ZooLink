@@ -102,18 +102,24 @@ function setup(opts: SetupOpts = {}) {
   };
   const orgFindFirst = jest.fn().mockResolvedValue(opts.orgAdmin ? { id: 'm' } : null);
   const orgFindMany = jest.fn().mockResolvedValue([]);
+  // Discovery path uses $queryRaw (data rows then a count row). Default: empty page.
+  const queryRaw = jest
+    .fn()
+    .mockResolvedValueOnce([]) // data rows
+    .mockResolvedValueOnce([{ count: 0n }]); // count
   const tx = { listings, animals, listing_photos };
   const prisma = {
     listings,
     animals,
     listing_photos,
     organization_users: { findFirst: orgFindFirst, findMany: orgFindMany },
+    $queryRaw: queryRaw,
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
   const svc = new ListingService(prisma, audit);
-  return { svc, listings, animals, listing_photos, record, orgFindFirst, orgFindMany };
+  return { svc, listings, animals, listing_photos, record, orgFindFirst, orgFindMany, queryRaw };
 }
 
 const validCreate = (over: Partial<ListingCreateDto> = {}): ListingCreateDto => ({
@@ -338,28 +344,86 @@ describe('ListingService', () => {
     });
   });
 
-  describe('list — L-5 scoping', () => {
+  describe('list — L-5 scoping (Slice-1 simple path: authenticated, no discovery params)', () => {
     const q = (over: Record<string, unknown> = {}) => ({ page: 1, limit: 20, skip: 0, ...over }) as never;
 
-    it('an anonymous caller is scoped to ACTIVE only', async () => {
-      const { svc, listings } = setup();
-      await svc.list(q(), undefined);
-      const arg = listings.findMany.mock.calls[0][0] as { where: { AND: unknown[] } };
-      expect(arg.where.AND[1]).toEqual({ OR: [{ status: 'ACTIVE' }] });
-    });
-
-    it('a USER sees ACTIVE + their own listings (AND-intersected)', async () => {
+    it('an authenticated USER (no market/geo) sees ACTIVE + their own listings (AND-intersected, Prisma path)', async () => {
       const { svc, listings } = setup();
       await svc.list(q({ listing_type: 'sale' }), p(SELLER));
       const arg = listings.findMany.mock.calls[0][0] as { where: { AND: unknown[] } };
       expect(arg.where.AND[1]).toEqual({ OR: [{ status: 'ACTIVE' }, { seller_id: SELLER }] });
     });
 
-    it('ADMIN/MODERATOR are unrestricted (no scope clause)', async () => {
+    it('ADMIN/MODERATOR (no market/geo) are unrestricted (no scope clause)', async () => {
       const { svc, listings } = setup();
       await svc.list(q(), p(OTHER, 'MODERATOR'));
       const arg = listings.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
       expect(arg.where.AND).toBeUndefined();
+    });
+  });
+
+  describe('list — Slice 2 discovery validation (L2-2/3/4/11/12)', () => {
+    const q = (over: Record<string, unknown> = {}) => ({ page: 1, limit: 20, skip: 0, ...over }) as never;
+
+    it('L2-2: an anonymous public read with no market → 422 MARKET_REQUIRED', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q(), undefined).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'MARKET_REQUIRED' });
+    });
+
+    it('L2-2: an authenticated USER without market is allowed (owner-scoped)', async () => {
+      const { svc } = setup();
+      await expect(svc.list(q(), p(SELLER))).resolves.toBeDefined();
+    });
+
+    it('L2-2: a geo request without market → 422 MARKET_REQUIRED even when authenticated', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q({ lat: 55, lng: 37, radius_km: 10 }), p(SELLER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'MARKET_REQUIRED' });
+    });
+
+    it('L2-2: ADMIN/MODERATOR are market-exempt (cross-market operator scope)', async () => {
+      const { svc } = setup();
+      await expect(svc.list(q(), p(OTHER, 'ADMIN'))).resolves.toBeDefined();
+    });
+
+    it('a market-only anonymous search goes through the discovery ($queryRaw) path', async () => {
+      const { svc, queryRaw } = setup();
+      await svc.list(q({ market: 'pet' }), undefined);
+      expect(queryRaw).toHaveBeenCalled();
+    });
+
+    it('L2-3: a partial geo set (lat+lng, no radius) → 422 GEO_PARAMS_INCOMPLETE', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q({ market: 'pet', lat: 55, lng: 37 }), undefined).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'GEO_PARAMS_INCOMPLETE' });
+    });
+
+    it('L2-4: radius_km out of 1–100 → 422 RADIUS_OUT_OF_RANGE', async () => {
+      const { svc } = setup();
+      const lo = await svc.list(q({ market: 'pet', lat: 55, lng: 37, radius_km: 0 }), undefined).catch((e: unknown) => e);
+      expect((lo as HttpException).getResponse()).toMatchObject({ code: 'RADIUS_OUT_OF_RANGE' });
+      const hi = await svc.list(q({ market: 'pet', lat: 55, lng: 37, radius_km: 101 }), undefined).catch((e: unknown) => e);
+      expect((hi as HttpException).getResponse()).toMatchObject({ code: 'RADIUS_OUT_OF_RANGE' });
+    });
+
+    it('L2-11: an unknown sort field → 400', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q({ market: 'pet', sort: 'bogus:asc' }), undefined).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(400);
+    });
+
+    it('L2-11: an invalid sort direction → 400', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q({ market: 'pet', sort: 'price:sideways' }), undefined).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(400);
+    });
+
+    it('L2-12: sort=distance without coords → 400', async () => {
+      const { svc } = setup();
+      const err = await svc.list(q({ market: 'pet', sort: 'distance:asc' }), undefined).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(400);
     });
   });
 });

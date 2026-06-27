@@ -31,6 +31,10 @@ import {
 export const LISTING_TYPES = ['sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing'] as const;
 export type ListingType = (typeof LISTING_TYPES)[number];
 
+/** Markets (ADR-0002 hard split). The market filter joins via the animal's species. */
+export const MARKETS = ['pet', 'livestock'] as const;
+export type Market = (typeof MARKETS)[number];
+
 /** Lifecycle states (read-only on the wire; server-set). */
 export type ListingStatus = 'DRAFT' | 'PENDING_MODERATION' | 'ACTIVE' | 'EXPIRED' | 'SOLD' | 'DEACTIVATED';
 export type ModerationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CHANGES_REQUESTED';
@@ -279,6 +283,54 @@ export class ListingListQueryDto {
   @Matches(CURRENCY)
   currency?: string;
 
+  // ── Slice 2: discovery (market / species / breed / geo / sort) ───────────────────────────────
+  @ApiPropertyOptional({ enum: MARKETS, description: 'Market filter (ADR-0002); conditional-required (L2-2)' })
+  @IsOptional()
+  @IsIn(MARKETS)
+  market?: Market;
+
+  @ApiPropertyOptional({ description: 'Species id (INT lookup; AND-intersected with market)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  species_id?: number;
+
+  @ApiPropertyOptional({ description: 'Breed id (INT lookup)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  breed_id?: number;
+
+  @ApiPropertyOptional({ minimum: -90, maximum: 90, description: 'Search-center latitude (all-or-none geo set)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat?: number;
+
+  @ApiPropertyOptional({ minimum: -180, maximum: 180, description: 'Search-center longitude (all-or-none geo set)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng?: number;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100, description: 'Search radius km (1–100; all-or-none geo set)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  radius_km?: number;
+
+  @ApiPropertyOptional({ example: 'distance:asc', description: 'Sort <field>:<asc|desc>; whitelist created_at|price|distance' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  sort?: string;
+
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()
   @Type(() => Number)
@@ -327,6 +379,8 @@ export interface ListingView {
   transactionId: string | null;
   lat: number | null;
   lng: number | null;
+  /** Distance in meters from the search center (Haversine, rounded); only on a geo search, else null (L2-14). */
+  distanceM: number | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

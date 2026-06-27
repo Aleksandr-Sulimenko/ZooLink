@@ -154,6 +154,59 @@ C/R/U/D **own** (R любые **active**); MODERATOR = **R любые** (вкл.
 ADMIN = R/U/D любые. Мутирующие операции контракта поэтому исключают MODERATOR из `x-required-roles`
 (D4), а object-level ownership (`seller_id==actor` или org-admin) обеспечивается на сервисе.
 
+## Listings Slice 2 — инварианты и негативные случаи поиска/фильтрации (round-N, нормативно)
+
+> **Замечание об источнике правды.** Это расширяет `GET /v1/listings` (read-only; без миграции — все
+> индексы есть). Контракт: [listings-api.yaml](../../03-architecture/api-contracts/listings-api.yaml)
+> (`listListings`). Гео-алгоритм: [07-geo-search-service.md](../07-geo-search-service.md)
+> (Haversine + bbox-префильтр; радиус **1–100 км**; `search_radius_m` НЕ является радиусом поиска).
+> Разделение рынков: [ADR-0002](../../04-decisions/0002-hard-split-markets.md) (MVP = один эндпоинт +
+> enforced `market`-фильтр, по [ADR-0009](../../04-decisions/0009-mvp-vs-target-architecture.md);
+> целевые separate-per-market эндпоинты — ADR-0002 §97). Это общий список инвариантов для
+> **backend-engineer** и **reviewer-qa**.
+>
+> **WHAT:** добавить гео (`lat`/`lng`/`radius_km`), `market`, `species_id`/`breed_id` и
+> whitelisted `sort` в публичный поиск объявлений; добавить `distanceM` в ответ.
+> **WHY:** discovery — ключевое требование маркетплейса; схема/индексы (`idx_listings_latlng`,
+> `idx_animals_species_breed`, `species.market`) и гео-алгоритм уже существуют, но
+> контракт не выставлял ничего из этого — бэкенду не на чём было строить поиск.
+> **WHY-BETTER-for-the-whole-project:** держит жёсткое разделение рынков (ADR-0002) enforced на
+> контракте+сервисе, так что ни один запрос не может утечь между рынками; переиспользует MVP Haversine-путь (без PostGIS
+> до Фазы 2, ADR-0009); snake_case filter/sort (§12) и sort-whitelist держат поверхность запроса
+> безопасной и codegen-стабильной; `distanceM` аддитивен (null вне гео-пути).
+
+### Scope Slice-2
+
+**IN:** гео-поиск по радиусу, фильтр рынка, фильтры по виду/породе, sort-whitelist, `distanceM`.
+**Отложено (свои поздние слайсы — затрекано, не выброшено):** **saved_searches** save/list/delete
+(`saved_searches` таблица существует, geo-spec §86 — Slice 3) и **address→lat/lng геокодинг**
+(вызывающий передаёт координаты; провайдер Yandex для позднего слайса). **PostGIS**-гео — Фаза 2 (ADR-0009).
+
+### Инварианты и негативные случаи
+
+| # | Инвариант (ДОЛЖЕН выполняться) | Негативный случай (ДОЛЖЕН отклоняться/обрабатываться) | Обеспечивается | Ошибка → HTTP / code |
+|---|---|---|---|---|
+| L2-1 | **MARKET NO-LEAK (ADR-0002, IDOR-класс).** Поиск `market=pet` возвращает **ноль** livestock-строк (и наоборот), даже с подделанным `species_id`/`animal_id`/`organization_id`. Фильтр рынка join'ит `listings.animal_id → animals.species_id → species.market` и **AND-пересекается** — он может только сузить. | запрос, пытающийся расширить между рынками через другой фильтр. | сервис: обязательный join-clause `species.market`, AND-composed; market выводится, не доверяется от клиента сверх enum | результаты никогда не смешивают рынки; n/a ошибка (фильтр, не reject) |
+| L2-2 | **`market` conditional-required.** Обязателен на public/discovery-пути (анонимное чтение ИЛИ присутствует любой гео-параметр); опционален только для аутентифицированного owner-scoped чтения (результаты pre-constrained `listScope`). | public/гео-запрос без `market`. | сервис (OpenAPI-параметр non-required; это правило service-enforced — см. замечание D2) | 422 `MARKET_REQUIRED` |
+| L2-3 | **Гео-набор all-or-none:** `lat`,`lng`,`radius_km` переданы вместе или вообще нет. | один или два из трёх присутствуют. | сервис | 422 `GEO_PARAMS_INCOMPLETE` |
+| L2-4 | **Границы радиуса 1–100 км** (geo-spec §152). | `radius_km` < 1 или > 100. | сервис (параметр `minimum`/`maximum` + сервис) | 422 `RADIUS_OUT_OF_RANGE` |
+| L2-5 | **Диапазон lat/lng** lat ∈ [−90,90], lng ∈ [−180,180]. | координата вне диапазона. | схема параметра + сервис | 422 `VALIDATION_ERROR` |
+| L2-6 | **ACTIVE-only видимость композируется с гео.** Гео-clause AND `status='ACTIVE'` (публичные чтения никогда не видят не-ACTIVE) — гео никогда не расширяет видимость. | гео-поиск, всплывающий DRAFT/PENDING/DEACTIVATED-объявление. | сервис (status-фильтр AND гео-clause) | n/a (фильтр) |
+| L2-7 | **Граница Haversine (±100 м допуск, geo-spec §141):** точка чуть-внутри радиуса включается, чуть-снаружи исключается, ровно-на-радиусе включается. | истинная in-radius точка отброшена, или out-of-radius точка возвращена сверх допуска. | сервис Haversine `d ≤ radius_m` с допуском | n/a (корректность; QA boundary-тесты) |
+| L2-8 | **Bbox-префильтр loss-less:** bounding-box-префильтр никогда не отбрасывает точку, которую точный Haversine оставил бы (префильтр ⊇ результат-сет). | истинная in-radius точка исключена слишком-тесным bbox. | сервис (Δlat/Δlng по geo-spec §139) | n/a (корректность) |
+| L2-9 | **NULL-координаты исключены** из гео-результатов — без city-centroid-fallback (geo-spec §151). | объявление с NULL lat/lng, появляющееся в гео-поиске. | сервис (гео-запрос требует non-null lat/lng) | n/a (фильтр) |
+| L2-10 | **Антимеридиан (±180° lng):** когда bbox пересекает ±180 (РФ Чукотка/Камчатка), он разбивается на два lng-диапазона (`lng ≥ min` ИЛИ `lng ≤ max`); near-pole `Δlng` зажат до 180°. | поиск около ±180°, пропускающий валидные точки на wrapped-стороне. | сервис (geo-spec §148–150) | n/a (корректность) |
+| L2-11 | **Sort-whitelist:** только `created_at`,`price`,`distance` × `asc`/`desc`. | неизвестное sort-поле или направление. | сервис (whitelist) | 400 `VALIDATION_ERROR` |
+| L2-12 | **`sort=distance` требует координат.** | `sort=distance` без `lat`/`lng`. | сервис | 400 `VALIDATION_ERROR` |
+| L2-13 | **Детерминированный порядок:** гео → `distance_m ASC, created_at DESC, id ASC`; не-гео по умолчанию `created_at DESC` (стабильный tie-break по `id`). | нестабильная пагинация (строки сдвигаются между страницами). | сервис ORDER BY (geo-spec §143) | n/a (корректность) |
+| L2-14 | **`distanceM` заполняется только на гео-поиске;** иначе null; метры, округлённые; вычисляется не хранится. | `distanceM` задан без координат, или персистится. | сервис (вычисление per request) | n/a (форма ответа) |
+| L2-15 | **Только параметризованный SQL** (без string-built фильтров — ESLint-guarded, doc-code-protocol). | любое гео/фильтр-значение, конкатенированное в SQL. | сервис (Kysely/`$queryRaw` bindings) | n/a (инвариант безопасности) |
+| L2-16 | **`search_radius_m` никогда не используется** как радиус гео-поиска (geo-spec §153) — `radius_km` авторитетен. | сервис, читающий `listings.search_radius_m` для радиуса. | сервис (использовать request `radius_km`) | n/a (корректность) |
+
+**Доменные коды ошибок (расширяют API_CONVENTIONS §4):** `MARKET_REQUIRED` (422),
+`GEO_PARAMS_INCOMPLETE` (422), `RADIUS_OUT_OF_RANGE` (422); плюс стандартный `VALIDATION_ERROR`
+(400 для sort-whitelist / `distance`-без-координат; 422 для нарушений значений).
+
 ### Реконсиляции (round-N, нормативно)
 
 **N1 — `sellerId` в теле отклоняется (400), а не игнорируется.**
