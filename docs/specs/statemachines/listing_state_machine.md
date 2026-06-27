@@ -42,7 +42,7 @@ stateDiagram-v2
 | **PENDING_MODERATION** | Listing submitted for review; not visible in public search; awaiting moderator action | - Increment moderation queue counter<br>- Notify moderation team<br>- Start moderation SLA timer | - Stop SLA timer if exited quickly |
 | **ACTIVE** | Listing approved and visible in public search; available for purchase/adoption | - Publish to search indexes<br>- Activate geo-search visibility<br>- Set publication timestamp<br>- Enable purchase/inquiry buttons | - None |
 | **EXPIRED** | Listing automatically deactivated after duration elapsed; retains history | - Remove from active search indexes<br>- Set expiration timestamp<br>- Notify owner of expiration | - None |
-| **SOLD** | Listing marked as completed; retains history | **MVP:** - Set `sold_at`<br>- Notify owner<br>- (NO ownership transfer — animal ownership is locked in MVP).<br>**Фаза 2+:** - Record `transaction_id`<br>- Trigger ownership transfer process | - None |
+| **SOLD** | Listing marked as completed; retains history | **MVP:** - Set `sold_at`<br>- Notify owner<br>- (marking SOLD does NOT auto-initiate ownership transfer; transfer is in MVP as a separate explicit owner-initiated flow — [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md); auto-transfer-on-SOLD is Phase 2).<br>**Фаза 2+:** - Record `transaction_id`<br>- Trigger ownership transfer process (auto-transfer-on-SOLD, payment-gated) | - None |
 | **DEACTIVATED** | Listing manually removed by owner or moderator; retains history | - Set deactivation timestamp<br>- Record deactivation reason<br>- Notify interested parties (if applicable) | - None |
 
 ## State Transitions
@@ -85,8 +85,97 @@ stateDiagram-v2
 - **Moderation SLA timeout** never auto-approves or auto-rejects: it escalates and the listing stays in
   PENDING_MODERATION. (`EXPIRED` is reserved for an *ACTIVE* listing whose display duration elapsed.)
 - EXPIRED listings renew by resetting to DRAFT and **re-entering moderation** (no bypass of re-review).
-- **SOLD in MVP** = owner manually marks the listing sold; it does **NOT** transfer animal ownership (locked in MVP,
-  see `ownership_transfer_state_machine.md`). The payment-driven SOLD path and ownership transfer are **Фаза 2+**
-  (gated by `feature_toggles.payments`).
+- **SOLD in MVP** = owner manually marks the listing sold; marking SOLD does **NOT auto-initiate** ownership
+  transfer. Ownership transfer **is in MVP** but is a **separate, explicit owner-initiated flow**
+  ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md), `ownership_transfer_state_machine.md`) —
+  not a side effect of the listing lifecycle. **Auto-transfer-on-SOLD** (initiating a transfer automatically
+  when a sale completes, payment-gated) is **Фаза 2+** (gated by `feature_toggles.payments`).
 - **Cascades:** deactivating an animal forces its listings → DEACTIVATED; deactivating a user forces their ACTIVE
   listings → DEACTIVATED (see animal/user state machines).
+
+## Listings Slice 1 — invariants & negative cases (round-N, normative)
+
+> **Source-of-truth note.** Build-ready contract: [listings-api.yaml](../../03-architecture/api-contracts/listings-api.yaml).
+> This section is the shared invariant/negative-case list for **backend-engineer** and
+> **reviewer-qa** for Slice 1 (DRAFT lifecycle: create / update / add+remove photo / submit /
+> withdraw / read+list). Moderator-side transitions (approve/reject/changes), ACTIVE→SOLD/EXPIRED,
+> payment, and geo-search are **out of Slice 1** (Admin Slice 4 / Фаза 2 / Slice 2).
+>
+> **WHAT:** formalize the Slice-1 invariants the reviewer-qa preflight surfaced + the contract
+> deltas (submit transition, server-derived seller, leasing enum, lat/lng geo form, MODERATOR
+> write-block).
+> **WHY:** the contract had real build-blocking gaps (no submit transition; client-supplied
+> `sellerId` = IDOR; `leasing`/geo drift from the validated schema; MODERATOR over-granted on
+> writes) — a backend built against it would diverge from the schema (truth tier 3) and rbac.
+> **WHY-BETTER-for-the-whole-project:** one normative list keys backend tests and QA coverage off
+> the same invariants; lifecycle moves only via actions (consistent with the ADR-0013 transfer
+> accept/decline pattern); the P0 ACTIVE-requires-APPROVED guard stays the single safety anchor;
+> markets stay separated (ADR-0002, market derived not writable); leasing/geo ship as form-now,
+> behaviour-later without a future contract break.
+
+### Slice-1 endpoint set (IN scope)
+
+`POST /listings` (create→DRAFT) · `GET /listings` (public, active only) · `GET /listings/{id}`
+(public, active only) · `PATCH /listings/{id}` (owner edit) · `DELETE /listings/{id}`
+(soft-withdraw→DEACTIVATED) · `POST /listings/{id}/submit` (DRAFT→PENDING_MODERATION) ·
+`GET|POST /listings/{id}/photos` · `DELETE /listings/{id}/photos/{photoId}`.
+**Deferred (kept in contract, NOT Slice-1 IN):** `GET /listings/{id}/analytics` (needs
+view_count/contact_shown_count cols — GAP-TRACE-006), `/listings/{id}/conversations` (chat,
+ADR-0005, deprecated), moderator transitions (Admin Slice 4), PostGIS geo-search (Slice 2).
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected) | Enforced by | Error → HTTP / code |
+|---|---|---|---|---|
+| L-P0 | **ACTIVE requires `moderation_status='APPROVED'`.** No Slice-1 path sets ACTIVE. | any attempt to set `status=ACTIVE` (incl. on submit). | DB `trg_listing_active_requires_approval` + service | 422 `VALIDATION_ERROR` (trigger raises) |
+| L-1 | **Seller = authenticated actor** (`seller_id` server-derived). | a body `sellerId` (any value, incl. one differing from the actor — IDOR). | service unknown-field whitelist (rejects body sellerId) | 400 `VALIDATION_ERROR` (unknown field) — seller is derived, never client-set (D2) |
+| L-2 | **Actor must own the animal** to create a listing for it. | create for another user's animal. | service (object-level authz) | 403 `FORBIDDEN` |
+| L-3 | **Mutating ops are seller-or-org-admin only** (rbac-matrix §99); MODERATOR is R-only on listings. | a non-owner (incl. MODERATOR) PATCH/DELETE/submit/photo. | service object-level + `x-required-roles` (MODERATOR dropped from writes) | 403 `FORBIDDEN` |
+| L-4 | **`chk_listing_ownership`:** personal = orgId+branchId both null; org = orgId set (branchId optional); branchId⇒orgId. | branchId set without orgId; mixed personal/org. | DB CHECK + service pre-validate | 422 `VALIDATION_ERROR` (not 500) |
+| L-5 | **List/read owner-scoping:** non-active listings (DRAFT/PENDING/DEACTIVATED) are visible only to their owner (and operator scope). | another user reads/lists someone's DRAFT/PENDING. | service query scoping; public `GET` returns active only | 404 `NOT_FOUND` (don't leak existence) |
+| L-6 | **Submit guard:** DRAFT→PENDING_MODERATION needs all required fields valid AND ≥1 photo AND (price ≥ MIN_LISTING_PRICE **only if** `listingType='sale'`). | submit with no photo / sale price below min / missing required field. | service | 422 `VALIDATION_ERROR` |
+| L-7 | **Submit precondition:** only a DRAFT may be submitted. | submit on a non-DRAFT (PENDING/ACTIVE/etc.). | service (state precondition) | 409 `LISTING_NOT_DRAFT` |
+| L-8 | **Withdraw is soft → DEACTIVATED** from owner-controllable states; terminal states reject. | DELETE on a SOLD/EXPIRED/already-DEACTIVATED listing. | service (state precondition) | 409 `CONFLICT` |
+| L-9 | **Value CHECKs:** `price_cents ≥ 0`, `quantity ≥ 1`, `currency` ISO-4217 `^[A-Z]{3}$`, lat/lng both-null-or-both-set within range. | negative price / quantity 0 / bad currency / out-of-range or half-set lat-lng. | DB CHECKs (`chk_listings_currency_iso`, `chk_listings_latlng`) + service | 422 `VALIDATION_ERROR` |
+| L-10 | **Market is derived** from the animal's species (ADR-0002), never client-set. | a body field attempting to set market/market-crossing. | service (derive, ignore client) | n/a (derived) / 422 if cross-market animal⇄org mismatch |
+| L-11 | **`leasing` is accepted with no behaviour** (form-only, Фаза 2). | expecting leasing-specific rules in Slice 1. | service (store value, no special logic) | n/a (accepted) |
+| L-12 | **`status`/`moderationStatus`/`sellerId` are not writable** via create/update — lifecycle moves only via actions. | a body setting `status`/`moderationStatus`/`sellerId`. | schema `readOnly`/omitted + service | ignored (or 422 on strict-reject mode) |
+| L-13 | **Optimistic concurrency** on PATCH and on /submit (If-Match). | concurrent edit with a stale ETag; missing If-Match. | service ETag compare | 412 `STALE_RESOURCE` / 428 |
+| L-14 | **`MAX_MEDIA_ITEMS=10`** photos per listing. | adding an 11th photo. | service | 422 `VALIDATION_ERROR` |
+| L-15 | **Transitions are audit/principal-stamped** (`{actor_id, principal_type}` HUMAN/AGENT). | a transition stored without a principal snapshot. | service + audit | n/a (write-time invariant) |
+
+**Domain error codes (extend API_CONVENTIONS §4):** `LISTING_NOT_DRAFT` (409); plus the standard
+`CONFLICT` (409, terminal-state withdraw), `VALIDATION_ERROR` (422 for value/guard violations;
+**400** for an unknown body field such as `sellerId` — unknown-field whitelist), `FORBIDDEN` (403),
+`NOT_FOUND` (404), `STALE_RESOURCE` (412).
+
+**RBAC (rbac-matrix.md §64/§99, MVP normative):** USER (and breeder/farmer/vet/groomer) =
+C/R/U/D **own** (R any **active**); MODERATOR = **R any** (incl. pending) — **no C/U/D**;
+ADMIN = R/U/D any. Mutating contract ops therefore exclude MODERATOR from `x-required-roles`
+(D4), and object-level ownership (`seller_id==actor` or org-admin) is enforced at the service.
+
+### Reconciliations (round-N, normative)
+
+**N1 — body `sellerId` is rejected (400), not ignored.**
+- **WHAT:** L-1 and the `listings-api.yaml` `createListing`/`ListingCreate` descriptions changed from "a body
+  `sellerId` is ignored" to "a body `sellerId` is **rejected (400, unknown field)** by the unknown-field
+  whitelist; the seller is derived from the authenticated actor."
+- **WHY:** the implementation correctly rejects unknown fields (whitelist), matching every other module;
+  reviewer-qa adjudicated the **code is right, the docs were wrong**. A doc that promised "ignored" set a false
+  contract expectation and diverged from the actual (and more defensive) behaviour.
+- **WHY-BETTER-for-the-whole-project:** the contract now matches the validated behaviour and the platform-wide
+  unknown-field convention; rejecting (not silently dropping) a client-supplied `sellerId` gives a louder,
+  earlier IDOR signal and one consistent input-validation story across modules; seller stays server-derived (D2).
+
+**N2 — SOLD does not auto-initiate transfer (ADR-0013 alignment).**
+- **WHAT:** the SOLD-in-MVP bullet changed from "SOLD does NOT transfer animal ownership (locked in MVP)" to
+  "marking SOLD does **NOT auto-initiate** ownership transfer; ownership transfer **is in MVP** as a separate,
+  explicit owner-initiated flow ([ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md)); **auto-transfer-on-SOLD**
+  (payment-gated) is Фаза 2+."
+- **WHY:** the old wording said transfer was "locked in MVP", which became stale when
+  [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) (Accepted) put a simplified ownership transfer
+  **in** MVP. This is a correction **toward an Accepted ADR** (truth-hierarchy tier 2), not a new decision.
+- **WHY-BETTER-for-the-whole-project:** removes a direct contradiction with ADR-0013; keeps the listing
+  lifecycle and the transfer lifecycle as two independent flows (consistent with how
+  `ownership_transfer_state_machine.md` frames MVP-vs-Phase-2), so a SOLD listing never silently mutates animal
+  ownership and the only path to re-attribution stays the explicit, history-appending transfer flow.

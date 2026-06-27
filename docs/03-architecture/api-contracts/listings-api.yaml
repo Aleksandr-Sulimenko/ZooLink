@@ -38,8 +38,8 @@ paths:
           description: Filter by branch ID
         - in: query
           name: listing_type
-          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
-          description: Filter by listing type
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service, leasing] }
+          description: Filter by listing type (`leasing` is form-only, behaviour Phase 2 — migration 0021)
         - in: query
           name: is_active
           schema: { type: boolean }
@@ -79,14 +79,26 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
-      summary: Create a new listing
+      summary: Create a new listing (DRAFT)
       operationId: createListing
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Creates a listing in DRAFT. The **seller is derived from the authenticated actor**
+        server-side (`seller_id := actor`); a body `sellerId` is **rejected (400, unknown field)**
+        — the unknown-field whitelist rejects it rather than silently ignoring (D2, IDOR class —
+        consistent with every other module). The actor MUST own the referenced animal (its `owner_id`,
+        or an org-admin of its `organization_id`) → else 403. Personal vs organizational ownership
+        must satisfy `chk_listing_ownership` (personal: organizationId+branchId both null; org:
+        organizationId set, branchId optional) → violation 422. The market is **derived** from the
+        animal's species (ADR-0002), never client-set. `status`/`moderationStatus` are **not**
+        writable — lifecycle moves only via actions (POST /submit). MODERATOR is **R-only** on
+        listings (rbac-matrix §64/§99) → excluded from create.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
-          description: Client-generated key for safe retry (API_CONVENTIONS §11)
+          description: Client-generated key for safe retry (API_CONVENTIONS §11, 24h window)
       requestBody:
         required: true
         content:
@@ -94,14 +106,19 @@ paths:
             schema: { $ref: '#/components/schemas/ListingCreate' }
       responses:
         '201':
-          description: Listing created successfully
+          description: Listing created successfully (DRAFT)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator of the new listing (send as If-Match on update/submit, §10)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Listing' }
         '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # actor does not own the animal
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found
+        '422': { $ref: '#/components/responses/Problem' }   # chk_listing_ownership / value CHECK violation / Idempotency-Key reuse w/ different body
         '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}:
     get:
@@ -129,8 +146,13 @@ paths:
     patch:
       summary: Update listing
       operationId: updateListing
-      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+        Object-level rule: mutable only by the listing's seller (`seller_id == actor`) or an
+        org-admin of its organization (rbac-matrix §99) → else 403. `status`/`moderationStatus`/
+        `sellerId` are **not** writable here (lifecycle moves via actions; seller is derived).
+        MODERATOR is R-only on listings → excluded.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -164,19 +186,82 @@ paths:
         '428': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     delete:
-      summary: Delete listing (soft delete via isActive=false)
+      summary: Withdraw a listing (soft-delete → DEACTIVATED)
       operationId: deleteListing
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        **Soft-withdraw** (never a hard delete). Transitions the listing to **DEACTIVATED**
+        (`is_active=false`), retaining its history/audit. This is the single owner-driven
+        withdraw path (no separate `/withdraw` endpoint). Permitted from owner-controllable
+        states (DRAFT, PENDING_MODERATION, and ACTIVE — owner withdraws; ACTIVE→DEACTIVATED per
+        the state machine); a no-op-or-409 on an already-terminal DEACTIVATED/SOLD/EXPIRED state
+        (guard-based 409, §10 — this is a state-transition action). Object-level rule: seller or
+        org-admin only (rbac-matrix §99); MODERATOR-driven removal is a separate operator path
+        (Admin Slice 4), excluded here. The transition is audit/principal-stamped.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Listing deleted successfully }
+        '200':
+          description: Listing withdrawn (now DEACTIVATED)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not the seller / org-admin
         '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # already terminal (SOLD/DEACTIVATED/EXPIRED)
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/submit:
+    post:
+      summary: Submit a DRAFT listing for moderation (DRAFT → PENDING_MODERATION)
+      operationId: submitListing
+      description: >
+        Owner submits (or resubmits after CHANGES_REQUESTED) a DRAFT listing for moderation
+        (D1). Transitions DRAFT → PENDING_MODERATION and sets `moderationStatus='PENDING'`.
+        **Guard (state machine):** all required fields valid AND **≥1 photo** AND (price ≥
+        MIN_LISTING_PRICE **only if** `listingType='sale'`). This is a state-transition action,
+        not a body mutation — `status` is never client-set. **P0 invariant:** this path does NOT
+        and CANNOT set ACTIVE — only a moderator approval (Admin Slice 4) moves
+        PENDING_MODERATION → ACTIVE (`trg_listing_active_requires_approval`). Object-level rule:
+        seller or org-admin only; MODERATOR excluded (R-only). Idempotent under Idempotency-Key;
+        If-Match guards against acting on a stale view.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (§11)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /listings/{id} (§10)
+      responses:
+        '200':
+          description: Listing submitted (now PENDING_MODERATION)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not the seller / org-admin
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # not in DRAFT (LISTING_NOT_DRAFT)
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # submit guard failed (no photo / price<min for sale / required fields)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos:
     get:
@@ -202,7 +287,10 @@ paths:
     post:
       summary: Add a photo to a listing
       operationId: createListingPhoto
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Adds a photo to a listing the actor owns (seller or org-admin → else 403). MODERATOR is
+        R-only on listings → excluded. `MAX_MEDIA_ITEMS=10` per listing → 422 on overflow.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -211,6 +299,7 @@ paths:
           description: Listing ID
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
           description: Client-generated key for safe retry (API_CONVENTIONS §11)
       requestBody:
@@ -234,7 +323,8 @@ paths:
     delete:
       summary: Remove a photo from a listing
       operationId: deleteListingPhoto
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: Seller or org-admin only (→ else 403); MODERATOR R-only on listings, excluded.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -383,8 +473,8 @@ components:
           default: {}
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption, stud_service]
-          description: Type of listing
+          enum: [sale, breeding, show, adoption, stud_service, leasing]
+          description: Type of listing (`leasing` form-only, behaviour Phase 2 — migration 0021)
         titleLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           description: Listing title (LocalizedString {en, ru})
@@ -407,14 +497,6 @@ components:
           type: integer
           default: 1
           description: Quantity (number of items/animals)
-        locationPoint:
-          type: object
-          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
-          nullable: true
-        searchRadiusM:
-          type: integer
-          nullable: true
-          description: Search radius in meters for geo-search
         isActive:
           type: boolean
           description: Active status (legacy boolean; lifecycle is tracked by `status`)
@@ -422,12 +504,19 @@ components:
           type: string
           enum: [DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED, SOLD, DEACTIVATED]
           default: DRAFT
-          description: Lifecycle state (see specs/statemachines/listing_state_machine.md). Only ACTIVE listings appear in public search.
+          readOnly: true
+          description: >
+            Lifecycle state (see specs/statemachines/listing_state_machine.md). **Read-only** —
+            server-set; moves only via actions (create→DRAFT, /submit→PENDING_MODERATION,
+            moderator approve→ACTIVE, DELETE→DEACTIVATED). Only ACTIVE listings appear in public
+            search. **P0 invariant:** ACTIVE requires `moderationStatus=APPROVED`
+            (`trg_listing_active_requires_approval`); no Slice-1 path sets ACTIVE.
         moderationStatus:
           type: string
           enum: [PENDING, APPROVED, REJECTED, CHANGES_REQUESTED]
           default: PENDING
-          description: Moderation review outcome (separate field from lifecycle `status`)
+          readOnly: true
+          description: Moderation review outcome (separate field from lifecycle `status`). **Read-only** — moderator-set (Admin Slice 4).
         publishedAt:
           type: string
           format: date-time
@@ -468,9 +557,15 @@ components:
           description: Last update timestamp
     ListingCreate:
       type: object
+      description: >
+        Create-listing body. **`sellerId` is NOT accepted** — the seller is derived from the
+        authenticated actor server-side (D2, IDOR class); a body `sellerId` is **rejected (400,
+        unknown field)** by the unknown-field whitelist (not silently ignored). `status`/
+        `moderationStatus` are not writable — a new listing is always DRAFT; lifecycle moves only
+        via actions (POST /submit). `market` is derived from the animal's species (ADR-0002), not
+        client-set.
       required:
         - animalId
-        - sellerId
         - listingType
         - titleLocalized
       properties:
@@ -478,10 +573,6 @@ components:
           type: string
           format: uuid
           description: Foreign key to animal
-        sellerId:
-          type: string
-          format: uuid
-          description: Foreign key to user (seller)
         organizationId:
           type: string
           format: uuid
@@ -498,8 +589,8 @@ components:
           default: {}
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption, stud_service]
-          description: Type of listing
+          enum: [sale, breeding, show, adoption, stud_service, leasing]
+          description: Type of listing (`leasing` form-only, behaviour Phase 2 — migration 0021)
         titleLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           description: Listing title (LocalizedString {en, ru})
@@ -522,14 +613,18 @@ components:
           type: integer
           default: 1
           description: Quantity (number of items/animals)
-        locationPoint:
-          type: object
-          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
+        lat:
+          type: number
+          format: double
           nullable: true
-        searchRadiusM:
-          type: integer
+          description: >
+            Latitude (MVP-primary geo storage; -90..90, `chk_listings_latlng`). Form-only in
+            Slice 1 — stored, but geo-search is Slice 2. lat/lng must be both-null or both-set.
+        lng:
+          type: number
+          format: double
           nullable: true
-          description: Search radius in meters for geo-search
+          description: Longitude (MVP-primary geo storage; -180..180, `chk_listings_latlng`). Form-only in Slice 1.
         isActive:
           type: boolean
           description: Active status
@@ -562,14 +657,16 @@ components:
         quantity:
           type: integer
           description: Quantity (number of items/animals)
-        locationPoint:
-          type: object
-          description: "GeoPoint for location-based search (requires PostGIS). Structure: { type: \"Point\", coordinates: [longitude, latitude] }"
+        lat:
+          type: number
+          format: double
           nullable: true
-        searchRadiusM:
-          type: integer
+          description: Latitude (MVP-primary geo storage; -90..90, `chk_listings_latlng`). Form-only in Slice 1.
+        lng:
+          type: number
+          format: double
           nullable: true
-          description: Search radius in meters for geo-search
+          description: Longitude (MVP-primary geo storage; -180..180, `chk_listings_latlng`). Form-only in Slice 1.
         isActive:
           type: boolean
           description: Active status

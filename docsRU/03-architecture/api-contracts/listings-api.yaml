@@ -38,8 +38,8 @@ paths:
           description: Фильтр по ID филиала
         - in: query
           name: listing_type
-          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service] }
-          description: Фильтр по типу объявления
+          schema: { type: string, enum: [sale, breeding, show, adoption, stud_service, leasing] }
+          description: Фильтр по типу объявления (`leasing` — только форма, поведение Фаза 2 — миграция 0021)
         - in: query
           name: is_active
           schema: { type: boolean }
@@ -79,14 +79,26 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
-      summary: Создать новое объявление
+      summary: Создать новое объявление (DRAFT)
       operationId: createListing
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Создаёт объявление в DRAFT. **Продавец выводится из аутентифицированного актора**
+        на сервере (`seller_id := actor`); `sellerId` в теле **отклоняется (400, неизвестное поле)**
+        — whitelist неизвестных полей отклоняет его, а не молча игнорирует (D2, класс IDOR —
+        согласованно с каждым другим модулем). Актор ДОЛЖЕН владеть указанным животным (его `owner_id`,
+        или org-admin его `organization_id`) → иначе 403. Личное vs организационное владение
+        должно удовлетворять `chk_listing_ownership` (личное: organizationId+branchId оба null; орг.:
+        organizationId задан, branchId опционально) → нарушение 422. Рынок **выводится** из
+        вида животного (ADR-0002), никогда не задаётся клиентом. `status`/`moderationStatus` **не**
+        записываемы — жизненный цикл движется только через действия (POST /submit). MODERATOR — **R-only** на
+        объявлениях (rbac-matrix §64/§99) → исключён из create.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
-          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11, окно 24ч)
       requestBody:
         required: true
         content:
@@ -94,14 +106,19 @@ paths:
             schema: { $ref: '#/components/schemas/ListingCreate' }
       responses:
         '201':
-          description: Объявление успешно создано
+          description: Объявление успешно создано (DRAFT)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор нового объявления (отправить как If-Match на update/submit, §10)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Listing' }
         '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # actor does not own the animal
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found
+        '422': { $ref: '#/components/responses/Problem' }   # chk_listing_ownership / value CHECK violation / Idempotency-Key reuse w/ different body
         '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}:
     get:
@@ -129,8 +146,13 @@ paths:
     patch:
       summary: Обновить объявление
       operationId: updateListing
-      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+        Объектное правило: изменяемо только продавцом объявления (`seller_id == actor`) или
+        org-admin его организации (rbac-matrix §99) → иначе 403. `status`/`moderationStatus`/
+        `sellerId` здесь **не** записываемы (жизненный цикл движется через действия; продавец выводится).
+        MODERATOR — R-only на объявлениях → исключён.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -164,19 +186,82 @@ paths:
         '428': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     delete:
-      summary: Удалить объявление (мягкое удаление через isActive=false)
+      summary: Отозвать объявление (мягкий снос → DEACTIVATED)
       operationId: deleteListing
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        **Мягкий отзыв** (никогда не жёсткое удаление). Переводит объявление в **DEACTIVATED**
+        (`is_active=false`), сохраняя его историю/аудит. Это единственный owner-driven путь
+        отзыва (нет отдельного эндпоинта `/withdraw`). Разрешён из управляемых владельцем
+        состояний (DRAFT, PENDING_MODERATION и ACTIVE — владелец отзывает; ACTIVE→DEACTIVATED по
+        стейт-машине); no-op-или-409 на уже-терминальном DEACTIVATED/SOLD/EXPIRED состоянии
+        (guard-based 409, §10 — это state-transition действие). Объектное правило: только продавец или
+        org-admin (rbac-matrix §99); MODERATOR-driven удаление — отдельный operator-путь
+        (Admin Slice 4), здесь исключён. Переход audit/principal-stamped.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Объявление успешно удалено }
+        '200':
+          description: Объявление отозвано (теперь DEACTIVATED)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not the seller / org-admin
         '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # already terminal (SOLD/DEACTIVATED/EXPIRED)
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/submit:
+    post:
+      summary: Отправить DRAFT-объявление на модерацию (DRAFT → PENDING_MODERATION)
+      operationId: submitListing
+      description: >
+        Владелец отправляет (или переотправляет после CHANGES_REQUESTED) DRAFT-объявление на модерацию
+        (D1). Переводит DRAFT → PENDING_MODERATION и ставит `moderationStatus='PENDING'`.
+        **Guard (стейт-машина):** все обязательные поля валидны И **≥1 фото** И (цена ≥
+        MIN_LISTING_PRICE **только если** `listingType='sale'`). Это state-transition действие,
+        не мутация тела — `status` никогда не задаётся клиентом. **Инвариант P0:** этот путь НЕ
+        и НЕ МОЖЕТ ставить ACTIVE — только апрув модератора (Admin Slice 4) двигает
+        PENDING_MODERATION → ACTIVE (`trg_listing_active_requires_approval`). Объектное правило:
+        только продавец или org-admin; MODERATOR исключён (R-only). Идемпотентно под Idempotency-Key;
+        If-Match защищает от действия по устаревшему виду.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Ключ клиента для безопасного повтора (§11)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /listings/{id} (§10)
+      responses:
+        '200':
+          description: Объявление отправлено (теперь PENDING_MODERATION)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после перехода
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not the seller / org-admin
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # not in DRAFT (LISTING_NOT_DRAFT)
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # submit guard failed (no photo / price<min for sale / required fields)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos:
     get:
@@ -202,7 +287,10 @@ paths:
     post:
       summary: Добавить фото к объявлению
       operationId: createListingPhoto
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Добавляет фото к объявлению, которым актор владеет (продавец или org-admin → иначе 403). MODERATOR —
+        R-only на объявлениях → исключён. `MAX_MEDIA_ITEMS=10` на объявление → 422 при переполнении.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -211,6 +299,7 @@ paths:
           description: ID объявления
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
           description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
       requestBody:
@@ -234,7 +323,8 @@ paths:
     delete:
       summary: Удалить фото из объявления
       operationId: deleteListingPhoto
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: Только продавец или org-admin (→ иначе 403); MODERATOR R-only на объявлениях, исключён.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -383,8 +473,8 @@ components:
           default: {}
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption, stud_service]
-          description: Тип объявления
+          enum: [sale, breeding, show, adoption, stud_service, leasing]
+          description: Тип объявления (`leasing` — только форма, поведение Фаза 2 — миграция 0021)
         titleLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           description: Заголовок объявления (LocalizedString {en, ru})
@@ -407,14 +497,6 @@ components:
           type: integer
           default: 1
           description: Количество (число единиц/животных)
-        locationPoint:
-          type: object
-          description: "GeoPoint для гео-поиска (требует PostGIS). Структура: { type: \"Point\", coordinates: [longitude, latitude] }"
-          nullable: true
-        searchRadiusM:
-          type: integer
-          nullable: true
-          description: Радиус поиска в метрах для гео-поиска
         isActive:
           type: boolean
           description: Активность (legacy-булево; жизненный цикл отслеживает `status`)
@@ -422,12 +504,19 @@ components:
           type: string
           enum: [DRAFT, PENDING_MODERATION, ACTIVE, EXPIRED, SOLD, DEACTIVATED]
           default: DRAFT
-          description: Состояние жизненного цикла (см. specs/statemachines/listing_state_machine.md). В публичном поиске только ACTIVE.
+          readOnly: true
+          description: >
+            Состояние жизненного цикла (см. specs/statemachines/listing_state_machine.md). **Read-only** —
+            устанавливается сервером; движется только через действия (create→DRAFT, /submit→PENDING_MODERATION,
+            апрув модератора→ACTIVE, DELETE→DEACTIVATED). В публичном поиске только ACTIVE-объявления.
+            **Инвариант P0:** ACTIVE требует `moderationStatus=APPROVED`
+            (`trg_listing_active_requires_approval`); ни один путь Slice-1 не ставит ACTIVE.
         moderationStatus:
           type: string
           enum: [PENDING, APPROVED, REJECTED, CHANGES_REQUESTED]
           default: PENDING
-          description: Результат модерации (поле отдельно от жизненного `status`)
+          readOnly: true
+          description: Результат модерации (поле отдельно от жизненного `status`). **Read-only** — ставится модератором (Admin Slice 4).
         publishedAt:
           type: string
           format: date-time
@@ -468,9 +557,15 @@ components:
           description: Метка последнего обновления
     ListingCreate:
       type: object
+      description: >
+        Тело создания объявления. **`sellerId` НЕ принимается** — продавец выводится из
+        аутентифицированного актора на сервере (D2, класс IDOR); `sellerId` в теле **отклоняется (400,
+        неизвестное поле)** whitelist'ом неизвестных полей (не молча игнорируется). `status`/
+        `moderationStatus` не записываемы — новое объявление всегда DRAFT; жизненный цикл движется только
+        через действия (POST /submit). `market` выводится из вида животного (ADR-0002), не
+        задаётся клиентом.
       required:
         - animalId
-        - sellerId
         - listingType
         - titleLocalized
       properties:
@@ -478,10 +573,6 @@ components:
           type: string
           format: uuid
           description: Внешний ключ на животное
-        sellerId:
-          type: string
-          format: uuid
-          description: Внешний ключ на пользователя (продавца)
         organizationId:
           type: string
           format: uuid
@@ -498,8 +589,8 @@ components:
           default: {}
         listingType:
           type: string
-          enum: [sale, breeding, show, adoption, stud_service]
-          description: Тип объявления
+          enum: [sale, breeding, show, adoption, stud_service, leasing]
+          description: Тип объявления (`leasing` — только форма, поведение Фаза 2 — миграция 0021)
         titleLocalized:
           allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
           description: Заголовок объявления (LocalizedString {en, ru})
@@ -522,14 +613,18 @@ components:
           type: integer
           default: 1
           description: Количество (число единиц/животных)
-        locationPoint:
-          type: object
-          description: "GeoPoint для гео-поиска (требует PostGIS). Структура: { type: \"Point\", coordinates: [longitude, latitude] }"
+        lat:
+          type: number
+          format: double
           nullable: true
-        searchRadiusM:
-          type: integer
+          description: >
+            Широта (MVP-первичное гео-хранилище; -90..90, `chk_listings_latlng`). Только форма в
+            Slice 1 — хранится, но гео-поиск — Slice 2. lat/lng должны быть оба-null или оба-заданы.
+        lng:
+          type: number
+          format: double
           nullable: true
-          description: Радиус поиска в метрах для гео-поиска
+          description: Долгота (MVP-первичное гео-хранилище; -180..180, `chk_listings_latlng`). Только форма в Slice 1.
         isActive:
           type: boolean
           description: Активность
@@ -562,14 +657,16 @@ components:
         quantity:
           type: integer
           description: Количество (число единиц/животных)
-        locationPoint:
-          type: object
-          description: "GeoPoint для гео-поиска (требует PostGIS). Структура: { type: \"Point\", coordinates: [longitude, latitude] }"
+        lat:
+          type: number
+          format: double
           nullable: true
-        searchRadiusM:
-          type: integer
+          description: Широта (MVP-первичное гео-хранилище; -90..90, `chk_listings_latlng`). Только форма в Slice 1.
+        lng:
+          type: number
+          format: double
           nullable: true
-          description: Радиус поиска в метрах для гео-поиска
+          description: Долгота (MVP-первичное гео-хранилище; -180..180, `chk_listings_latlng`). Только форма в Slice 1.
         isActive:
           type: boolean
           description: Активность
