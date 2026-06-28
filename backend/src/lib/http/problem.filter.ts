@@ -96,6 +96,12 @@ export class ProblemExceptionFilter implements ExceptionFilter {
     if (typeof body.code === 'string') {
       problem.code = body.code;
     }
+    // RFC7807 §3.1 extension member: a caller may attach an explicit `errors` array (e.g. the
+    // moderation ALREADY_CLAIMED holder context). Pass it through verbatim when present (and not
+    // already populated by the class-validator branch above).
+    if (Array.isArray(body.errors) && problem.errors === undefined) {
+      problem.errors = body.errors as ProblemDetails['errors'];
+    }
   }
 
   private guessField(message: string): string {

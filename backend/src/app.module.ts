@@ -14,6 +14,7 @@ import { IdentityModule } from './modules/identity/identity.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AnimalModule } from './modules/animal/animal.module';
 import { ListingModule } from './modules/listing/listing.module';
+import { ModerationModule } from './modules/moderation/moderation.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -39,6 +40,7 @@ import { HealthModule } from './health/health.module';
     AdminModule,
     AnimalModule,
     ListingModule,
+    ModerationModule,
     HealthModule,
   ],
 })

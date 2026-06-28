@@ -73,8 +73,9 @@ flowchart TD
 
     subgraph System["Система ZooLink"]
         Q[листинг -> PENDING_MODERATION<br/>в очередь; запустить таймер SLA] --> SLA{Таймер SLA<br/>истёк?}
-        SLA -- Да, нет действия --> TO[Авто-отклонение<br/>листинг -> EXPIRED<br/>moderation_status = REJECTED<br/>записать решение]
+        SLA -- Да, нет действия --> TO[Эскалация к ADMIN<br/>emit Moderation.Escalated<br/>листинг ОСТАЁТСЯ PENDING_MODERATION<br/>никогда не авто-одобрен/отклонён]
         SLA -- Нет --> WAIT[Элемент ждёт в очереди]
+        TO --> WAIT
     end
 
     subgraph Moderator["Модератор (MODERATOR/ADMIN)"]
@@ -88,16 +89,19 @@ flowchart TD
     AP --> N1
     RJ --> N2
     CR --> N3
-    TO --> N2
     AP --> E([Конец: опубликован])
     RJ --> E2([Конец: не опубликован])
 ```
 
 ### Ключевые правила
 - **Актёры:** Владелец (отправляет/редактирует), Модератор (решает), Система (очередь, SLA, сохранение, уведомления).
-- **Покрытые ветки:** Одобрить / Отклонить / Запросить изменения / **авто-отклонение по таймауту SLA** — каждая ведёт к переходу `listings.status` + `moderation_status`.
+- **Покрытые ветки:** Одобрить / Отклонить / Запросить изменения — каждая ведёт к переходу `listings.status` + `moderation_status`. **Таймаут SLA НЕ решает:** он **эскалирует к ADMIN** (`Moderation.Escalated`), и элемент **остаётся `PENDING_MODERATION`** — никогда не авто-одобряется и не авто-отклоняется (см. round-5 §SLA и `statemachines/listing_state_machine.md`).
 - **Аудит:** каждое решение — append-only строка `moderation_decisions` (неизменяемая; UPDATE/DELETE блокируется триггером).
 - **Уведомления** отправляются через домен уведомлений на каждое терминальное решение.
+
+> **(round-N, нормативно — D1-реконсиляция) WHAT:** ветка таймаута SLA (mermaid + буллет «Покрытые ветки») изменена с «авто-отклонение → листинг EXPIRED / moderation_status REJECTED» на «**эскалация к ADMIN, элемент остаётся PENDING_MODERATION, никогда не авто-одобрен/отклонён**» (и ребро `TO → Rejected-notification` убрано).
+> **WHY:** спека противоречила себе — BPMN-диаграмма + буллет говорили об авто-отклонении, но round-5 нормативный §SLA/escalation **и** `listing_state_machine.md:23/58/85` уже говорят escalate-stays-PENDING. По иерархии истины конфликт code↔doc/doc↔doc чинится в сторону нормативного текста + стейт-машины; диаграмма была устаревшим артефактом меньшей точности.
+> **WHY-BETTER-for-the-whole-project:** единая SLA-семантика через спеку↔стейт-машину↔контракт (`slaState`/`escalated` — derived-read-only в 4a); нет молчаливого уничтожения листинга продавца при медлительности оператора (не-решение никогда не должно завершать контент); активное событие/джоба эскалации чисто заскоплены на **Slice 4b**, оставляя lock-expiry-computed модель 4a самодостаточной. Альтернатива (сделать авто-отклонение реальным) отвергнута: она бы вернула карающий авто-терминал, запрещённый стейт-машиной, и сломала бы P0-модель «только APPROVE→ACTIVE / явное решение→терминал».
 
 ## Разбивка на задачи
 1. **Бэкенд (NestJS)**
@@ -234,6 +238,72 @@ stateDiagram-v2
 | `ALREADY_CLAIMED` | 409 | claim на элементе с живым lock другого принципала |
 | `NOT_LOCK_HOLDER` | 409 | release/decide не-держателем |
 | `ITEM_NOT_CLAIMED` | 409 | decide на элементе без живого lock |
+
+## Admin Slice 4a — инварианты и негативные случаи модерации (round-N, нормативно)
+
+> **Замечание об источнике правды.** Это общий список инвариантов/негативных случаев для
+> **backend-engineer** и **reviewer-qa** (гейт) для Slice 4a — та же роль, что списки
+> `L-P0..L-15` / `L2-1..L2-16` для листингов. Контракт:
+> [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml) (полный — preflight
+> не нашёл пробелов в эндпоинтах/схемах; без миграции — claim/lock-колонки, append-only-журнал
+> `moderation_decisions`, словари `decision_templates`/`moderation_reasons` и P0-триггер — всё на
+> live PG). Стейт-машины: [listing_state_machine.md](statemachines/listing_state_machine.md)
+> (модель `status`/`moderation_status` + P0) и стейт-машина claim/lock выше.
+>
+> **WHAT:** формализовать инварианты модерации Slice-4a (P0 ACTIVE-gate, атомарное решение+
+> переход+аудит, claim/lock single-winner, append-only + human-override, agent-as-principal
+> прозрачность, обязательная причина, authz, derived-read-only SLA).
+> **WHY:** контракт полон, но инварианты были разбросаны по round-5-прозе, двум
+> стейт-машинам, ADR-0003/0006/0011 и триггерам схемы — бэкенду и гейту нужен
+> один нумерованный список для сборки и проверки (без re-derivation, без расхождений).
+> **WHY-BETTER-for-the-whole-project:** один источник правды привязывает бэкенд-тесты и QA-покрытие
+> к одним инвариантам; guard P0 ACTIVE-requires-APPROVED остаётся единственным якорем безопасности
+> (DB-триггер backstop + сервис); append-only-журнал + цепочка human-override остаются tamper-proof
+> и экспортируемыми для регулятора; agent-as-principal прозрачность (решение владельца #5) подключена сейчас, чтобы
+> AGENT-путь включился (за своим тогглом) без переписывания; SLA остаётся derived-read в 4a,
+> так что активная джоба эскалации чисто откладываема на 4b.
+
+### Scope Slice-4a
+
+**IN:** чтение очереди (FIFO, фильтры, счётчики), claim / release, listing-detail-for-moderation,
+submit decision (APPROVE / REJECT / REQUEST_CHANGES, вкл. строку human-override), список решений,
+словари reasons & decision-templates, чтение owner moderation-result. **Snapshot/прозрачность
+для AGENT-решений работает сейчас**; AGENT-decisioning гейтится feature-тогглом (off в
+MVP). **Отложено на Slice 4b** (эндпоинты/таблицы существуют — затрекано, НЕ молча построено или выброшено):
+**content-reports** (`createContentReport` / `listContentReports` / `resolveContentReport`;
+таблица `content_reports`) и **активная джоба SLA-эскалации** (планировщик существует, но истечение lock —
+**вычисляемое** `lock_expires_at < now()`, так что 4a не нужна фоновая джоба для корректности;
+emission `Moderation.Escalated` + admin-обработка эскалации — 4b). Апелляции, bulk-действия и
+AI-анализ контента — Фаза 2 (round-5 §Appeals / scope).
+
+### Инварианты и негативные случаи
+
+| # | Инвариант (ДОЛЖЕН выполняться) | Негативный случай (ДОЛЖЕН отклоняться/обрабатываться) | Обеспечивается | Ошибка → HTTP / code |
+|---|---|---|---|---|
+| M-P0 | **Нет ACTIVE без APPROVED.** `APPROVE` — **единственное** решение, ставящее листинг ACTIVE; `REJECT`→DEACTIVATED, `REQUEST_CHANGES`→DRAFT. Ни один эндпоинт не достигает ACTIVE кроме `submitModerationAction(APPROVE)`. | любой путь, ставящий `status=ACTIVE` при `moderation_status≠APPROVED`. | DB `trg_listing_active_requires_approval` (RAISE) + сервис | 422 `VALIDATION_ERROR` (trigger backstop) |
+| M-1 | **Атомарное решение + переход + аудит.** Дозапись `moderation_decisions`, флип `listings.status`/`moderation_status` **и** строка `audit_log` — **ОДНА транзакция** — всё-или-ничего. | закоммиченное решение без перехода; переход без строки журнала; решение без строки аудита. | одна DB-транзакция (сервис) | 500 `INTERNAL` (откат; без частичного состояния) |
+| M-2 | **Claim single-winner (TOCTOU).** Конкурентные claim'ы на FREE-элементе → ровно один 200, остальные 409; guarded conditional UPDATE / `SKIP LOCKED`. | два принципала оба считают, что держат lock. | сервис guarded UPDATE (`WHERE assigned_to IS NULL OR lock_expires_at < now()`) | 409 `ALREADY_CLAIMED` (несёт holder Actor + lockExpiresAt) |
+| M-3 | **Re-claim держателем идемпотентен** — обновляет TTL (`MOD_LOCK_TTL`=15 мин); **истечение lock вычисляется** (`lock_expires_at < now()` освобождает его; фоновая джоба в 4a не нужна). | re-claim держателя выдаёт ошибку; устаревший lock блокирует навсегда. | сервис (проверка держателя + вычисляемое истечение) | 200 (идемпотентный refresh) |
+| M-4 | **Decide требует живой lock, удерживаемый вызывающим**; успех освобождает lock. | действие на элементе, заблокированном другим принципалом. | сервис (holder + live-lock проверка) | 409 `NOT_LOCK_HOLDER` |
+| M-5 | — (тот же гейт, no-lock случай) | действие на элементе **без** живого lock. | сервис | 409 `ITEM_NOT_CLAIMED` |
+| M-6 | **Append-only журнал.** UPDATE/DELETE `moderation_decisions` блокируется. | любой UPDATE/DELETE строки решения. | DB `trg_block_modify_append_only` (RAISE) | DB exception (не API-путь) |
+| M-7 | **Human-override = НОВАЯ строка**, никогда не мутация: `supersedesDecisionId` задан + `isHumanOverride=true` + `principalType=HUMAN`; superseded-строка не тронута; biconditional `isHumanOverride ⟺ supersedesDecisionId` выполняется; superseded-решение должно быть на **той же** `(entityType, entityId)`. | мутация superseded-строки; override с `principalType=AGENT`; один из override-пары задан без другого; supersede решения на другой сущности. | DB `chk_moddec_override` + сервис (HUMAN-only + same-entity проверка) | 422 `VALIDATION_ERROR` (несовпадение/другая-сущность); 403 `FORBIDDEN` (AGENT пытается override) |
+| M-8 | **Agent-as-principal сквозной.** AGENT-решение снапшотит `actor_principal_type='AGENT'` + `actor_role`; owner-result и список решений выставляют `principalType`/`decidedByAgent` (прозрачность для всех — решение владельца #5). Нет HUMAN-only пути решения; AGENT-decisioning гейтится feature-тогглом (off MVP), но snapshot+прозрачность работают сейчас. | AGENT-решение, скрывающее свой principalType; решение без snapshot актора. | сервис snapshot (ADR-0011 §1/§6) + колонки схемы + feature-toggle | n/a (инвариант времени записи); 403 если AGENT действует при выключенном toggle |
+| M-9 | **`reason` обязателен для REJECT / REQUEST_CHANGES**; должен FK на seeded `moderation_reasons.code`. (`APPROVE` причины не требует.) | REJECT/REQUEST_CHANGES без причины, или неизвестный код причины. | сервис + FK на `moderation_reasons` | 422 `VALIDATION_ERROR` |
+| M-10 | **`templateCode` опционален**, должен ссылаться на `decision_templates.code` если присутствует (сервер резолвит body в notes; `notes` может расширить/переопределить). | неизвестный `templateCode`. | сервис + FK на `decision_templates` | 422 `VALIDATION_ERROR` |
+| M-11 | **Operator authz:** queue / claim / release / action / decisions / reasons / templates = **только MODERATOR | ADMIN**. | USER (или неаутентифицированный) обращается к любому operator-эндпоинту. | `x-required-roles` + сервис | 403 `FORBIDDEN` (401 если неаутентифицирован) |
+| M-12 | **Owner-result object-level authz:** `getOwnerModerationResult` (и встроенный `lastModerationResult`) = **владелец** листинга ИЛИ только MODERATOR/ADMIN. | не-владелец USER читает moderation-result другого продавца. | сервис object-level правило (как Slice-1 read-scope) | 403 / 404 (без утечки существования/деталей) |
+| M-13 | **SLA derived & read-only в 4a:** `slaState`/`escalated`/`waitingSeconds` **вычисляются** из `moderation_enqueued_at` vs пороги; **нет авто-reject/авто-approve**; элемент никогда не покидает PENDING_MODERATION при таймауте (событие/джоба эскалации = 4b). | любой код, переводящий элемент с PENDING_MODERATION при таймауте SLA. | сервис (derived read; нет write-пути при таймауте) | n/a (derived); D1-реконсиляция |
+| M-14 | **Re-moderation при материальной правке:** правка материальных полей ACTIVE-листинга (title/description/photos/price/species/breed/listing_type) возвращает его в PENDING_MODERATION (`moderation_status='PENDING'`); тривиальные правки — нет. | материальная правка, оставляющая листинг ACTIVE без re-review. | сервис (детекция материальных полей) | n/a (переход); композируется с M-P0 |
+
+**B10 / domain-коды ошибок используемые:** `ALREADY_CLAIMED` (409), `NOT_LOCK_HOLDER` (409),
+`ITEM_NOT_CLAIMED` (409); плюс стандартные `VALIDATION_ERROR` (422 — reason/template/override/
+P0-триггер), `FORBIDDEN` (403 — operator authz, owner-scope, AGENT-override/toggle), `NOT_FOUND`
+(404 — не в очереди / owner-scope no-leak), `INTERNAL` (500 — откат атомарной txn).
+
+**RBAC (rbac-matrix.md):** очередь модерации & решение = MODERATOR (C: approve/reject/changes) +
+ADMIN (C); owner moderation-result = владелец листинга или MODERATOR/ADMIN. Operator-строка применяется
+одинаково независимо от `principal_type` (ADR-0011 §7 — AGENT-модератор держит ту же строку).
 
 ## Связанные документы
 

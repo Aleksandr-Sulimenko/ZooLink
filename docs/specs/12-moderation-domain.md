@@ -73,8 +73,9 @@ flowchart TD
 
     subgraph System["ZooLink System"]
         Q[listing -> PENDING_MODERATION<br/>enqueue; start SLA timer] --> SLA{SLA timer<br/>expired?}
-        SLA -- Yes, no action --> TO[Auto-reject<br/>listing -> EXPIRED<br/>moderation_status = REJECTED<br/>record decision]
+        SLA -- Yes, no action --> TO[Escalate to ADMIN<br/>emit Moderation.Escalated<br/>listing STAYS PENDING_MODERATION<br/>never auto-approved/rejected]
         SLA -- No --> WAIT[Item waits in queue]
+        TO --> WAIT
     end
 
     subgraph Moderator["Moderator (MODERATOR/ADMIN)"]
@@ -88,16 +89,19 @@ flowchart TD
     AP --> N1
     RJ --> N2
     CR --> N3
-    TO --> N2
     AP --> E([End: live])
     RJ --> E2([End: not published])
 ```
 
 ### Key rules
 - **Actors:** Owner (submits/edits), Moderator (decides), System (queue, SLA, persistence, notifications).
-- **Branches covered:** Approve / Reject / Changes-requested / **SLA-timeout auto-reject** — each maps to a `listings.status` + `moderation_status` transition.
+- **Branches covered:** Approve / Reject / Changes-requested — each maps to a `listings.status` + `moderation_status` transition. **SLA-timeout does NOT decide:** it **escalates to ADMIN** (`Moderation.Escalated`) and the item **stays `PENDING_MODERATION`** — never auto-approved or auto-rejected (see round-5 §SLA and `statemachines/listing_state_machine.md`).
 - **Audit:** every decision is an append-only `moderation_decisions` row (immutable; UPDATE/DELETE blocked by trigger).
 - **Notifications** are dispatched via the Notification domain on every terminal decision.
+
+> **(round-N, normative — D1 reconciliation) WHAT:** the SLA-timeout branch (mermaid + the "Branches covered" bullet) changed from "auto-reject → listing EXPIRED / moderation_status REJECTED" to "**escalate to ADMIN, item stays PENDING_MODERATION, never auto-approved/rejected**" (and the `TO → Rejected-notification` edge was removed).
+> **WHY:** the spec contradicted itself — the BPMN diagram + line-98 bullet said auto-reject, but the round-5 normative §SLA/escalation **and** `listing_state_machine.md:23/58/85` already say escalate-stays-PENDING. Per the truth hierarchy a code↔doc/doc↔doc conflict is fixed toward the normative text + state machine; the diagram was the stale lower-fidelity artifact.
+> **WHY-BETTER-for-the-whole-project:** one consistent SLA semantics across spec↔state-machine↔contract (`slaState`/`escalated` are derived-read-only in 4a); no silent destruction of a seller's listing on operator slowness (a non-decision must never terminate content); the active escalation event/job is cleanly scoped to **Slice 4b**, leaving 4a's lock-expiry-computed model self-sufficient. Alternative (make the auto-reject real) was rejected: it would re-introduce a punitive auto-terminal the state machine forbids and break the P0 "only APPROVE→ACTIVE / explicit decision→terminal" model.
 
 ## Task Breakdown
 1. **Backend (NestJS)**
@@ -233,6 +237,72 @@ migration flagged for `zoolink-backend-engineer`** (NOT implemented in this cont
 | `ALREADY_CLAIMED` | 409 | claim on an item with another principal's live lock |
 | `NOT_LOCK_HOLDER` | 409 | release/decide by a non-holder |
 | `ITEM_NOT_CLAIMED` | 409 | decide on an item with no live lock |
+
+## Admin Slice 4a — moderation invariants & negative cases (round-N, normative)
+
+> **Source-of-truth note.** This is the shared invariant/negative-case list for
+> **backend-engineer** and **reviewer-qa** (the gate) for Slice 4a — the same role as the
+> listings `L-P0..L-15` / `L2-1..L2-16` lists. Contract:
+> [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml) (complete — the
+> preflight found no endpoint/schema gap; no migration — claim/lock columns, the append-only
+> `moderation_decisions` ledger, `decision_templates`/`moderation_reasons` dictionaries, and the
+> P0 trigger are all on live PG). State machines: [listing_state_machine.md](statemachines/listing_state_machine.md)
+> (the `status`/`moderation_status` model + P0) and the claim/lock machine above.
+>
+> **WHAT:** formalize the Slice-4a moderation invariants (P0 ACTIVE-gate, atomic decision+
+> transition+audit, claim/lock single-winner, append-only + human-override, agent-as-principal
+> transparency, mandatory reason, authz, derived-read-only SLA).
+> **WHY:** the contract is complete but the invariants were spread across the round-5 prose, the
+> two state machines, ADR-0003/0006/0011, and the schema triggers — backend and the gate need
+> one numbered list to build and verify against (no re-derivation, no divergence).
+> **WHY-BETTER-for-the-whole-project:** one source of truth keys backend tests and QA coverage
+> off the same invariants; the P0 ACTIVE-requires-APPROVED guard stays the single safety anchor
+> (DB trigger backstop + service); the append-only ledger + human-override chain stay tamper-proof
+> and regulator-exportable; agent-as-principal transparency (owner-decision #5) is wired now so
+> the AGENT path turns on (behind its toggle) without a rewrite; SLA stays a derived read in 4a
+> so the active-escalation job is cleanly deferrable to 4b.
+
+### Slice-4a scope
+
+**IN:** queue read (FIFO, filters, counts), claim / release, listing-detail-for-moderation,
+submit decision (APPROVE / REJECT / REQUEST_CHANGES, incl. human-override row), decisions list,
+reasons & decision-templates dictionaries, owner moderation-result read. **Snapshot/transparency
+plumbing for AGENT decisions works now**; AGENT decisioning is gated by a feature toggle (off in
+MVP). **Deferred to Slice 4b** (endpoints/tables exist — tracked, NOT silently built or dropped):
+**content-reports** (`createContentReport` / `listContentReports` / `resolveContentReport`;
+`content_reports` table) and the **active SLA-escalation job** (the scheduler exists, but lock
+expiry is **computed** `lock_expires_at < now()`, so 4a needs no background job for correctness;
+the `Moderation.Escalated` emission + admin escalation handling is 4b). Appeals, bulk actions, and
+AI content-analysis are Фаза 2 (round-5 §Appeals / scope).
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected/handled) | Enforced by | Error → HTTP / code |
+|---|---|---|---|---|
+| M-P0 | **No ACTIVE without APPROVED.** `APPROVE` is the **only** decision that sets a listing ACTIVE; `REJECT`→DEACTIVATED, `REQUEST_CHANGES`→DRAFT. No endpoint reaches ACTIVE except `submitModerationAction(APPROVE)`. | any path setting `status=ACTIVE` while `moderation_status≠APPROVED`. | DB `trg_listing_active_requires_approval` (RAISE) + service | 422 `VALIDATION_ERROR` (trigger backstop) |
+| M-1 | **Atomic decision + transition + audit.** The `moderation_decisions` append, the `listings.status`/`moderation_status` flip, **and** the `audit_log` row are **ONE transaction** — all-or-nothing. | a committed decision with no transition; a transition with no ledger row; a decision with no audit row. | single DB transaction (service) | 500 `INTERNAL` (rolls back; no partial state) |
+| M-2 | **Claim single-winner (TOCTOU).** Concurrent claims on a FREE item → exactly one 200, the rest 409; guarded conditional UPDATE / `SKIP LOCKED`. | two principals both believe they hold the lock. | service guarded UPDATE (`WHERE assigned_to IS NULL OR lock_expires_at < now()`) | 409 `ALREADY_CLAIMED` (carries holder Actor + lockExpiresAt) |
+| M-3 | **Re-claim by holder is idempotent** — refreshes TTL (`MOD_LOCK_TTL`=15 min); **lock expiry is computed** (`lock_expires_at < now()` frees it; no background job needed in 4a). | a holder's re-claim erroring; a stale lock blocking forever. | service (holder check + computed expiry) | 200 (idempotent refresh) |
+| M-4 | **Decide requires a live lock held by the caller**; success releases the lock. | action on an item locked by another principal. | service (holder + live-lock check) | 409 `NOT_LOCK_HOLDER` |
+| M-5 | — (same gate, no-lock case) | action on an item with **no** live lock. | service | 409 `ITEM_NOT_CLAIMED` |
+| M-6 | **Append-only ledger.** `moderation_decisions` UPDATE/DELETE is blocked. | any UPDATE/DELETE of a decision row. | DB `trg_block_modify_append_only` (RAISE) | DB exception (not an API path) |
+| M-7 | **Human-override = NEW row**, never a mutation: `supersedesDecisionId` set + `isHumanOverride=true` + `principalType=HUMAN`; the superseded row is untouched; biconditional `isHumanOverride ⟺ supersedesDecisionId` holds; the superseded decision must be on the **same** `(entityType, entityId)`. | mutating the superseded row; override with `principalType=AGENT`; one of the override pair set without the other; superseding a decision on a different entity. | DB `chk_moddec_override` + service (HUMAN-only + same-entity check) | 422 `VALIDATION_ERROR` (mismatch/different-entity); 403 `FORBIDDEN` (AGENT attempts override) |
+| M-8 | **Agent-as-principal end-to-end.** An AGENT decision snapshots `actor_principal_type='AGENT'` + `actor_role`; the owner-result and the decisions-list expose `principalType`/`decidedByAgent` (transparency to everyone — owner-decision #5). No HUMAN-only decision path; AGENT decisioning gated by the feature toggle (off MVP) but snapshot+transparency plumbing works now. | an AGENT decision that hides its principalType; a decision with no actor snapshot. | service snapshot (ADR-0011 §1/§6) + schema columns + feature toggle | n/a (write-time invariant); 403 if AGENT acts while toggle off |
+| M-9 | **`reason` mandatory for REJECT / REQUEST_CHANGES**; must FK a seeded `moderation_reasons.code`. (`APPROVE` needs no reason.) | REJECT/REQUEST_CHANGES with no reason, or an unknown reason code. | service + FK to `moderation_reasons` | 422 `VALIDATION_ERROR` |
+| M-10 | **`templateCode` optional**, must reference a `decision_templates.code` when present (server resolves body into notes; `notes` may extend/override). | an unknown `templateCode`. | service + FK to `decision_templates` | 422 `VALIDATION_ERROR` |
+| M-11 | **Operator authz:** queue / claim / release / action / decisions / reasons / templates = **MODERATOR | ADMIN only**. | a USER (or unauthenticated) hits any operator endpoint. | `x-required-roles` + service | 403 `FORBIDDEN` (401 if unauthenticated) |
+| M-12 | **Owner-result object-level authz:** `getOwnerModerationResult` (and the embedded `lastModerationResult`) = the listing **owner** OR MODERATOR/ADMIN only. | a non-owner USER reads another seller's moderation result. | service object-level rule (like Slice-1 read-scope) | 403 / 404 (no existence/detail leak) |
+| M-13 | **SLA derived & read-only in 4a:** `slaState`/`escalated`/`waitingSeconds` are **computed** from `moderation_enqueued_at` vs thresholds; **no auto-reject/auto-approve**; the item never leaves PENDING_MODERATION on timeout (escalation event/job = 4b). | any code transitioning an item off PENDING_MODERATION on SLA timeout. | service (derived read; no write path on timeout) | n/a (derived); D1 reconciliation |
+| M-14 | **Re-moderation on material edit:** editing an ACTIVE listing's material fields (title/description/photos/price/species/breed/listing_type) returns it to PENDING_MODERATION (`moderation_status='PENDING'`); trivial edits do not. | a material edit leaving a listing ACTIVE without re-review. | service (material-field detection) | n/a (transition); composes with M-P0 |
+
+**B10 / domain error codes used:** `ALREADY_CLAIMED` (409), `NOT_LOCK_HOLDER` (409),
+`ITEM_NOT_CLAIMED` (409); plus the standard `VALIDATION_ERROR` (422 — reason/template/override/
+P0-trigger), `FORBIDDEN` (403 — operator authz, owner-scope, AGENT-override/toggle), `NOT_FOUND`
+(404 — not in queue / owner-scope no-leak), `INTERNAL` (500 — atomic-txn rollback).
+
+**RBAC (rbac-matrix.md):** moderation queue & decision = MODERATOR (C: approve/reject/changes) +
+ADMIN (C); owner moderation-result = listing owner or MODERATOR/ADMIN. The operator row applies
+identically regardless of `principal_type` (ADR-0011 §7 — an AGENT moderator holds the same row).
 
 ## Related Documents
 
