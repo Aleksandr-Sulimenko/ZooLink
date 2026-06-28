@@ -305,6 +305,61 @@ P0-триггер), `FORBIDDEN` (403 — operator authz, owner-scope, AGENT-over
 ADMIN (C); owner moderation-result = владелец листинга или MODERATOR/ADMIN. Operator-строка применяется
 одинаково независимо от `principal_type` (ADR-0011 §7 — AGENT-модератор держит ту же строку).
 
+## Slice 4b — инварианты и негативные случаи content-reports (round-N, нормативно)
+
+> **Замечание об источнике правды.** Общий список инвариантов/негативных случаев для **backend-engineer** и
+> **reviewer-qa** для Slice 4b (content-reports), та же позиция/паттерн, что список M выше.
+> Контракт: [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml)
+> (блок `/content-reports`). Жизненный цикл:
+> [content_report_state_machine.md](statemachines/content_report_state_machine.md). Без миграции —
+> `content_reports`, dedup partial-unique `uq_open_report_per_reporter_entity` и status-CHECK —
+> на live PG.
+>
+> **WHAT:** добавить reporter-read-путь (file / role-scoped list / object-scoped get / MOD-resolve)
+> и формализовать CR-1..CR-11. **WHY:** rbac-matrix:67/101 даёт USER «C own, R own» на content-
+> reports — read-путь **в MVP** (DRIFT-2), а `If-Match` у resolve нужен реальный GET как источник
+> ETag (DRIFT-1); без них report-флоу несобираем. **WHY-BETTER-for-the-whole-
+> project:** переиспользует read-scope-паттерн листингов (USER self-scoped, не может расширить — IDOR-safe);
+> dedup-индекс делает report-spam DB-enforced 409, а не сервисной гонкой; reason-enum держит
+> данные agent-friendly и без мусора без миграции; resolve остаётся только MOD/ADMIN, а append-
+> trail + аудит остаются атомарными; флоу report-resolve и entity-action остаются разделёнными (DRIFT-3).
+
+### Scope Slice-4b
+
+**IN:** `POST /content-reports` (file), `GET /content-reports` (role-scoped list),
+`GET /content-reports/{id}` (object-scoped get — DRIFT-1), `PATCH /content-reports/{id}`
+(resolve, MOD/ADMIN). MVP entity_types **LISTING | ANIMAL | USER**; **MESSAGE** — forward-compat
+форма, отклоняется в MVP (ADR-0005). **Отложено/forward-compat (затрекано, не построено):** MESSAGE-
+жалобы (чат — Фаза 2+), «resolve-and-act» удобство, композирующее report-resolve с 4a
+entity-решением (держится разделённым по DRIFT-3), report-driven очереди модерации животных/пользователей.
+
+### Инварианты и негативные случаи
+
+| # | Инвариант (ДОЛЖЕН выполняться) | Негативный случай (ДОЛЖЕН отклоняться/обрабатываться) | Обеспечивается | Ошибка → HTTP / code |
+|---|---|---|---|---|
+| CR-1 | **`reporter_id` = аутентифицированный актор** (server-derived). | `reporterId` в теле (любое значение — IDOR). | сервис (игнор/reject body reporterId) | значение тела не доверяется; никогда не задаётся клиентом |
+| CR-2 | **Dedup:** максимум одна OPEN-жалоба на `(reporter, entity_type, entity_id)`. | вторая жалоба при существующей OPEN на ту же цель. | DB `uq_open_report_per_reporter_entity` (23505) + сервис | 409 `DUPLICATE_REPORT` |
+| CR-3 | **Цель должна существовать** для своего `entity_type`. MVP-набор = LISTING|ANIMAL|USER. | жалоба на несуществующую сущность; `MESSAGE`-жалоба (чат вне MVP, ADR-0005). | сервис existence-проверка + entity_type-гейт | 404 `NOT_FOUND` (missing target); 422 `ENTITY_TYPE_UNAVAILABLE` (MESSAGE) |
+| CR-4 | **File authz:** любой **аутентифицированный** пользователь может подать. | неаутентифицированный запрос. | глобальный auth | 401 `UNAUTHENTICATED` |
+| CR-5 | **Read-scope:** USER видит **только свои** жалобы на list **и** get (`reporter_id=actor`, AND-пересекается, не может расширить); MODERATOR|ADMIN видят все. | не-владелец USER читает чужую жалобу (list-утечка или `GET /{id}`). | сервис object/query scope (listScope-паттерн) | 404 `NOT_FOUND` на get (без утечки существования); self-scoped строки на list |
+| CR-6 | **Resolve authz: только MODERATOR|ADMIN** — reporter не может разрешить свою жалобу. | USER (вкл. reporter'а) PATCH'ит жалобу. | `x-required-roles:[MODERATOR,ADMIN]` + сервис | 403 `FORBIDDEN` |
+| CR-7 | **Легальность перехода:** OPEN→{REVIEWED,DISMISSED,ACTIONED}; REVIEWED→{DISMISSED,ACTIONED}. | нелегальная цель (напр. →OPEN, или пропуск правил). | сервис (transition-таблица) | 422 `VALIDATION_ERROR` |
+| CR-8 | **Терминальная неизменяемость:** DISMISSED/ACTIONED терминальны. | resolve на уже-терминальной жалобе. | сервис (state precondition) + status CHECK | 409 `REPORT_TERMINAL` |
+| CR-9 | **Resolve ставит `resolved_by` + аудит в одной txn.** Snapshot актора `{actorId, principalType}` (agent-ready). | терминальный переход без `resolved_by` или без строки аудита; частичная запись. | одна DB-транзакция (сервис) | 500 `INTERNAL` (откат) |
+| CR-10 | **Оптимистичная конкуренция на resolve** (`If-Match` из `GET /content-reports/{id}`). | конкурентный resolve с устаревшим ETag; нет If-Match. | сервис ETag-сравнение | 412 `STALE_RESOURCE` / 428 |
+| CR-11 | **`reason` ∈ enum** {SPAM,ABUSE,FRAUD,INAPPROPRIATE,OTHER}; **`entity_type` ∈ MVP-набор**. | free-string/неизвестный reason; out-of-set entity_type. | сервис enum-валидация (DB-колонка остаётся VARCHAR(50)) | 422 `VALIDATION_ERROR` |
+| CR-12 | **ACTIONED развязан с entity-действием** (DRIFT-3, MVP-loose): resolve фиксирует только статус жалобы; entity-действие — отдельный 4a-шаг. | report-resolve, пытающийся также мутировать/деактивировать целевую сущность. | сервис (resolve не несёт entity-action полей) | n/a (по форме контракта) |
+
+**B10 / domain-коды ошибок используемые (расширяют API_CONVENTIONS §4):** `DUPLICATE_REPORT` (409),
+`ENTITY_TYPE_UNAVAILABLE` (422), `REPORT_TERMINAL` (409); плюс стандартные `VALIDATION_ERROR` (422 —
+reason/entity_type/transition), `FORBIDDEN` (403 — resolve authz), `NOT_FOUND` (404 — target
+missing / read-scope no-leak), `UNAUTHENTICATED` (401), `STALE_RESOURCE` (412), `INTERNAL` (500),
+`RATE_LIMITED` (429 — report-spam).
+
+**RBAC (rbac-matrix.md:67/101, подтверждено — reporter-read-путь его соблюдает):** USER = **C own,
+R own** (file любой; читает **только свои** жалобы); MODERATOR = R/U (resolve) все; ADMIN = R/U/D все.
+Read-путь, построенный здесь, точно соответствует «R own» (CR-5); resolve остаётся operator-only (CR-6).
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

@@ -309,12 +309,22 @@ paths:
     post:
       summary: Submit a user report/flag on content
       operationId: createContentReport
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        File a content report. **`reporterId` is server-derived** from the authenticated actor
+        (`reporter_id := actor`); any body `reporterId` is ignored/rejected (IDOR class, CR-1).
+        **Dedup:** a same reporter + `entityType` + `entityId` while a prior report is OPEN →
+        **409 `DUPLICATE_REPORT`** (DB partial-unique `uq_open_report_per_reporter_entity`,
+        23505 mapped). Throttled (report-spam vector, §8). The target must exist for its
+        `entityType` (→404/422). **MVP entity_types: LISTING | ANIMAL | USER.** `MESSAGE` is
+        forward-compat form only — chat is out of MVP (ADR-0005), so a MESSAGE report is rejected
+        → 422 `ENTITY_TYPE_UNAVAILABLE`.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
-          description: Client-generated key for safe retry (API_CONVENTIONS §11)
+          description: Client-generated key for safe retry (API_CONVENTIONS §11, 24h window)
       requestBody:
         required: true
         content:
@@ -322,17 +332,30 @@ paths:
             schema: { $ref: '#/components/schemas/ContentReportCreate' }
       responses:
         '201':
-          description: Report created
+          description: Report created (OPEN)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator of the new report (reporter can use it on a later read)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ContentReport' }
         '401': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # target entity not found
+        '409': { $ref: '#/components/responses/Problem' }   # DUPLICATE_REPORT (open report already exists)
+        '422': { $ref: '#/components/responses/Problem' }   # reason not in enum / ENTITY_TYPE_UNAVAILABLE (MESSAGE) / Idempotency-Key reuse w/ different body
+        '429': { $ref: '#/components/responses/Problem' }   # rate-limited (report-spam, §8)
         '500': { $ref: '#/components/responses/Problem' }
     get:
-      summary: List content reports (moderator/admin)
+      summary: List content reports (role-scoped)
       operationId: listContentReports
-      x-required-roles: [MODERATOR, ADMIN]
+      description: >
+        **Role-scoped list (CR-5).** A USER sees **only their own** reports
+        (`reporter_id = actor`, AND-intersected server-side — cannot be widened by any filter).
+        MODERATOR|ADMIN see **all** reports. The `reporter_id` filter is honoured only for
+        operators (a USER's results are always self-scoped regardless). Mirrors the listings
+        read-scope pattern.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
@@ -341,6 +364,14 @@ paths:
           name: entity_type
           schema: { type: string, enum: [LISTING, ANIMAL, USER, MESSAGE] }
         - in: query
+          name: entity_id
+          schema: { type: string, format: uuid }
+          description: Filter by reported entity id
+        - in: query
+          name: reporter_id
+          schema: { type: string, format: uuid }
+          description: Operator-only filter by reporter; ignored for a USER (always self-scoped)
+        - in: query
           name: page
           schema: { type: integer, minimum: 1, default: 1 }
         - in: query
@@ -348,7 +379,7 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: Reports page
+          description: Reports page (self-scoped for USER, all for MOD/ADMIN)
           content:
             application/json:
               schema:
@@ -362,10 +393,46 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /content-reports/{id}:
+    get:
+      summary: Get a single content report (reporter-owner or moderator/admin)
+      operationId: getContentReport
+      description: >
+        Read one report. **Object-scoped (CR-5):** visible to the **reporter who filed it**
+        (`reporter_id = actor`) OR MODERATOR|ADMIN. A non-owner USER → **404** (no existence
+        leak). Emits a **weak ETag** — this is the ETag source a moderator sends back as
+        `If-Match` on resolve (DRIFT-1: without this GET the resolve flow has no validator).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Content report
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator to send back as If-Match on resolve (§10)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # not found OR non-owner USER (no leak)
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Resolve a content report (moderator/admin)
       operationId: resolveContentReport
-      description: Optimistic concurrency (§10) — requires If-Match carrying the ETag from a prior GET.
+      description: >
+        Resolve a report. **MODERATOR|ADMIN only** — a reporter **cannot** resolve their own
+        report (CR-6 → 403). Legal transitions: OPEN → {REVIEWED, DISMISSED, ACTIONED};
+        REVIEWED → {DISMISSED, ACTIONED}; an illegal/terminal transition → 409/422 (CR-7/CR-8).
+        Sets `resolved_by := actor` (snapshot `{actorId, principalType}`, agent-ready) and writes
+        an `audit_log` row **in the same transaction** (CR-9). Optimistic concurrency (§10):
+        `If-Match` from a prior `GET /content-reports/{id}` (428 missing / 412 stale). **ACTIONED
+        records the report status only** — the actual entity action (deactivate a listing, etc.)
+        is a **separate moderator step** via the 4a moderation flow (DRIFT-3, MVP-loose).
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -376,7 +443,7 @@ paths:
           name: If-Match
           required: true
           schema: { type: string }
-          description: ETag from a prior read of the content report
+          description: ETag from a prior GET /content-reports/{id}
       requestBody:
         required: true
         content:
@@ -398,11 +465,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ContentReport' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not MOD/ADMIN (a reporter cannot resolve)
         '404': { $ref: '#/components/responses/Problem' }
-        '412': { $ref: '#/components/responses/Problem' }
-        '428': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # REPORT_TERMINAL / illegal transition on terminal state
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # illegal transition (e.g. → OPEN)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
@@ -743,22 +813,34 @@ components:
           type: boolean
     ContentReportCreate:
       type: object
+      description: >
+        Create-report body. **`reporterId` is NOT accepted** — derived from the authenticated
+        actor server-side (CR-1, IDOR class). `entityType` MVP set is LISTING|ANIMAL|USER;
+        MESSAGE is forward-compat form, rejected in MVP (ADR-0005 → 422 ENTITY_TYPE_UNAVAILABLE).
       required: [entityType, entityId, reason]
       properties:
         entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
+          description: >-
+            Reported entity type. MVP-active: LISTING|ANIMAL|USER. MESSAGE is forward-compat only
+            (chat out of MVP, ADR-0005) — a MESSAGE report is rejected (422 ENTITY_TYPE_UNAVAILABLE).
         entityId:
           type: string
           format: uuid
         reason:
           type: string
-          description: e.g., SPAM, ABUSE, FRAUD, INAPPROPRIATE
+          enum: [SPAM, ABUSE, FRAUD, INAPPROPRIATE, OTHER]
+          description: >-
+            Report reason (contract+service-validated enum; DB column stays VARCHAR(50), no migration).
+            Free-text detail goes in `notes`. `OTHER` is the catch-all.
         notes:
           type: string
           nullable: true
+          description: Free-text detail supplementing the reason
     ContentReport:
       type: object
+      required: [id, entityType, entityId, reason, status, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -767,6 +849,7 @@ components:
           type: string
           format: uuid
           nullable: true
+          description: Reporter user (server-derived; nullable — `ON DELETE SET NULL` keeps the report if the reporter is erased)
         entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
@@ -775,6 +858,7 @@ components:
           format: uuid
         reason:
           type: string
+          enum: [SPAM, ABUSE, FRAUD, INAPPROPRIATE, OTHER]
         notes:
           type: string
           nullable: true

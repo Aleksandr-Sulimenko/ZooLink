@@ -307,14 +307,24 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /content-reports:
     post:
-      summary: Отправить жалобу/флаг на контент
+      summary: Отправить жалобу/флаг пользователя на контент
       operationId: createContentReport
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >
+        Подать жалобу на контент. **`reporterId` выводится сервером** из аутентифицированного актора
+        (`reporter_id := actor`); любой `reporterId` в теле игнорируется/отклоняется (IDOR-класс, CR-1).
+        **Dedup:** тот же reporter + `entityType` + `entityId` при существующей OPEN-жалобе →
+        **409 `DUPLICATE_REPORT`** (DB partial-unique `uq_open_report_per_reporter_entity`,
+        23505 mapped). Throttled (вектор report-spam, §8). Цель должна существовать для своего
+        `entityType` (→404/422). **MVP entity_types: LISTING | ANIMAL | USER.** `MESSAGE` —
+        только forward-compat форма — чат вне MVP (ADR-0005), так что MESSAGE-жалоба отклоняется
+        → 422 `ENTITY_TYPE_UNAVAILABLE`.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
+          required: true
           schema: { type: string, format: uuid }
-          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
+          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11, окно 24ч)
       requestBody:
         required: true
         content:
@@ -322,17 +332,30 @@ paths:
             schema: { $ref: '#/components/schemas/ContentReportCreate' }
       responses:
         '201':
-          description: Жалоба создана
+          description: Жалоба создана (OPEN)
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор новой жалобы (reporter может использовать его при позднем чтении)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ContentReport' }
         '401': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # target entity not found
+        '409': { $ref: '#/components/responses/Problem' }   # DUPLICATE_REPORT (open report already exists)
+        '422': { $ref: '#/components/responses/Problem' }   # reason not in enum / ENTITY_TYPE_UNAVAILABLE (MESSAGE) / Idempotency-Key reuse w/ different body
+        '429': { $ref: '#/components/responses/Problem' }   # rate-limited (report-spam, §8)
         '500': { $ref: '#/components/responses/Problem' }
     get:
-      summary: Список жалоб на контент (модератор/админ)
+      summary: Список жалоб на контент (role-scoped)
       operationId: listContentReports
-      x-required-roles: [MODERATOR, ADMIN]
+      description: >
+        **Role-scoped список (CR-5).** USER видит **только свои** жалобы
+        (`reporter_id = actor`, AND-пересекается на сервере — не может быть расширено никаким фильтром).
+        MODERATOR|ADMIN видят **все** жалобы. Фильтр `reporter_id` учитывается только для
+        операторов (результаты USER всегда self-scoped независимо от него). Повторяет
+        read-scope-паттерн листингов.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
@@ -341,6 +364,14 @@ paths:
           name: entity_type
           schema: { type: string, enum: [LISTING, ANIMAL, USER, MESSAGE] }
         - in: query
+          name: entity_id
+          schema: { type: string, format: uuid }
+          description: Фильтр по id жалуемой сущности
+        - in: query
+          name: reporter_id
+          schema: { type: string, format: uuid }
+          description: Operator-only фильтр по reporter; игнорируется для USER (всегда self-scoped)
+        - in: query
           name: page
           schema: { type: integer, minimum: 1, default: 1 }
         - in: query
@@ -348,7 +379,7 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: Страница жалоб
+          description: Страница жалоб (self-scoped для USER, все для MOD/ADMIN)
           content:
             application/json:
               schema:
@@ -362,10 +393,46 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /content-reports/{id}:
+    get:
+      summary: Получить одну жалобу на контент (reporter-владелец или модератор/админ)
+      operationId: getContentReport
+      description: >
+        Прочитать одну жалобу. **Object-scoped (CR-5):** видна **подавшему её reporter'у**
+        (`reporter_id = actor`) ИЛИ MODERATOR|ADMIN. Не-владелец USER → **404** (без утечки
+        существования). Отдаёт **weak ETag** — это источник ETag, который модератор шлёт обратно как
+        `If-Match` на resolve (DRIFT-1: без этого GET у resolve-флоу нет валидатора).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Жалоба на контент
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak-валидатор для отправки обратно как If-Match на resolve (§10)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # not found OR non-owner USER (no leak)
+        '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Разрешить жалобу на контент (модератор/админ)
       operationId: resolveContentReport
-      description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
+      description: >
+        Разрешить жалобу. **Только MODERATOR|ADMIN** — reporter **не может** разрешить свою
+        жалобу (CR-6 → 403). Легальные переходы: OPEN → {REVIEWED, DISMISSED, ACTIONED};
+        REVIEWED → {DISMISSED, ACTIONED}; нелегальный/терминальный переход → 409/422 (CR-7/CR-8).
+        Ставит `resolved_by := actor` (snapshot `{actorId, principalType}`, agent-ready) и пишет
+        строку `audit_log` **в той же транзакции** (CR-9). Оптимистичная конкуренция (§10):
+        `If-Match` из предыдущего `GET /content-reports/{id}` (428 отсутствует / 412 устарел). **ACTIONED
+        фиксирует только статус жалобы** — фактическое действие над сущностью (деактивация листинга и т.п.)
+        — **отдельный шаг модератора** через 4a-флоу модерации (DRIFT-3, MVP-loose).
       x-required-roles: [MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -376,7 +443,7 @@ paths:
           name: If-Match
           required: true
           schema: { type: string }
-          description: ETag из предыдущего чтения жалобы
+          description: ETag из предыдущего GET /content-reports/{id}
       requestBody:
         required: true
         content:
@@ -398,11 +465,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ContentReport' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not MOD/ADMIN (a reporter cannot resolve)
         '404': { $ref: '#/components/responses/Problem' }
-        '412': { $ref: '#/components/responses/Problem' }
-        '428': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # REPORT_TERMINAL / illegal transition on terminal state
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '422': { $ref: '#/components/responses/Problem' }   # illegal transition (e.g. → OPEN)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
@@ -742,22 +812,34 @@ components:
           type: boolean
     ContentReportCreate:
       type: object
+      description: >
+        Тело создания жалобы. **`reporterId` НЕ принимается** — выводится из аутентифицированного
+        актора на сервере (CR-1, IDOR-класс). MVP-набор `entityType` — LISTING|ANIMAL|USER;
+        MESSAGE — forward-compat форма, отклоняется в MVP (ADR-0005 → 422 ENTITY_TYPE_UNAVAILABLE).
       required: [entityType, entityId, reason]
       properties:
         entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
+          description: >-
+            Тип жалуемой сущности. MVP-active: LISTING|ANIMAL|USER. MESSAGE — только forward-compat
+            (чат вне MVP, ADR-0005) — MESSAGE-жалоба отклоняется (422 ENTITY_TYPE_UNAVAILABLE).
         entityId:
           type: string
           format: uuid
         reason:
           type: string
-          description: напр., SPAM, ABUSE, FRAUD, INAPPROPRIATE
+          enum: [SPAM, ABUSE, FRAUD, INAPPROPRIATE, OTHER]
+          description: >-
+            Причина жалобы (enum, валидируемый контрактом+сервисом; DB-колонка остаётся VARCHAR(50), без миграции).
+            Свободный текст идёт в `notes`. `OTHER` — catch-all.
         notes:
           type: string
           nullable: true
+          description: Свободно-текстовая деталь, дополняющая причину
     ContentReport:
       type: object
+      required: [id, entityType, entityId, reason, status, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -766,6 +848,7 @@ components:
           type: string
           format: uuid
           nullable: true
+          description: Reporter-пользователь (выводится сервером; nullable — `ON DELETE SET NULL` сохраняет жалобу, если reporter стёрт)
         entityType:
           type: string
           enum: [LISTING, ANIMAL, USER, MESSAGE]
@@ -774,6 +857,7 @@ components:
           format: uuid
         reason:
           type: string
+          enum: [SPAM, ABUSE, FRAUD, INAPPROPRIATE, OTHER]
         notes:
           type: string
           nullable: true

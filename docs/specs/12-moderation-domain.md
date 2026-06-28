@@ -304,7 +304,64 @@ P0-trigger), `FORBIDDEN` (403 — operator authz, owner-scope, AGENT-override/to
 ADMIN (C); owner moderation-result = listing owner or MODERATOR/ADMIN. The operator row applies
 identically regardless of `principal_type` (ADR-0011 §7 — an AGENT moderator holds the same row).
 
+## Slice 4b — content-reports invariants & negative cases (round-N, normative)
+
+> **Source-of-truth note.** Shared invariant/negative-case list for **backend-engineer** and
+> **reviewer-qa** for Slice 4b (content-reports), same placement/pattern as the M-list above.
+> Contract: [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml)
+> (`/content-reports` block). Lifecycle:
+> [content_report_state_machine.md](statemachines/content_report_state_machine.md). No migration —
+> `content_reports`, the dedup partial-unique `uq_open_report_per_reporter_entity`, and the status
+> CHECK are on live PG.
+>
+> **WHAT:** add the reporter-read path (file / role-scoped list / object-scoped get / MOD-resolve)
+> and formalize CR-1..CR-11. **WHY:** rbac-matrix:67/101 grants USER "C own, R own" on content
+> reports — the read path is **in MVP** (DRIFT-2), and resolve's `If-Match` needs a real GET as its
+> ETag source (DRIFT-1); without these the report flow is unbuildable. **WHY-BETTER-for-the-whole-
+> project:** reuses the listings read-scope pattern (USER self-scoped, can't widen — IDOR-safe);
+> the dedup index makes report-spam a DB-enforced 409 not a service race; the reason enum keeps the
+> data agent-friendly and garbage-free with no migration; resolve stays MOD/ADMIN-only and append-
+> trail + audit stay atomic; the report-resolve and entity-action flows stay decoupled (DRIFT-3).
+
+### Slice-4b scope
+
+**IN:** `POST /content-reports` (file), `GET /content-reports` (role-scoped list),
+`GET /content-reports/{id}` (object-scoped get — DRIFT-1), `PATCH /content-reports/{id}`
+(resolve, MOD/ADMIN). MVP entity_types **LISTING | ANIMAL | USER**; **MESSAGE** is forward-compat
+form, rejected in MVP (ADR-0005). **Deferred/forward-compat (tracked, not built):** MESSAGE
+reports (chat is Фаза 2+), a "resolve-and-act" convenience that composes report-resolve with a 4a
+entity decision (kept decoupled per DRIFT-3), report-driven animal/user moderation queues.
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected/handled) | Enforced by | Error → HTTP / code |
+|---|---|---|---|---|
+| CR-1 | **`reporter_id` = authenticated actor** (server-derived). | a body `reporterId` (any value — IDOR). | service (ignore/reject body reporterId) | body value not trusted; never client-set |
+| CR-2 | **Dedup:** at most one OPEN report per `(reporter, entity_type, entity_id)`. | a second report while one is OPEN for the same target. | DB `uq_open_report_per_reporter_entity` (23505) + service | 409 `DUPLICATE_REPORT` |
+| CR-3 | **Target must exist** for its `entity_type`. MVP set = LISTING|ANIMAL|USER. | report on a non-existent entity; a `MESSAGE` report (chat out of MVP, ADR-0005). | service existence check + entity_type gate | 404 `NOT_FOUND` (missing target); 422 `ENTITY_TYPE_UNAVAILABLE` (MESSAGE) |
+| CR-4 | **File authz:** any **authenticated** user may file. | an unauthenticated request. | global auth | 401 `UNAUTHENTICATED` |
+| CR-5 | **Read-scope:** a USER sees **only their own** reports on list **and** get (`reporter_id=actor`, AND-intersected, can't widen); MODERATOR|ADMIN see all. | a non-owner USER reads another's report (list leak or `GET /{id}`). | service object/query scope (listScope pattern) | 404 `NOT_FOUND` on get (no existence leak); self-scoped rows on list |
+| CR-6 | **Resolve authz: MODERATOR|ADMIN only** — a reporter cannot resolve their own report. | a USER (incl. the reporter) PATCHes a report. | `x-required-roles:[MODERATOR,ADMIN]` + service | 403 `FORBIDDEN` |
+| CR-7 | **Transition legality:** OPEN→{REVIEWED,DISMISSED,ACTIONED}; REVIEWED→{DISMISSED,ACTIONED}. | an illegal target (e.g. →OPEN, or skipping rules). | service (transition table) | 422 `VALIDATION_ERROR` |
+| CR-8 | **Terminal immutability:** DISMISSED/ACTIONED are terminal. | resolve on an already-terminal report. | service (state precondition) + status CHECK | 409 `REPORT_TERMINAL` |
+| CR-9 | **Resolve sets `resolved_by` + audit in one txn.** Actor snapshot `{actorId, principalType}` (agent-ready). | a terminal transition with no `resolved_by` or no audit row; partial write. | single DB transaction (service) | 500 `INTERNAL` (rolls back) |
+| CR-10 | **Optimistic concurrency on resolve** (`If-Match` from `GET /content-reports/{id}`). | concurrent resolve with a stale ETag; missing If-Match. | service ETag compare | 412 `STALE_RESOURCE` / 428 |
+| CR-11 | **`reason` ∈ enum** {SPAM,ABUSE,FRAUD,INAPPROPRIATE,OTHER}; **`entity_type` ∈ MVP set**. | a free-string/unknown reason; an out-of-set entity_type. | service enum validation (DB column stays VARCHAR(50)) | 422 `VALIDATION_ERROR` |
+| CR-12 | **ACTIONED is decoupled from the entity action** (DRIFT-3, MVP-loose): resolve records report status only; the entity action is a separate 4a step. | report-resolve attempting to also mutate/deactivate the target entity. | service (resolve carries no entity-action fields) | n/a (by contract shape) |
+
+**B10 / domain error codes used (extend API_CONVENTIONS §4):** `DUPLICATE_REPORT` (409),
+`ENTITY_TYPE_UNAVAILABLE` (422), `REPORT_TERMINAL` (409); plus standard `VALIDATION_ERROR` (422 —
+reason/entity_type/transition), `FORBIDDEN` (403 — resolve authz), `NOT_FOUND` (404 — target
+missing / read-scope no-leak), `UNAUTHENTICATED` (401), `STALE_RESOURCE` (412), `INTERNAL` (500),
+`RATE_LIMITED` (429 — report-spam).
+
+**RBAC (rbac-matrix.md:67/101, confirmed — the reporter-read path honours it):** USER = **C own,
+R own** (file any; read **own** reports only); MODERATOR = R/U (resolve) all; ADMIN = R/U/D all.
+The read path built here matches "R own" exactly (CR-5); resolve stays operator-only (CR-6).
+
 ## Related Documents
+
+- [Content Report State Machine](statemachines/content_report_state_machine.md)
 
 - [Glossary](glossary.md)
 - [Listing State Machine](statemachines/listing_state_machine.md)
