@@ -1,16 +1,17 @@
 import { Module } from '@nestjs/common';
 import { ListingController } from './listing.controller';
 import { ListingService } from './listing.service';
+import { ModerationModule } from '../moderation/moderation.module';
 
 /**
- * Listing domain (marketplace, ADR-0002 market split). Slice 1: aggregate CRUD + photos + the
- * owner-side lifecycle to PENDING_MODERATION (create→DRAFT, /submit, soft-withdraw→DEACTIVATED) per
- * listings-api.yaml and listing_state_machine.md (invariants L-P0..L-15). Moderator-side transitions
- * (approve/reject), ACTIVE→SOLD/EXPIRED, payments, and geo-search are out of this slice.
+ * Listing domain (marketplace, ADR-0002 market split). Slices: aggregate CRUD + photos + owner-side
+ * lifecycle (Slice 1), geo/market search (Slice 2), and the Slice-4c owner-facing `lastModerationResult`
+ * embed on GET /listings/{id} (reuses ModerationService.latestEffectiveResult — imports ModerationModule).
  * Builds on the platform foundation — AuditLogService (agent-as-principal), PrismaService — and the
  * global auth guards.
  */
 @Module({
+  imports: [ModerationModule],
   controllers: [ListingController],
   providers: [ListingService],
   exports: [ListingService],

@@ -31,6 +31,7 @@ notification flow.
 |---|---|---|---|---|
 | `Listing.Submitted` | Listing | listing module (DRAFT→PENDING_MODERATION) | listing_id, seller_id | moderation (enqueue), notification (none) |
 | `Moderation.Decided` | Listing/Animal | moderation module | entity_type, entity_id, decision (APPROVED/REJECTED/CHANGES_REQUESTED), reason | listing (apply status), **notification (notify owner)** |
+| `Moderation.Escalated` | Listing | moderation **SLA job** (worker) | entityId, market, waitingSeconds, slaState | **notification (notify ADMIN)**. Emit-only in 4c (admin fan-out is the notification consumer). The job **never** mutates `status`/`moderation_status` — item stays PENDING_MODERATION (M-13). **Idempotent:** emitted **once** per overdue item (`listings.escalated_at` marker, set in the same tx as the outbox write); reset on re-enqueue (M-14/4d). |
 | `Listing.Activated` | Listing | listing module (→ACTIVE) | listing_id, seller_id | search-index (publish), notification (notify owner) |
 | `Listing.Expired` | Listing | worker (duration elapsed) | listing_id, seller_id | search-index (remove), **notification (notify owner)** |
 | `Listing.Sold` | Listing | listing module (owner marks sold, MVP) | listing_id, seller_id | search-index (remove), notification (notify owner) |
@@ -56,6 +57,22 @@ Each row maps to a `notification_templates(name, type, language)` row (seed in a
 | `Moderation.Decided` = CHANGES_REQUESTED | email | `listing_changes_requested` | seller |
 | `Listing.Expired` | email | `listing_expired` | seller |
 | `ContentReport.Actioned` | email | `report_resolved` | reporter (+ owner if removed) |
+| `Moderation.Escalated` | email | `moderation_sla_escalated` | ADMIN (escalation queue) |
+
+> **(round-N, normative — `Moderation.Escalated`, Slice 4c) WHAT:** added the `Moderation.Escalated`
+> event (aggregate = Listing) to the catalog + notification matrix. The moderation SLA job scans
+> `PENDING_MODERATION` items past the SLA threshold and emits it via the outbox; it sets
+> `listings.escalated_at` (in the **same** tx as the outbox write) so a re-tick does not re-emit.
+> Consumer = notification → ADMIN.
+> **WHY:** the SLA escalation was already normative in the moderation spec (§SLA, `slaState=ESCALATED`)
+> and the D1 reconciliation removed the old auto-reject, but the **event** that carries the escalation
+> to ADMIN was missing from the catalog — a backend dev could not build the job's emission from §2.
+> **WHY-BETTER-for-the-whole-project:** keeps escalation a pure **read-side, additive** signal — the
+> job never mutates `status`/`moderation_status` (M-13: item stays PENDING_MODERATION, never auto-
+> decided), so it cannot harm a listing; `escalated_at` gives at-least-once-safe **once-per-item**
+> emission consistent with the outbox's idempotent-consumer rule (§1); admin fan-out reuses the
+> existing notification-consumer pattern (no new transport). Emit-only now; the active reset on
+> re-enqueue is deferred to M-14/4d (which owns the ACTIVE→PENDING re-moderation transition).
 
 ## Verification
 - Worker can be built solely from §1 + §2 (no missing producer/consumer/payload).

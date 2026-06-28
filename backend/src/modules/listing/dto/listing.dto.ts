@@ -17,6 +17,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import type { OwnerModerationResultView } from '../../moderation/dto/moderation.dto';
 
 /**
  * Listing Domain DTOs (listings-api.yaml, Slice 1). camelCase wire bodies (API_CONVENTIONS §0); the
@@ -381,6 +382,12 @@ export interface ListingView {
   lng: number | null;
   /** Distance in meters from the search center (Haversine, rounded); only on a geo search, else null (L2-14). */
   distanceM: number | null;
+  /**
+   * Owner-facing latest effective moderation result (Slice 4c EMB; mirrors moderation-api
+   * OwnerModerationResult). Populated ONLY on GET /listings/{id} for the owner/operator (EMB-1); null
+   * for a non-owner/anonymous reader and when never moderated (EMB-3). NOT embedded in the list (EMB-4).
+   */
+  lastModerationResult: OwnerModerationResultView | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

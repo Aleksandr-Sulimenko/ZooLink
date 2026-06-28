@@ -400,12 +400,23 @@ export class ModerationService {
       throw new ForbiddenException({ message: 'Not permitted to view this listing’s moderation result', code: 'FORBIDDEN' });
     }
 
+    return this.latestEffectiveResult(listingId);
+  }
+
+  /**
+   * The latest EFFECTIVE moderation result projection for a listing (Owner-decision #5), WITHOUT any
+   * authz — the caller is responsible for the object-scope check. `getOwnerResult` adds the M-12 guard;
+   * the Slice-4c listing embed (`GET /listings/{id}.lastModerationResult`) calls this only once it has
+   * already confirmed the reader is the owner/operator (EMB-1). Single-sourced so the two stay in sync.
+   * null = the listing has no effective decision yet (EMB-3).
+   */
+  async latestEffectiveResult(listingId: string): Promise<OwnerModerationResultView | null> {
     // Latest EFFECTIVE decision (most recent row; an override is itself the newest row → it wins).
     const latest = await this.prisma.moderation_decisions.findFirst({
       where: { entity_type: 'LISTING', entity_id: listingId },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
     });
-    if (!latest) return null; // 204 — no decision yet
+    if (!latest) return null;
 
     const decidedBy = await this.actorOf(latest.moderator_id);
     let reason: LocalizedString | null = null;

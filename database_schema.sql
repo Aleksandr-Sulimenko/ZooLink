@@ -1298,6 +1298,13 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS locked_at       TIMESTAMP WITH TIM
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS lock_expires_at TIMESTAMP WITH TIME ZONE;
 CREATE INDEX IF NOT EXISTS idx_listings_modqueue ON listings(moderation_enqueued_at) WHERE status = 'PENDING_MODERATION';
 
+-- Slice 4c (A): SLA-escalation idempotent-emission marker (migration 0024). Set in the same tx as the
+-- Moderation.Escalated outbox write; a non-null value means the item was already escalated (skip it).
+-- The job never mutates status (M-13). Reset on ACTIVE→PENDING re-moderation is 4d's job.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
+CREATE INDEX IF NOT EXISTS idx_listings_escalation_scan ON listings(moderation_enqueued_at)
+    WHERE status = 'PENDING_MODERATION' AND escalated_at IS NULL;
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_language CHAR(2) NOT NULL DEFAULT 'ru'
     REFERENCES supported_languages(code) ON DELETE RESTRICT;
 

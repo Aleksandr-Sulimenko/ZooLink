@@ -359,6 +359,55 @@ missing / read-scope no-leak), `UNAUTHENTICATED` (401), `STALE_RESOURCE` (412), 
 R own** (file any; read **own** reports only); MODERATOR = R/U (resolve) all; ADMIN = R/U/D all.
 The read path built here matches "R own" exactly (CR-5); resolve stays operator-only (CR-6).
 
+## Slice 4c — SLA-escalation + moderation-result-embed invariants (round-N, normative)
+
+> **Source-of-truth note.** Shared invariant list for **backend-engineer** and **reviewer-qa**
+> for Slice 4c — the **additive/safe pair**: (A) the SLA-escalation job emitting
+> `Moderation.Escalated`, and (B) the `lastModerationResult` listing-embed. Event:
+> [event-catalog.md](event-catalog.md) (`Moderation.Escalated`). Embed:
+> [listings-api.yaml](../03-architecture/api-contracts/listings-api.yaml) `Listing.lastModerationResult`
+> (inline mirror of [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml)
+> `OwnerModerationResult`). **M-14 (the ACTIVE→PENDING re-moderation transition + `escalated_at`
+> reset) is split to Slice 4d — NOT in scope here.**
+>
+> **WHAT:** formalize the escalation-job invariants (SLA-1..5) and the embed invariants (EMB-1..4).
+> **WHY:** 4c builds two independent, side-effect-light pieces on top of the already-normative
+> SLA model (M-13, D1 reconciliation) and the 4a owner-result; they need explicit invariants so the
+> job stays read-only and the embed stays leak-free.
+> **WHY-BETTER-for-the-whole-project:** the escalation job is **pure read-side** (never mutates
+> listing state) so it can ship without any risk to content; `escalated_at` makes emission
+> at-least-once-safe and once-per-item; the embed reuses the 4a object-scope (no new authz surface)
+> and is single-get-only (no list N+1). Both are additive — a consumer ignoring them keeps working.
+
+### Slice-4c scope
+
+**IN:** (A) the SLA-escalation job (scan PENDING_MODERATION past threshold → emit
+`Moderation.Escalated` once per item via outbox; set `listings.escalated_at`); (B) the
+`lastModerationResult` embed on `GET /listings/{id}`. **Deferred:** admin-notification **fan-out**
+is the notification consumer of the event (emit-only in 4c; recommend the active fan-out as a
+fast-follow — the queue **already** surfaces `escalated`/`slaState=ESCALATED` as a derived read, so
+operators are not blind in the interim). **NOT in 4c (→ Slice 4d, M-14):** the ACTIVE→PENDING
+re-moderation transition, the `escalated_at` **reset** on re-enqueue, resolve PATCH source-states,
+species/breed re-moderation clarification.
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected/handled) | Enforced by | Error / signal |
+|---|---|---|---|---|
+| SLA-1 | **Idempotent emission:** `Moderation.Escalated` is emitted **at most once** per overdue item — `listings.escalated_at` is set in the **same transaction** as the outbox write; an item with `escalated_at` non-null is skipped. | two SLA ticks emitting two events for the same item. | service/job (`WHERE escalated_at IS NULL`) + outbox tx | exactly one outbox row per item |
+| SLA-2 | **Single-instance run:** concurrent job ticks do not double-process — a Postgres **advisory lock** (distinct key) serializes the scan. | two worker instances both scanning + emitting. | `pg_advisory_lock`/`pg_try_advisory_lock` (distinct key — see flag for backend) | second tick no-ops |
+| SLA-3 | **No state mutation:** the job **never** writes `status`/`moderation_status`; the item **stays PENDING_MODERATION** (M-13). | the job auto-rejecting/auto-approving/expiring an overdue item. | service/job (only `escalated_at` + outbox written) | n/a — invariant; backstop M-P0 trigger |
+| SLA-4 | **Re-escalation after re-enqueue:** once `escalated_at` is reset (M-14/4d on ACTIVE→PENDING re-moderation), a newly-overdue item escalates again. | a re-enqueued item that can never escalate because `escalated_at` was never reset. | the reset is **4d's** responsibility (flagged); 4c only honours `escalated_at IS NULL` | n/a (cross-slice contract) |
+| SLA-5 | **Threshold correctness:** escalate iff `waitingSeconds > threshold(market)` (pet <4h, livestock <6h business-hours — config, ADR-0003). Just-under = not escalated; just-over = escalated. | escalating an item just under threshold, or missing one just over. | service threshold check (config-driven) | n/a (correctness; QA boundary tests) |
+| EMB-1 | **Owner-only & additive:** `lastModerationResult` is populated only for the listing **owner** (seller/org-admin) or MOD|ADMIN on `GET /listings/{id}`; **absent/null** for a non-owner/anonymous reader. | a non-owner read exposing moderation reason/notes/decider. | service object-scope (reuse 4a owner-result scope) | field omitted (no leak) |
+| EMB-2 | **Agent-transparency surfaced:** an AGENT decision sets `decidedByAgent=true` + `decidedBy.principalType=AGENT` (Owner-decision #5). | hiding the AI-decided signal from the owner. | service projection (from the effective decision snapshot) | n/a (write-time projection) |
+| EMB-3 | **Null when never-moderated:** a listing with no effective decision → `lastModerationResult = null`. | fabricating a result for an unmoderated listing. | service (null when no decision row) | null |
+| EMB-4 | **Single-get only (no N+1):** the embed is on `GET /listings/{id}` only; the `GET /listings` **list** does NOT embed it. | adding it to the list response (a per-row moderation lookup / N+1 regression). | contract (Listing.lastModerationResult documented single-get-only) + service | not embedded in list |
+
+**Event / codes:** new **event** `Moderation.Escalated` (Listing; payload `{entityId, market,
+waitingSeconds, slaState}`; notification template `moderation_sla_escalated` → ADMIN). No new HTTP
+error codes (4c is a job + an additive read field).
+
 ## Related Documents
 
 - [Content Report State Machine](statemachines/content_report_state_machine.md)

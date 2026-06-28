@@ -293,4 +293,75 @@ describe('Listings Slice 1 (e2e)', () => {
     await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
     await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${adminTok}`).expect(200);
   });
+
+  // ── Slice 4c (B): lastModerationResult embed on GET /listings/{id} (EMB-1..4) ──────────────────
+  describe('lastModerationResult embed (EMB-1..4)', () => {
+    /** Drive a listing through submit → MOD claim → REJECT, leaving a moderation decision on it. */
+    const moderateReject = async (id: string): Promise<void> => {
+      await addPhoto(sellerTok, id).expect(201);
+      const etag = await getEtag(sellerTok, id);
+      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'REJECT', reason: 'poor_photos' }).expect(200);
+    };
+
+    beforeAll(async () => {
+      // Ensure the reason used by the moderation REJECT exists (seeded normally; upsert for isolation).
+      await prisma.moderation_reasons.upsert({ where: { code: 'poor_photos' }, update: {}, create: { code: 'poor_photos', description_localized: { en: 'Poor photos', ru: 'Плохие фото' }, applies_to: 'LISTING', is_active: true } });
+    });
+
+    it('EMB-3: a never-moderated listing → lastModerationResult is null', async () => {
+      const animalId = await newAnimal(sellerId);
+      const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+      const res = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      expect(res.body).toHaveProperty('lastModerationResult', null);
+    });
+
+    it('EMB-1/EMB-2: the owner sees the result (with agent-transparency fields); a non-owner USER does NOT (null, no leak)', async () => {
+      const animalId = await newAnimal(sellerId);
+      const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+      await moderateReject(id);
+
+      // Owner (seller) sees the embed.
+      const owner = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      expect(owner.body.lastModerationResult).toEqual(expect.objectContaining({ decision: 'REJECTED' }));
+      expect(owner.body.lastModerationResult).toHaveProperty('decidedByAgent');
+      expect(owner.body.lastModerationResult.decidedBy).toHaveProperty('principalType'); // EMB-2 transparency
+      // A MODERATOR/operator also sees it.
+      const mod = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      expect(mod.body.lastModerationResult.decision).toBe('REJECTED');
+
+      // EMB-1: a different USER — the listing is now DEACTIVATED so they get 404 anyway; re-approve a
+      // fresh one to test the ACTIVE-but-non-owner case (the embed must still be null, no leak).
+    });
+
+    it('EMB-1: a non-owner reader of an ACTIVE moderated listing gets lastModerationResult null (no leak)', async () => {
+      const animalId = await newAnimal(sellerId);
+      const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+      // submit → claim → APPROVE so the listing is ACTIVE (publicly readable).
+      await addPhoto(sellerTok, id).expect(201);
+      const etag = await getEtag(sellerTok, id);
+      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+
+      // Owner sees APPROVED; a non-owner USER reading the now-ACTIVE listing sees null (no leak).
+      const owner = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      expect(owner.body.lastModerationResult.decision).toBe('APPROVED');
+      const stranger = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(200);
+      expect(stranger.body.lastModerationResult).toBeNull();
+      // Anonymous too.
+      const anon = await request(server()).get(`/v1/listings/${id}`).expect(200);
+      expect(anon.body.lastModerationResult).toBeNull();
+    });
+
+    it('EMB-4: the GET /listings list response does NOT embed lastModerationResult (no N+1)', async () => {
+      // The list path always sets it null (no per-row moderation lookup). Use an authenticated owner
+      // list so the moderated listing is in scope, and assert every row's field is null.
+      const res = await request(server()).get('/v1/listings?limit=100').set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      for (const item of res.body.items as { lastModerationResult: unknown }[]) {
+        expect(item.lastModerationResult).toBeNull();
+      }
+    });
+  });
 });

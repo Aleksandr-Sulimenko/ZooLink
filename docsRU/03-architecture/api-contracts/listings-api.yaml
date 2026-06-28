@@ -615,6 +615,19 @@ components:
             Расстояние в **метрах** от центра поиска до этого объявления (Haversine, округлённое).
             Заполняется **только** когда запрос передал `lat`/`lng` (гео-поиск); иначе null.
             Позволяет `sort=distance`-клиенту отрисовать расстояние. Вычисляется, не хранится.
+        lastModerationResult:
+          allOf: [ { $ref: '#/components/schemas/ListingModerationResult' } ]
+          nullable: true
+          readOnly: true
+          description: >
+            Проекция для владельца последнего ДЕЙСТВУЮЩЕГО решения модерации по этому листингу
+            (agent-transparency, решение владельца #5; inline-зеркало moderation-api
+            `OwnerModerationResult`). **Заполняется только на `GET /listings/{id}`** для
+            **владельца** листинга (продавец / org-admin) или MODERATOR|ADMIN; **опускается/null** для не-владельца или
+            анонимного читателя (без утечки внутренностей модерации — тот же object-scope, что 4a owner-
+            result), и **null**, когда листинг никогда не модерировался. **Только single-get** — НЕ
+            встраивается в ответ списка `GET /listings` (избегает N+1 moderation-
+            lookup на строку); list-клиенты, которым он нужен, вызывают single-get.
         expiresAt:
           type: string
           format: date-time
@@ -628,6 +641,58 @@ components:
           type: string
           format: date-time
           description: Метка последнего обновления
+    Actor:
+      type: object
+      description: >-
+        Действующий принципал как agent-badge {actorId, principalType} (API_CONVENTIONS §15,
+        ADR-0011 §6). Inline-зеркало общего Actor, используемого в moderation-api; principalType —
+        снапшот на момент записи users.principal_type (HUMAN|AGENT).
+      required: [actorId, principalType]
+      properties:
+        actorId: { type: string, format: uuid }
+        principalType: { type: string, enum: [HUMAN, AGENT] }
+        actorDisplayName: { type: string, nullable: true }
+    ListingModerationResult:
+      type: object
+      description: >-
+        Проекция для владельца последнего ДЕЙСТВУЮЩЕГО решения модерации по листингу
+        (решение владельца #5, agent-transparency). **Inline-зеркало moderation-api
+        `OwnerModerationResult`** — держать оба в синхроне (cross-check doc-keeper). Более узкий вид,
+        чем `ModerationDecision`: опускает operator-internal поля, но несёт `principalType`, чтобы
+        продавец мог отличить ИИ-решение от человеческого.
+      required: [listingId, decision, decidedBy, decidedByAgent, decidedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED, CHANGES_REQUESTED]
+        reason:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          nullable: true
+          description: Разрешённое описание причины (moderation_reasons.descriptionLocalized); null для APPROVED.
+        notes:
+          type: string
+          nullable: true
+          description: Заметка модератора/агента, показываемая владельцу (может исходить из decision-шаблона).
+        decidedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: Решающий принципал {actorId, principalType} (ADR-0011 §6); principalType = сигнал прозрачности.
+        decidedByAgent:
+          type: boolean
+          description: Удобный флаг = (decidedBy.principalType == AGENT); драйвит бейдж «Решено ИИ».
+        isHumanOverride:
+          type: boolean
+          description: True, если это действующее решение — HUMAN-разворот более раннего (обычно AGENT) решения (ADR-0011 §3).
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Когда isHumanOverride — agent-решение, которое этот человеческий результат развернул (цепочка agent→human остаётся видимой).
+        decidedAt:
+          type: string
+          format: date-time
     ListingCreate:
       type: object
       description: >

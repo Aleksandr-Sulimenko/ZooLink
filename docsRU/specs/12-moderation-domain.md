@@ -360,6 +360,55 @@ missing / read-scope no-leak), `UNAUTHENTICATED` (401), `STALE_RESOURCE` (412), 
 R own** (file любой; читает **только свои** жалобы); MODERATOR = R/U (resolve) все; ADMIN = R/U/D все.
 Read-путь, построенный здесь, точно соответствует «R own» (CR-5); resolve остаётся operator-only (CR-6).
 
+## Slice 4c — инварианты SLA-эскалации + встраивания moderation-result (round-N, нормативно)
+
+> **Замечание об источнике правды.** Общий список инвариантов для **backend-engineer** и **reviewer-qa**
+> для Slice 4c — **аддитивная/безопасная пара**: (A) SLA-job эскалации, эмитящий
+> `Moderation.Escalated`, и (B) встраивание `lastModerationResult` в листинг. Событие:
+> [event-catalog.md](event-catalog.md) (`Moderation.Escalated`). Встраивание:
+> [listings-api.yaml](../03-architecture/api-contracts/listings-api.yaml) `Listing.lastModerationResult`
+> (inline-зеркало [moderation-api.yaml](../03-architecture/api-contracts/moderation-api.yaml)
+> `OwnerModerationResult`). **M-14 (переход ACTIVE→PENDING re-moderation + сброс `escalated_at`)
+> вынесена в Slice 4d — НЕ в scope здесь.**
+>
+> **WHAT:** формализовать инварианты escalation-job (SLA-1..5) и инварианты embed (EMB-1..4).
+> **WHY:** 4c строит две независимые, side-effect-light части поверх уже-нормативной
+> SLA-модели (M-13, D1-реконсиляция) и 4a owner-result; им нужны явные инварианты, чтобы
+> job оставался read-only, а embed — leak-free.
+> **WHY-BETTER-for-the-whole-project:** escalation-job — **чисто read-side** (никогда не меняет
+> состояние листинга), так что может поставляться без риска для контента; `escalated_at` делает эмиссию
+> at-least-once-safe и once-per-item; embed переиспользует 4a object-scope (без новой authz-поверхности)
+> и только single-get (без list N+1). Оба аддитивны — consumer, игнорирующий их, продолжает работать.
+
+### Scope Slice-4c
+
+**IN:** (A) SLA-job эскалации (скан PENDING_MODERATION за порогом → эмит
+`Moderation.Escalated` один раз на элемент через outbox; ставит `listings.escalated_at`); (B)
+встраивание `lastModerationResult` в `GET /listings/{id}`. **Отложено:** admin-notification **fan-out** —
+это notification-consumer события (emit-only в 4c; рекомендуется активный fan-out как
+fast-follow — очередь **уже** выставляет `escalated`/`slaState=ESCALATED` как derived-read, так что
+операторы не слепы в промежутке). **НЕ в 4c (→ Slice 4d, M-14):** переход ACTIVE→PENDING
+re-moderation, **сброс** `escalated_at` при re-enqueue, source-states resolve PATCH,
+уточнение re-moderation по виду/породе.
+
+### Инварианты и негативные случаи
+
+| # | Инвариант (ДОЛЖЕН выполняться) | Негативный случай (ДОЛЖЕН отклоняться/обрабатываться) | Обеспечивается | Ошибка / сигнал |
+|---|---|---|---|---|
+| SLA-1 | **Идемпотентная эмиссия:** `Moderation.Escalated` эмитится **максимум один раз** на просроченный элемент — `listings.escalated_at` ставится в **той же транзакции**, что и outbox-запись; элемент с non-null `escalated_at` пропускается. | два SLA-тика, эмитящие два события для одного элемента. | сервис/job (`WHERE escalated_at IS NULL`) + outbox tx | ровно одна outbox-строка на элемент |
+| SLA-2 | **Single-instance запуск:** конкурентные тики job не дабл-процессят — Postgres **advisory lock** (отдельный ключ) сериализует скан. | два worker-инстанса оба сканируют + эмитят. | `pg_advisory_lock`/`pg_try_advisory_lock` (отдельный ключ — см. флаг для backend) | второй тик no-op |
+| SLA-3 | **Нет мутации состояния:** job **никогда** не пишет `status`/`moderation_status`; элемент **остаётся PENDING_MODERATION** (M-13). | job, авто-отклоняющий/авто-одобряющий/экспайрящий просроченный элемент. | сервис/job (пишутся только `escalated_at` + outbox) | n/a — инвариант; backstop M-P0 триггер |
+| SLA-4 | **Re-эскалация после re-enqueue:** как только `escalated_at` сброшен (M-14/4d при ACTIVE→PENDING re-moderation), вновь-просроченный элемент эскалируется снова. | re-enqueue'нутый элемент, который никогда не сможет эскалироваться, потому что `escalated_at` не был сброшен. | сброс — ответственность **4d** (флагнуто); 4c только соблюдает `escalated_at IS NULL` | n/a (cross-slice контракт) |
+| SLA-5 | **Корректность порога:** эскалировать iff `waitingSeconds > threshold(market)` (pet <4ч, livestock <6ч рабочих часов — config, ADR-0003). Чуть-ниже = не эскалирован; чуть-выше = эскалирован. | эскалация элемента чуть-ниже порога, или пропуск чуть-выше. | сервис проверка порога (config-driven) | n/a (корректность; QA boundary-тесты) |
+| EMB-1 | **Owner-only & аддитивно:** `lastModerationResult` заполняется только для **владельца** листинга (seller/org-admin) или MOD|ADMIN на `GET /listings/{id}`; **отсутствует/null** для не-владельца/анонима. | чтение не-владельцем, раскрывающее причину/заметки/решающего модерации. | сервис object-scope (переиспользует 4a owner-result scope) | поле опущено (без утечки) |
+| EMB-2 | **Agent-transparency выставлен:** AGENT-решение ставит `decidedByAgent=true` + `decidedBy.principalType=AGENT` (решение владельца #5). | сокрытие AI-decided сигнала от владельца. | сервис проекция (из снапшота действующего решения) | n/a (проекция времени записи) |
+| EMB-3 | **Null когда никогда-не-модерировался:** листинг без действующего решения → `lastModerationResult = null`. | фабрикация результата для немодерированного листинга. | сервис (null когда нет decision-строки) | null |
+| EMB-4 | **Только single-get (без N+1):** embed только на `GET /listings/{id}`; **список** `GET /listings` его НЕ встраивает. | добавление его в ответ списка (per-row moderation-lookup / N+1-регрессия). | контракт (Listing.lastModerationResult задокументирован single-get-only) + сервис | не встроен в список |
+
+**Событие / коды:** новое **событие** `Moderation.Escalated` (Listing; payload `{entityId, market,
+waitingSeconds, slaState}`; notification-шаблон `moderation_sla_escalated` → ADMIN). Без новых HTTP-
+кодов ошибок (4c — это job + аддитивное read-поле).
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

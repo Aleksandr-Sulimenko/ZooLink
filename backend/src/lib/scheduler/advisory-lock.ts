@@ -12,6 +12,8 @@ import { PrismaService } from '../db/prisma.service';
 export const AdvisoryLockKeys = {
   /** B7 scheduler skeleton tick (retention/expire placeholder — behaviour is D2). */
   RETENTION_EXPIRE_TICK: 4201n,
+  /** Slice 4c (A) SLA-escalation tick (Moderation.Escalated emission). Distinct from retention. */
+  MODERATION_ESCALATION_TICK: 4202n,
 } as const;
 
 export type AdvisoryLockKey = (typeof AdvisoryLockKeys)[keyof typeof AdvisoryLockKeys];

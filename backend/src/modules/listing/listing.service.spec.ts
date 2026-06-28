@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { ListingService } from './listing.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
+import type { ModerationService } from '../moderation/moderation.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListingCreateDto } from './dto/listing.dto';
@@ -118,8 +119,11 @@ function setup(opts: SetupOpts = {}) {
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
-  const svc = new ListingService(prisma, audit);
-  return { svc, listings, animals, listing_photos, record, orgFindFirst, orgFindMany, queryRaw };
+  // Slice-4c embed: a stub ModerationService.latestEffectiveResult (null = never moderated by default).
+  const latestEffectiveResult = jest.fn().mockResolvedValue(null);
+  const moderation = { latestEffectiveResult } as unknown as ModerationService;
+  const svc = new ListingService(prisma, audit, moderation);
+  return { svc, listings, animals, listing_photos, record, orgFindFirst, orgFindMany, queryRaw, latestEffectiveResult };
 }
 
 const validCreate = (over: Partial<ListingCreateDto> = {}): ListingCreateDto => ({

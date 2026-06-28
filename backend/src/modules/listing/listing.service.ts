@@ -13,6 +13,7 @@ import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
+import { ModerationService } from '../moderation/moderation.service';
 import {
   type ListingCreateDto,
   type ListingListQueryDto,
@@ -105,6 +106,7 @@ export class ListingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly moderation: ModerationService,
   ) {}
 
   // ── Create (→ DRAFT) ─────────────────────────────────────────────────────────────────────────
@@ -180,7 +182,14 @@ export class ListingService {
     if (row.status !== 'ACTIVE' && !(await this.canSeeNonActive(actor, row))) {
       throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
     }
-    return { listing: this.toView(row), etag: this.etag(row) };
+    const view = this.toView(row);
+    // EMB-1: the moderation-result embed is owner/operator-only (same scope as canSeeNonActive: seller,
+    // org-admin, MODERATOR, ADMIN); null for a non-owner/anonymous reader (no leak) and when never
+    // moderated (EMB-3). Single-get only — the list path leaves it null (EMB-4).
+    if (await this.canSeeNonActive(actor, row)) {
+      view.lastModerationResult = await this.moderation.latestEffectiveResult(id);
+    }
+    return { listing: view, etag: this.etag(row) };
   }
 
   // ── Update (DRAFT-edit only, mutable fields) ─────────────────────────────────────────────────
@@ -812,6 +821,9 @@ export class ListingService {
       lng: row.lng,
       // L2-14: distanceM only on a geo search (raw row carries distance_m); rounded meters, else null.
       distanceM: row.distance_m === undefined || row.distance_m === null ? null : Math.round(row.distance_m),
+      // EMB-4: null by default — only the single-get (getById, owner/operator) populates this; the
+      // list path never embeds it (no per-row N+1 moderation lookup).
+      lastModerationResult: null,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

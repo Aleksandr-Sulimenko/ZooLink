@@ -615,6 +615,19 @@ components:
             Distance in **meters** from the search center to this listing (Haversine, rounded).
             Populated **only** when the request supplied `lat`/`lng` (a geo search); null
             otherwise. Lets a `sort=distance` client render the distance. Computed, not stored.
+        lastModerationResult:
+          allOf: [ { $ref: '#/components/schemas/ListingModerationResult' } ]
+          nullable: true
+          readOnly: true
+          description: >
+            Owner-facing projection of the latest EFFECTIVE moderation decision on this listing
+            (agent-transparency, Owner-decision #5; inline mirror of moderation-api
+            `OwnerModerationResult`). **Populated only on `GET /listings/{id}`** for the listing
+            **owner** (seller / org-admin) or MODERATOR|ADMIN; **omitted/null** for a non-owner or
+            anonymous reader (no leak of moderation internals — same object-scope as the 4a owner
+            result), and **null** when the listing was never moderated. **Single-get only** — it
+            is NOT embedded in the `GET /listings` list response (avoids an N+1 moderation
+            lookup per row); list clients that need it call the single-get.
         expiresAt:
           type: string
           format: date-time
@@ -628,6 +641,58 @@ components:
           type: string
           format: date-time
           description: Last update timestamp
+    Actor:
+      type: object
+      description: >-
+        Acting principal as the {actorId, principalType} agent-badge (API_CONVENTIONS §15,
+        ADR-0011 §6). Inline mirror of the shared Actor used in moderation-api; principalType is
+        the write-time snapshot of users.principal_type (HUMAN|AGENT).
+      required: [actorId, principalType]
+      properties:
+        actorId: { type: string, format: uuid }
+        principalType: { type: string, enum: [HUMAN, AGENT] }
+        actorDisplayName: { type: string, nullable: true }
+    ListingModerationResult:
+      type: object
+      description: >-
+        Owner-facing projection of the latest EFFECTIVE moderation decision on a listing
+        (Owner-decision #5, agent-transparency). **Inline mirror of moderation-api
+        `OwnerModerationResult`** — keep the two in sync (doc-keeper cross-check). A narrower view
+        than `ModerationDecision`: omits operator-internal fields, but carries `principalType` so
+        the seller can tell an AI decision from a human one.
+      required: [listingId, decision, decidedBy, decidedByAgent, decidedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED, CHANGES_REQUESTED]
+        reason:
+          allOf: [ { $ref: '#/components/schemas/LocalizedString' } ]
+          nullable: true
+          description: Resolved reason description (moderation_reasons.descriptionLocalized); null for APPROVED.
+        notes:
+          type: string
+          nullable: true
+          description: Moderator/agent note shown to the owner (may originate from a decision template).
+        decidedBy:
+          allOf: [ { $ref: '#/components/schemas/Actor' } ]
+          description: Deciding principal {actorId, principalType} (ADR-0011 §6); principalType = the transparency signal.
+        decidedByAgent:
+          type: boolean
+          description: Convenience flag = (decidedBy.principalType == AGENT); drives the "Decided by AI" badge.
+        isHumanOverride:
+          type: boolean
+          description: True if this effective result is a HUMAN reversal of an earlier (typically AGENT) decision (ADR-0011 §3).
+        supersedesDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: When isHumanOverride, the agent decision this human result reversed (agent→human chain stays visible).
+        decidedAt:
+          type: string
+          format: date-time
     ListingCreate:
       type: object
       description: >

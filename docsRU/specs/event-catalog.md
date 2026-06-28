@@ -30,6 +30,7 @@ status: "Approved"
 |---|---|---|---|---|
 | `Listing.Submitted` | Listing | listing (DRAFT→PENDING_MODERATION) | listing_id, seller_id | moderation (в очередь) |
 | `Moderation.Decided` | Listing/Animal | moderation | entity_type, entity_id, decision, reason | listing (применить статус), **notification (уведомить владельца)** |
+| `Moderation.Escalated` | Listing | moderation **SLA-job** (worker) | entityId, market, waitingSeconds, slaState | **notification (уведомить ADMIN)**. Emit-only в 4c (admin fan-out — это notification-consumer). Job **никогда** не меняет `status`/`moderation_status` — элемент остаётся PENDING_MODERATION (M-13). **Идемпотентно:** эмитится **один раз** на просроченный элемент (маркер `listings.escalated_at`, ставится в той же tx, что и outbox-запись); сбрасывается при re-enqueue (M-14/4d). |
 | `Listing.Activated` | Listing | listing (→ACTIVE) | listing_id, seller_id | search-index (опубликовать), notification |
 | `Listing.Expired` | Listing | worker (истёк срок) | listing_id, seller_id | search-index (убрать), **notification** |
 | `Listing.Sold` | Listing | listing (владелец отметил продано, MVP) | listing_id, seller_id | search-index (убрать), notification |
@@ -55,6 +56,22 @@ status: "Approved"
 | `Moderation.Decided` = CHANGES_REQUESTED | email | `listing_changes_requested` | продавец |
 | `Listing.Expired` | email | `listing_expired` | продавец |
 | `ContentReport.Actioned` | email | `report_resolved` | репортёр (+ владелец, если удалено) |
+| `Moderation.Escalated` | email | `moderation_sla_escalated` | ADMIN (очередь эскалаций) |
+
+> **(round-N, нормативно — `Moderation.Escalated`, Slice 4c) WHAT:** добавлено событие
+> `Moderation.Escalated` (aggregate = Listing) в каталог + матрицу нотификаций. SLA-job модерации сканирует
+> элементы `PENDING_MODERATION` за порогом SLA и эмитит его через outbox; ставит
+> `listings.escalated_at` (в **той же** tx, что и outbox-запись), так что re-tick не пере-эмитит.
+> Consumer = notification → ADMIN.
+> **WHY:** SLA-эскалация уже была нормативной в спеке модерации (§SLA, `slaState=ESCALATED`),
+> и D1-реконсиляция убрала старое авто-отклонение, но **событие**, несущее эскалацию
+> к ADMIN, отсутствовало в каталоге — разработчик не мог построить эмиссию job по §2.
+> **WHY-BETTER-for-the-whole-project:** держит эскалацию чисто **read-side, аддитивным** сигналом — job
+> никогда не меняет `status`/`moderation_status` (M-13: элемент остаётся PENDING_MODERATION, никогда не авто-
+> решён), так что он не может навредить листингу; `escalated_at` даёт at-least-once-safe **once-per-item**
+> эмиссию, согласованную с правилом идемпотентного consumer'а outbox (§1); admin fan-out переиспользует
+> существующий notification-consumer-паттерн (без нового транспорта). Сейчас emit-only; активный сброс при
+> re-enqueue отложен на M-14/4d (которая владеет переходом ACTIVE→PENDING re-moderation).
 
 ## Верификация
 - Воркер строится исключительно по §1 + §2 (нет недостающих producer/consumer/payload).
