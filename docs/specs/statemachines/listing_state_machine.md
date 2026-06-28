@@ -21,6 +21,7 @@ stateDiagram-v2
     PENDING_MODERATION --> DEACTIVATED: moderator hard-rejects
     PENDING_MODERATION --> DRAFT: moderator requests changes
     PENDING_MODERATION --> PENDING_MODERATION: SLA timeout -> escalate (stays pending)
+    ACTIVE --> PENDING_MODERATION: owner material edit (re-moderation, M-14)
     ACTIVE --> EXPIRED: listing duration elapsed
     ACTIVE --> SOLD: owner marks sold (MVP) / payment COMPLETED (Фаза 2+)
     ACTIVE --> DEACTIVATED: owner withdraws / moderator removes
@@ -50,7 +51,8 @@ stateDiagram-v2
 | From State | To State | Trigger | Guard Condition | Action |
 |------------|----------|---------|-----------------|--------|
 | DRAFT | PENDING_MODERATION | Owner submits / resubmits for review | All required fields valid && media uploaded && (price >= MIN_LISTING_PRICE **only if** listing_type='sale') | Set `moderation_status='PENDING'`; increment submission counter |
-| DRAFT | DRAFT | Owner edits listing | User is owner && listing not expired/sold | Update fields; reset validation |
+| DRAFT | DRAFT | Owner edits listing | User is owner && listing not expired/sold | Update fields; reset validation (no re-enqueue — stays DRAFT) |
+| ACTIVE | PENDING_MODERATION | Owner edits a **material** field of an ACTIVE listing (re-moderation, M-14) | User is owner/org-admin && a material field changed (title/description/photos/price/listing_type; `animal_id` is immutable so species/breed cannot change — see Rules) | **Re-enqueue:** `status='PENDING_MODERATION'`, `moderation_status='PENDING'`, `moderation_enqueued_at=now()`; **clear the lock** (`assigned_to`/`locked_at`/`lock_expires_at`→NULL); **reset `escalated_at`→NULL** (so the re-review can re-escalate — SLA-4); notify owner (back in review) |
 | DRAFT | DEACTIVATED | Owner abandons draft | User explicitly deletes \|\| auto-cleanup after DRAFT_TIMEOUT | Log abandonment; cleanup temp data |
 | PENDING_MODERATION | ACTIVE | Moderator approves | Moderation decision = APPROVE && no policy violations | Set `moderation_status='APPROVED'`; publish; notify owner |
 | PENDING_MODERATION | DEACTIVATED | Moderator hard-rejects | Moderation decision = REJECT (policy violation, not fixable) | Set `moderation_status='REJECTED'`; notify owner with reason (terminal) |
@@ -84,6 +86,16 @@ stateDiagram-v2
   `0003-pre-moderation-workflow.md` / `12-moderation-domain.md`.
 - **Moderation SLA timeout** never auto-approves or auto-rejects: it escalates and the listing stays in
   PENDING_MODERATION. (`EXPIRED` is reserved for an *ACTIVE* listing whose display duration elapsed.)
+- **Re-moderation on material ACTIVE edit (M-14, Slice 4d):** editing a **material** field of an ACTIVE
+  listing returns it to PENDING_MODERATION (re-enqueue). **Material set (pinned, MVP):** title, description,
+  photos, price, `listing_type`. **There is no trivial-edit path on an ACTIVE listing in MVP** — every edit to
+  an ACTIVE listing's editable content fields is material and re-enqueues (DRIFT-M14b: the former "trivial e.g.
+  toggling a saved flag" example was not a listing field; simplest + safe rule = all ACTIVE content edits are
+  material). **species/breed:** a listing references an *animal* whose `species_id`/`breed_id` are immutable, and
+  **`animal_id` is immutable on a listing after creation** (to list a different animal, create a new listing) —
+  so a listing's species/breed can never change; the "species/breed material" clause is satisfied by that
+  immutability, not by an editable path (DRIFT-M14c). The edit drops the listing **out of ACTIVE**, so the P0
+  ACTIVE-requires-APPROVED invariant holds (no edit-in-place while ACTIVE; the P0 trigger backstops).
 - EXPIRED listings renew by resetting to DRAFT and **re-entering moderation** (no bypass of re-review).
 - **SOLD in MVP** = owner manually marks the listing sold; marking SOLD does **NOT auto-initiate** ownership
   transfer. Ownership transfer **is in MVP** but is a **separate, explicit owner-initiated flow**
@@ -92,6 +104,22 @@ stateDiagram-v2
   when a sale completes, payment-gated) is **Фаза 2+** (gated by `feature_toggles.payments`).
 - **Cascades:** deactivating an animal forces its listings → DEACTIVATED; deactivating a user forces their ACTIVE
   listings → DEACTIVATED (see animal/user state machines).
+
+> **(round-N, normative — M-14 re-moderation, Slice 4d) WHAT:** added the `ACTIVE → PENDING_MODERATION` transition
+> (owner material edit) to the table + mermaid + Notes; pinned the material set (title/description/photos/price/
+> listing_type), pinned **no trivial-edit path on ACTIVE** (DRIFT-M14b) and **`animal_id` immutable** so species/
+> breed can't change (DRIFT-M14c). The re-enqueue clears the moderator lock and resets `escalated_at` (SLA-4).
+> **WHY:** the spec pinned re-moderation-on-material-edit (M-14, `12-moderation-domain.md`) but the state machine
+> only had `DRAFT→DRAFT (owner edits)` — there was no ACTIVE-edit transition, and "trivial edits (toggling a saved
+> flag)" / "species/breed" were ambiguous (the example wasn't a field; species/breed aren't listing-owned). Backend
+> had no unambiguous rule.
+> **WHY-BETTER-for-the-whole-project:** keeps **M-P0** intact — a material edit drops the listing OUT of ACTIVE
+> rather than mutating an ACTIVE listing in place, so "ACTIVE ⇒ APPROVED" is never violated (the P0 trigger
+> backstops); the simplest safe rule (all ACTIVE content edits are material) removes a whole ambiguity class with
+> no downside (a re-review is cheap, an un-reviewed change going live is not); `animal_id` immutability matches the
+> animal aggregate's immutable species/sex/DoB/breed (ADR-0004) and the pedigree-integrity reasons behind it;
+> resetting `escalated_at` closes the cross-slice contract 4c deferred here (SLA-4) so a re-review can re-escalate.
+> No new migration — reuses the existing claim/lock columns and `escalated_at` (0024).
 
 ## Listings Slice 1 — invariants & negative cases (round-N, normative)
 

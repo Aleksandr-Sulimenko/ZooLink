@@ -364,4 +364,92 @@ describe('Listings Slice 1 (e2e)', () => {
       }
     });
   });
+
+  // ── Slice 4d (M-14): re-moderation on material ACTIVE edit ────────────────────────────────────
+  describe('M-14 re-moderation on ACTIVE edit', () => {
+    beforeAll(async () => {
+      await prisma.moderation_reasons.upsert({ where: { code: 'poor_photos' }, update: {}, create: { code: 'poor_photos', description_localized: { en: 'Poor photos', ru: 'Плохие фото' }, applies_to: 'LISTING', is_active: true } });
+    });
+
+    /** Drive a fresh listing all the way to ACTIVE (submit → claim → APPROVE). Returns its id. */
+    const makeActive = async (): Promise<string> => {
+      const animalId = await newAnimal(sellerId);
+      const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+      await addPhoto(sellerTok, id).expect(201);
+      const etag = await getEtag(sellerTok, id);
+      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+      const row = await prisma.listings.findUnique({ where: { id } });
+      expect(row?.status).toBe('ACTIVE');
+      return id;
+    };
+
+    it('M14-1: a material edit (price) of an ACTIVE listing → PENDING_MODERATION + PENDING + enqueued; leaves ACTIVE (M-P0)', async () => {
+      const id = await makeActive();
+      const etag = await getEtag(sellerTok, id);
+      const res = await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 9999 }).expect(200);
+      expect(res.body.status).toBe('PENDING_MODERATION');
+      expect(res.body.priceCents).toBe(9999);
+      const row = await prisma.listings.findUnique({ where: { id } });
+      expect(row?.status).toBe('PENDING_MODERATION');
+      expect(row?.moderation_status).toBe('PENDING');
+      expect(row?.moderation_enqueued_at).not.toBeNull();
+      expect(row?.is_active).toBe(false);
+    });
+
+    it('M14-5: re-enqueue clears a stale moderator lock and resets escalated_at (so the 4c job can re-escalate)', async () => {
+      const id = await makeActive();
+      // Contrive a stale lock + an escalated marker on the ACTIVE row (as if from a prior cycle).
+      await prisma.listings.update({ where: { id }, data: { assigned_to: modId, locked_at: new Date(), lock_expires_at: new Date(Date.now() + 600_000), escalated_at: new Date() } });
+      const etag = await getEtag(sellerTok, id);
+      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ titleLocalized: { en: 'Edited', ru: 'Изменено' } }).expect(200);
+      const row = await prisma.listings.findUnique({ where: { id } });
+      expect(row?.assigned_to).toBeNull();
+      expect(row?.locked_at).toBeNull();
+      expect(row?.lock_expires_at).toBeNull();
+      expect(row?.escalated_at).toBeNull();
+    });
+
+    it('M14-2: a forced in-place UPDATE keeping status=ACTIVE while flipping moderation_status=PENDING is blocked by the P0 trigger', async () => {
+      const id = await makeActive();
+      await expect(
+        prisma.$executeRaw`UPDATE listings SET moderation_status='PENDING' WHERE id=${id}::uuid AND status='ACTIVE'`,
+      ).rejects.toThrow(/cannot be ACTIVE unless moderation_status/i);
+    });
+
+    it('M14-4: a non-owner USER editing an ACTIVE listing → 403; a MODERATOR → 403', async () => {
+      const id = await makeActive();
+      const etag = await getEtag(otherTok, id); // ACTIVE is publicly readable
+      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
+      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
+    });
+
+    it('M14-7: a SOLD/terminal listing is not editable → 409 LISTING_NOT_EDITABLE', async () => {
+      const animalId = await newAnimal(sellerId);
+      const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+      await prisma.listings.update({ where: { id }, data: { status: 'SOLD' } });
+      const etag = await getEtag(sellerTok, id);
+      const res = await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(409);
+      expect(res.body.code).toBe('LISTING_NOT_EDITABLE');
+    });
+
+    it('M14-8: animalId is not an editable field → 400 (unknown field rejected by the whitelist)', async () => {
+      const id = await makeActive();
+      const etag = await getEtag(sellerTok, id);
+      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ animalId: randomUUID() }).expect(400);
+    });
+
+    it('M14-3 (concurrency): two parallel edits of an ACTIVE listing → exactly one 200, one 409; single PENDING_MODERATION', async () => {
+      const id = await makeActive();
+      const etag = await getEtag(sellerTok, id);
+      const fire = (price: number) => request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: price });
+      const [a, b] = await Promise.all([fire(111), fire(222)]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses[0]).toBe(200);
+      expect([409, 412]).toContain(statuses[1]); // loser: lost the guarded ACTIVE claim (409) or stale ETag (412)
+      const row = await prisma.listings.findUnique({ where: { id } });
+      expect(row?.status).toBe('PENDING_MODERATION'); // re-enqueued exactly once
+    });
+  });
 });

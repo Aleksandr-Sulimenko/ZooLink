@@ -248,10 +248,87 @@ describe('ListingService', () => {
       expect((await svc.update(LISTING, { priceCents: 1 }, 'W/"x"', p(SELLER)).catch((e: unknown) => e) as HttpException).getStatus()).toBe(412);
     });
 
-    it('editing a non-DRAFT → 409 LISTING_NOT_DRAFT', async () => {
+    it('M14-7: editing a non-editable source (PENDING_MODERATION) → 409 LISTING_NOT_EDITABLE', async () => {
       const { svc } = setup({ listing: listingRow({ status: 'PENDING_MODERATION' }) });
       const err = await svc.update(LISTING, { priceCents: 1 }, etagOf(), p(SELLER)).catch((e: unknown) => e);
-      expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_DRAFT' });
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_EDITABLE' });
+    });
+
+    it('M14-7: SOLD / DEACTIVATED / EXPIRED sources are not editable → 409 LISTING_NOT_EDITABLE', async () => {
+      for (const status of ['SOLD', 'DEACTIVATED', 'EXPIRED']) {
+        const { svc } = setup({ listing: listingRow({ status }) });
+        const err = await svc.update(LISTING, { priceCents: 1 }, etagOf(), p(SELLER)).catch((e: unknown) => e);
+        expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_EDITABLE' });
+      }
+    });
+
+    it('M14-6: a DRAFT edit stays DRAFT, no re-enqueue (plain update, not updateMany)', async () => {
+      const { svc, listings } = setup();
+      const { listing } = await svc.update(LISTING, { priceCents: 9000 }, etagOf(), p(SELLER));
+      expect(listing.status).toBe('DRAFT');
+      expect(listings.update).toHaveBeenCalled(); // DRAFT path uses update()
+    });
+  });
+
+  describe('update — M-14 re-moderation on ACTIVE edit', () => {
+    const active = (over: Record<string, unknown> = {}) =>
+      listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true, ...over });
+
+    it('M14-1/M14-5: an ACTIVE edit re-enqueues (PENDING_MODERATION + PENDING) via a status-guarded updateMany; lock + escalated_at cleared; audited', async () => {
+      const { svc, listings, record } = setup({ listing: active() });
+      const { listing } = await svc.update(LISTING, { priceCents: 9000 }, etagOf(), p(SELLER));
+      expect(listing.status).toBe('PENDING_MODERATION');
+      expect(listings.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: LISTING, status: 'ACTIVE' },
+          data: expect.objectContaining({
+            status: 'PENDING_MODERATION',
+            moderation_status: 'PENDING',
+            moderation_enqueued_at: expect.any(Date),
+            is_active: false,
+            assigned_to: null,
+            locked_at: null,
+            lock_expires_at: null,
+            escalated_at: null,
+          }),
+        }),
+      );
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'listing.re_moderation_requested' }), expect.anything());
+    });
+
+    it('M14-1: each material field edit on an ACTIVE listing re-enqueues', async () => {
+      for (const patch of [
+        { titleLocalized: { en: 'New title' } },
+        { descriptionLocalized: { en: 'New desc' } },
+        { priceCents: 12345 },
+      ]) {
+        const { svc } = setup({ listing: active() });
+        const { listing } = await svc.update(LISTING, patch, etagOf(), p(SELLER));
+        expect(listing.status).toBe('PENDING_MODERATION');
+      }
+    });
+
+    it('M14-3 TOCTOU loser: the guarded re-enqueue updateMany returns count 0 → 409 LISTING_NOT_EDITABLE, no audit', async () => {
+      const { svc, listings, record } = setup({ listing: active() });
+      listings.updateMany.mockResolvedValueOnce({ count: 0 });
+      const err = await svc.update(LISTING, { priceCents: 1 }, etagOf(), p(SELLER)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_EDITABLE' });
+      expect(record).not.toHaveBeenCalled(); // loser writes nothing
+    });
+
+    it('M14-4: a non-owner USER editing an ACTIVE listing → 403; a MODERATOR → 403 (R-only)', async () => {
+      const { svc } = setup({ listing: active() });
+      await expect(svc.update(LISTING, { priceCents: 1 }, etagOf(), p(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(svc.update(LISTING, { priceCents: 1 }, etagOf(), p(OTHER, 'MODERATOR'))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('M14-2: a P0-trigger RAISE on the re-enqueue is mapped to a clean 422 (never 500)', async () => {
+      const { svc, listings } = setup({ listing: active() });
+      listings.updateMany.mockRejectedValueOnce(
+        new Prisma.PrismaClientUnknownRequestError('Listing x cannot be ACTIVE unless moderation_status = APPROVED', { clientVersion: '6' }),
+      );
+      await expect(svc.update(LISTING, { priceCents: 1 }, etagOf(), p(SELLER))).rejects.toBeInstanceOf(UnprocessableEntityException);
     });
   });
 

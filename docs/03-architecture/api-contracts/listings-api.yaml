@@ -216,7 +216,18 @@ paths:
         Object-level rule: mutable only by the listing's seller (`seller_id == actor`) or an
         org-admin of its organization (rbac-matrix §99) → else 403. `status`/`moderationStatus`/
         `sellerId` are **not** writable here (lifecycle moves via actions; seller is derived).
-        MODERATOR is R-only on listings → excluded.
+        `animalId` is **immutable** after creation (to list a different animal, create a new
+        listing — DRIFT-M14c). MODERATOR is R-only on listings → excluded.
+
+        **Allowed source states: DRAFT or ACTIVE** (a PENDING_MODERATION/EXPIRED/SOLD/DEACTIVATED
+        listing is not owner-editable → 409). **Re-moderation side effect (M-14, Slice 4d):**
+        editing a **DRAFT** stays DRAFT (no re-enqueue); editing a **material** field of an
+        **ACTIVE** listing (title/description/photos/price/listing_type) **re-enqueues** it —
+        `status` returns to PENDING_MODERATION, `moderationStatus` to PENDING, the moderator lock
+        is cleared and `escalatedAt` reset. The client **must expect** that a material edit takes
+        an ACTIVE listing back to moderation (it leaves public search until re-approved). In MVP
+        every edit to an ACTIVE listing's editable content fields is material (no trivial-edit
+        path on ACTIVE — DRIFT-M14b). The response reflects the new `status`/`moderationStatus`.
       x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
@@ -247,6 +258,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # LISTING_NOT_EDITABLE (source state not DRAFT/ACTIVE); animalId edit attempt
         '412': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }

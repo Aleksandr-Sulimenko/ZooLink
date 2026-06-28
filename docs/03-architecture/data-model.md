@@ -332,8 +332,13 @@ contracts are specified in the linked specs. They were added per the schema audi
 
 Lifecycle/state columns added to existing tables: `listings.status` + `listings.moderation_status`
 (see `specs/statemachines/listing_state_machine.md`), `users.status` (see
-`specs/statemachines/user_state_machine.md`). Geo: `listings.lat`/`listings.lng` are the MVP-primary
-storage (Haversine + bounding box), with optional PostGIS `location_point`.
+`specs/statemachines/user_state_machine.md`). `listings.escalated_at` (migration 0024) is the
+**SLA-escalation idempotent-emission marker** for the `Moderation.Escalated` event — set in the same
+transaction as the outbox write so an overdue PENDING_MODERATION item escalates at most once; the SLA
+job never mutates `status`/`moderation_status` (M-13/SLA-1/SLA-3); reset to NULL on re-enqueue (M-14).
+Scanned by the partial index `idx_listings_escalation_scan` on `(moderation_enqueued_at) WHERE
+status='PENDING_MODERATION' AND escalated_at IS NULL`. Geo: `listings.lat`/`listings.lng` are the
+MVP-primary storage (Haversine + bounding box), with optional PostGIS `location_point`.
 
 ## Extensibility Mechanisms
 

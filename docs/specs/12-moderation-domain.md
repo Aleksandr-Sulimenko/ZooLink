@@ -408,6 +408,63 @@ species/breed re-moderation clarification.
 waitingSeconds, slaState}`; notification template `moderation_sla_escalated` → ADMIN). No new HTTP
 error codes (4c is a job + an additive read field).
 
+## Slice 4d — M-14 re-moderation on material ACTIVE edit (round-N, normative)
+
+> **Source-of-truth note.** Shared invariant list for **backend-engineer** and **reviewer-qa**
+> for Slice 4d — re-moderation when an **ACTIVE** listing is edited **materially**. This expands
+> the M-14 row above into a testable list. State machine:
+> [listing_state_machine.md](statemachines/listing_state_machine.md) (the new
+> `ACTIVE → PENDING_MODERATION` transition + the pinned material set). Contract:
+> [listings-api.yaml](../03-architecture/api-contracts/listings-api.yaml) `PATCH /listings/{id}`
+> (source states DRAFT|ACTIVE; re-enqueue side effect). **No migration** — reuses the existing
+> claim/lock columns + `listings.escalated_at` (migration 0024).
+>
+> **WHAT:** formalize M14-1..M14-6 and pin the two ambiguities — the **material set**
+> (title/description/photos/price/listing_type; **no trivial-edit path on ACTIVE** — DRIFT-M14b)
+> and **species/breed** (`animal_id` immutable, so unreachable — DRIFT-M14c).
+> **WHY:** M-14 was pinned but under-specified — backend had an ambiguous "trivial edit" example
+> and an unreachable "species/breed material" clause; both needed a single unambiguous rule.
+> **WHY-BETTER-for-the-whole-project:** keeps M-P0 intact (a material edit drops the listing OUT
+> of ACTIVE, never mutates an ACTIVE listing in place); the simplest-safe rule (all ACTIVE content
+> edits are material) eliminates an ambiguity class at no cost; `animal_id` immutability matches
+> the animal aggregate's immutable identity (ADR-0004); the `escalated_at` reset closes the SLA-4
+> cross-slice contract so a re-review can re-escalate.
+
+### Pinned reconciliations
+
+- **DRIFT-M14b (material vs trivial):** **In MVP, every edit to an ACTIVE listing's editable
+  content fields (title, description, price, `listing_type`, photos) is material → re-enqueue.
+  There is NO trivial-edit path on an ACTIVE listing in MVP.** (The former "trivial e.g. toggling
+  a saved flag" example was not a listing field.) `isActive`/`expiresAt`/`metadata`/`quantity`/
+  `lat`/`lng` are not part of the moderated content set, but the safe MVP rule treats any
+  `PATCH` that changes a persisted content field of an ACTIVE listing as material; a backend may
+  scope "material" precisely to the five listed fields — either way the **named five always
+  re-enqueue**.
+- **DRIFT-M14c (species/breed):** a listing references an **animal** whose `species_id`/`breed_id`
+  are immutable (ADR-0004), and **`animal_id` is immutable on a listing after creation** (to list
+  a different animal, create a new listing — confirmed: `animalId` is NOT in `ListingUpdate`).
+  So a listing's species/breed can never change; the "species/breed material" clause is satisfied
+  by that immutability, not by an editable path.
+
+### Invariants & negative cases
+
+| # | Invariant (MUST hold) | Negative case (MUST be rejected/handled) | Enforced by | Error / signal |
+|---|---|---|---|---|
+| M14-1 | **Material ACTIVE edit re-enqueues:** a change to any material field (title/description/price/listing_type/photos) of an ACTIVE listing → `status='PENDING_MODERATION'`, `moderation_status='PENDING'`, `moderation_enqueued_at=now()`. | a material edit leaving the listing ACTIVE (un-reviewed change goes live). | service (material-field detection + transition) | n/a (transition); QA tests each field |
+| M14-2 | **M-P0 holds:** no path keeps `status='ACTIVE'` while `moderation_status` flips to PENDING — the edit moves OUT of ACTIVE. | an in-place edit holding ACTIVE with moderation_status=PENDING. | service + DB `trg_listing_active_requires_approval` backstop | 422 `VALIDATION_ERROR` (trigger RAISE) |
+| M14-3 | **Atomic + guarded re-enqueue (TOCTOU single-winner):** guarded `UPDATE … WHERE id AND status='ACTIVE'` with affected-rows `=1`; the field update + transition + lock-clear + `escalated_at` reset + audit row are **one transaction**. | two concurrent edits both re-enqueueing; a partial write. | single DB transaction + guarded conditional update (count===1) | 409 `LISTING_NOT_EDITABLE` (lost the race / not ACTIVE) |
+| M14-4 | **Authz:** only the listing **owner** (seller) / org-admin may edit→re-enqueue; MODERATOR is R-only on listings (cannot edit). | a non-owner (incl. MODERATOR) PATCHes the listing. | `x-required-roles` (no MODERATOR) + service object-rule (Slice-1) | 403 `FORBIDDEN` |
+| M14-5 | **Lock cleared + `escalated_at` reset on re-enqueue:** `assigned_to`/`locked_at`/`lock_expires_at`→NULL and `escalated_at`→NULL, so a stale moderator lock is released and the re-review can re-escalate (SLA-4). | a re-enqueued item keeping a stale lock, or unable to re-escalate (escalated_at not reset). | service (within the M14-3 txn) | n/a (invariant); ties to SLA-1/SLA-4 |
+| M14-6 | **DRAFT edit unchanged:** editing a DRAFT stays DRAFT, no re-enqueue (the Slice-1 path is preserved). | a DRAFT edit accidentally re-enqueuing or changing status. | service (source-state branch) | n/a (DRAFT→DRAFT) |
+| M14-7 | **Source-state gate:** only DRAFT or ACTIVE is owner-editable; PENDING_MODERATION/EXPIRED/SOLD/DEACTIVATED are not. | PATCH on a non-editable source state. | service (state precondition) | 409 `LISTING_NOT_EDITABLE` |
+| M14-8 | **`animal_id` immutable:** a listing cannot be re-pointed to a different animal. | a PATCH attempting to change `animalId`. | contract (not in `ListingUpdate`) + service | 409 `LISTING_NOT_EDITABLE` / 400 (unknown field) |
+
+**Codes:** new **`LISTING_NOT_EDITABLE`** (409 — PATCH on a non-DRAFT/ACTIVE source state, a lost
+re-enqueue race, or an `animalId` edit attempt); reuses standard `VALIDATION_ERROR` (422, P0
+backstop), `FORBIDDEN` (403), `STALE_RESOURCE` (412)/428 (If-Match). The re-enqueue itself emits no
+new event in 4d; the subsequent SLA escalation reuses `Moderation.Escalated` (4c) once the
+re-reviewed item goes overdue (enabled by the `escalated_at` reset, M14-5/SLA-4).
+
 ## Related Documents
 
 - [Content Report State Machine](statemachines/content_report_state_machine.md)

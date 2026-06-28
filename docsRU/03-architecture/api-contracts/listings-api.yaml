@@ -216,7 +216,18 @@ paths:
         Объектное правило: изменяемо только продавцом объявления (`seller_id == actor`) или
         org-admin его организации (rbac-matrix §99) → иначе 403. `status`/`moderationStatus`/
         `sellerId` здесь **не** записываемы (жизненный цикл движется через действия; продавец выводится).
-        MODERATOR — R-only на объявлениях → исключён.
+        `animalId` **иммутабелен** после создания (чтобы выставить другое животное, создайте новый
+        листинг — DRIFT-M14c). MODERATOR — R-only на объявлениях → исключён.
+
+        **Допустимые source-states: DRAFT или ACTIVE** (PENDING_MODERATION/EXPIRED/SOLD/DEACTIVATED-
+        листинг не редактируем владельцем → 409). **Побочный эффект re-moderation (M-14, Slice 4d):**
+        правка **DRAFT** остаётся DRAFT (без re-enqueue); правка **материального** поля
+        **ACTIVE**-листинга (title/description/photos/price/listing_type) **re-enqueue'ит** его —
+        `status` возвращается в PENDING_MODERATION, `moderationStatus` в PENDING, lock модератора
+        снимается и `escalatedAt` сбрасывается. Клиент **должен ожидать**, что материальная правка возвращает
+        ACTIVE-листинг в модерацию (он уходит из публичного поиска до повторного одобрения). В MVP
+        каждая правка редактируемых контент-полей ACTIVE-листинга материальна (нет пути тривиальной правки
+        на ACTIVE — DRIFT-M14b). Ответ отражает новые `status`/`moderationStatus`.
       x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
@@ -247,6 +258,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # LISTING_NOT_EDITABLE (source state not DRAFT/ACTIVE); animalId edit attempt
         '412': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }

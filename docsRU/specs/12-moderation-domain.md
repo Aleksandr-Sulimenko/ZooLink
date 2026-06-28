@@ -409,6 +409,63 @@ re-moderation, **сброс** `escalated_at` при re-enqueue, source-states re
 waitingSeconds, slaState}`; notification-шаблон `moderation_sla_escalated` → ADMIN). Без новых HTTP-
 кодов ошибок (4c — это job + аддитивное read-поле).
 
+## Slice 4d — M-14 re-moderation при материальной правке ACTIVE (round-N, нормативно)
+
+> **Замечание об источнике правды.** Общий список инвариантов для **backend-engineer** и **reviewer-qa**
+> для Slice 4d — re-moderation, когда **ACTIVE**-листинг редактируется **материально**. Это разворачивает
+> строку M-14 выше в тестируемый список. Стейт-машина:
+> [listing_state_machine.md](statemachines/listing_state_machine.md) (новый
+> переход `ACTIVE → PENDING_MODERATION` + закреплённый материальный набор). Контракт:
+> [listings-api.yaml](../03-architecture/api-contracts/listings-api.yaml) `PATCH /listings/{id}`
+> (source-states DRAFT|ACTIVE; побочный эффект re-enqueue). **Без миграции** — переиспользует существующие
+> claim/lock-колонки + `listings.escalated_at` (миграция 0024).
+>
+> **WHAT:** формализовать M14-1..M14-6 и закрепить две неоднозначности — **материальный набор**
+> (title/description/photos/price/listing_type; **нет пути тривиальной правки на ACTIVE** — DRIFT-M14b)
+> и **species/breed** (`animal_id` иммутабелен, потому недостижим — DRIFT-M14c).
+> **WHY:** M-14 был закреплён, но недоспецифицирован — у бэкенда были неоднозначный пример «тривиальная правка»
+> и недостижимый пункт «species/breed материальны»; оба нуждались в одном однозначном правиле.
+> **WHY-BETTER-for-the-whole-project:** сохраняет M-P0 (материальная правка выводит листинг ИЗ
+> ACTIVE, никогда не мутирует ACTIVE-листинг на месте); простейшее-безопасное правило (все контент-правки
+> ACTIVE материальны) устраняет класс неоднозначности без затрат; иммутабельность `animal_id` согласована с
+> иммутабельной идентичностью агрегата животного (ADR-0004); сброс `escalated_at` закрывает cross-slice
+> контракт SLA-4, чтобы повторное ревью могло пере-эскалировать.
+
+### Закреплённые реконсиляции
+
+- **DRIFT-M14b (материальное vs тривиальное):** **В MVP каждая правка редактируемых контент-полей ACTIVE-
+  листинга (title, description, price, `listing_type`, photos) материальна → re-enqueue.
+  В MVP НЕТ пути тривиальной правки на ACTIVE-листинге.** (Прежний пример «тривиальная, напр. переключение
+  сохранённого флага» не был полем листинга.) `isActive`/`expiresAt`/`metadata`/`quantity`/
+  `lat`/`lng` не входят в модерируемый контент-набор, но безопасное MVP-правило трактует любой
+  `PATCH`, меняющий персистентное контент-поле ACTIVE-листинга, как материальный; бэкенд может ограничить
+  «материальное» точно пятью перечисленными полями — в любом случае **названные пять всегда
+  re-enqueue'ят**.
+- **DRIFT-M14c (species/breed):** листинг ссылается на **животное**, чьи `species_id`/`breed_id`
+  иммутабельны (ADR-0004), и **`animal_id` иммутабелен на листинге после создания** (чтобы выставить
+  другое животное, создайте новый листинг — подтверждено: `animalId` НЕ в `ListingUpdate`).
+  Так что species/breed листинга никогда не меняются; пункт «species/breed материальны» удовлетворён
+  этой иммутабельностью, а не редактируемым путём.
+
+### Инварианты и негативные случаи
+
+| # | Инвариант (ДОЛЖЕН выполняться) | Негативный случай (ДОЛЖЕН отклоняться/обрабатываться) | Обеспечивается | Ошибка / сигнал |
+|---|---|---|---|---|
+| M14-1 | **Материальная правка ACTIVE re-enqueue'ит:** изменение любого материального поля (title/description/price/listing_type/photos) ACTIVE-листинга → `status='PENDING_MODERATION'`, `moderation_status='PENDING'`, `moderation_enqueued_at=now()`. | материальная правка, оставляющая листинг ACTIVE (непроверенное изменение выходит в публикацию). | сервис (детекция материального поля + переход) | n/a (переход); QA тестит каждое поле |
+| M14-2 | **M-P0 выполняется:** ни один путь не держит `status='ACTIVE'` при флипе `moderation_status` в PENDING — правка выводит ИЗ ACTIVE. | правка-на-месте, держащая ACTIVE с moderation_status=PENDING. | сервис + DB `trg_listing_active_requires_approval` backstop | 422 `VALIDATION_ERROR` (trigger RAISE) |
+| M14-3 | **Атомарный + guarded re-enqueue (TOCTOU single-winner):** guarded `UPDATE … WHERE id AND status='ACTIVE'` с affected-rows `=1`; обновление поля + переход + снятие lock + сброс `escalated_at` + строка аудита — **одна транзакция**. | две конкурентные правки, обе re-enqueue'ят; частичная запись. | одна DB-транзакция + guarded conditional update (count===1) | 409 `LISTING_NOT_EDITABLE` (проиграл гонку / не ACTIVE) |
+| M14-4 | **Authz:** только **владелец** листинга (seller) / org-admin может править→re-enqueue; MODERATOR — R-only на листингах (не может править). | не-владелец (вкл. MODERATOR) PATCH'ит листинг. | `x-required-roles` (без MODERATOR) + сервис object-rule (Slice-1) | 403 `FORBIDDEN` |
+| M14-5 | **Lock снят + `escalated_at` сброшен при re-enqueue:** `assigned_to`/`locked_at`/`lock_expires_at`→NULL и `escalated_at`→NULL, так что устаревший lock модератора освобождается и повторное ревью может пере-эскалировать (SLA-4). | re-enqueue'нутый элемент, держащий устаревший lock, или неспособный пере-эскалировать (escalated_at не сброшен). | сервис (внутри txn M14-3) | n/a (инвариант); связан с SLA-1/SLA-4 |
+| M14-6 | **Правка DRAFT неизменна:** правка DRAFT остаётся DRAFT, без re-enqueue (путь Slice-1 сохранён). | правка DRAFT, случайно re-enqueue'ящая или меняющая статус. | сервис (ветка по source-state) | n/a (DRAFT→DRAFT) |
+| M14-7 | **Source-state-гейт:** только DRAFT или ACTIVE редактируемы владельцем; PENDING_MODERATION/EXPIRED/SOLD/DEACTIVATED — нет. | PATCH на нередактируемом source-state. | сервис (state precondition) | 409 `LISTING_NOT_EDITABLE` |
+| M14-8 | **`animal_id` иммутабелен:** листинг нельзя пере-привязать к другому животному. | PATCH, пытающийся изменить `animalId`. | контракт (нет в `ListingUpdate`) + сервис | 409 `LISTING_NOT_EDITABLE` / 400 (неизвестное поле) |
+
+**Коды:** новый **`LISTING_NOT_EDITABLE`** (409 — PATCH на не-DRAFT/ACTIVE source-state, проигранная
+гонка re-enqueue или попытка правки `animalId`); переиспользует стандартные `VALIDATION_ERROR` (422, P0
+backstop), `FORBIDDEN` (403), `STALE_RESOURCE` (412)/428 (If-Match). Сам re-enqueue не эмитит
+нового события в 4d; последующая SLA-эскалация переиспользует `Moderation.Escalated` (4c), когда
+re-reviewed-элемент становится просроченным (включено сбросом `escalated_at`, M14-5/SLA-4).
+
 ## Связанные документы
 
 - [Глоссарий](glossary.md)

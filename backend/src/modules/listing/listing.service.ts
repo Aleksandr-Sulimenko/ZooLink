@@ -192,7 +192,7 @@ export class ListingService {
     return { listing: view, etag: this.etag(row) };
   }
 
-  // ── Update (DRAFT-edit only, mutable fields) ─────────────────────────────────────────────────
+  // ── Update — DRAFT edit (stays DRAFT) OR ACTIVE material edit (re-enqueues, M-14) ─────────────
   async update(
     id: string,
     dto: ListingUpdateDto,
@@ -200,12 +200,13 @@ export class ListingService {
     actor: AuthPrincipal,
   ): Promise<{ listing: ListingView; etag: string }> {
     const existing = await this.findRow(id);
-    await this.assertCanMutate(actor, existing); // L-3
+    await this.assertCanMutate(actor, existing); // L-3 / M14-4 (owner / org-admin; MODERATOR is R-only)
     assertIfMatch(ifMatch, this.etag(existing)); // L-13
 
-    // Editing is a DRAFT-only operation (state machine: DRAFT→DRAFT owner edits).
-    if (existing.status !== 'DRAFT') {
-      throw new ConflictException({ message: 'Only a DRAFT listing can be edited', code: 'LISTING_NOT_DRAFT' });
+    // M14-7 source-state gate: only DRAFT and ACTIVE are owner-editable. PENDING_MODERATION / EXPIRED /
+    // SOLD / DEACTIVATED → 409 LISTING_NOT_EDITABLE. (animal_id is not in the DTO → M14-8 immutability.)
+    if (existing.status !== 'DRAFT' && existing.status !== 'ACTIVE') {
+      throw new ConflictException({ message: `A ${existing.status} listing cannot be edited`, code: 'LISTING_NOT_EDITABLE' });
     }
 
     const nextLat = dto.lat !== undefined ? dto.lat : existing.lat;
@@ -236,7 +237,20 @@ export class ListingService {
     }
     data.updated_at = new Date();
 
-    const row = await this.runWrite(() =>
+    // M-14: an edit to an ACTIVE listing is material (MVP: every editable-content PATCH is material —
+    // DRIFT-M14b) → re-enqueue for re-review. A DRAFT edit stays DRAFT (M14-6, Slice-1 behaviour).
+    const row =
+      existing.status === 'ACTIVE'
+        ? await this.editActiveAndReenqueue(id, data, actor)
+        : await this.editDraft(id, data, actor);
+
+    this.logger.log(`Listing updated ${id} by ${actor.userId} (was ${existing.status})`);
+    return { listing: this.toView(row), etag: this.etag(row) };
+  }
+
+  /** DRAFT edit (M14-6): a plain in-place update, stays DRAFT, no re-enqueue (Slice-1 behaviour). */
+  private async editDraft(id: string, data: Prisma.listingsUncheckedUpdateInput, actor: AuthPrincipal): Promise<ListingRow> {
+    return this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
         const updated = (await tx.listings.update({ where: { id }, data })) as unknown as ListingRow;
         await this.audit.record(
@@ -254,9 +268,53 @@ export class ListingService {
         return updated;
       }),
     );
+  }
 
-    this.logger.log(`Listing updated ${id} by ${actor.userId}`);
-    return { listing: this.toView(row), etag: this.etag(row) };
+  /**
+   * M-14 ACTIVE material edit → re-enqueue. The field update + the ACTIVE→PENDING_MODERATION transition
+   * + the lock clear + the escalated_at reset + the audit row are ONE transaction; the listing flip is a
+   * **status-guarded conditional updateMany** (TOCTOU single-winner, M14-3) so a concurrent edit/withdraw
+   * has exactly one winner — the loser sees count 0, rolls back before the audit write, and 409s. The
+   * listing LEAVES ACTIVE (status→PENDING_MODERATION, moderation_status→PENDING): M-P0 holds (it is never
+   * ACTIVE with moderation_status≠APPROVED); the P0 trigger is the backstop for a bug.
+   */
+  private async editActiveAndReenqueue(id: string, data: Prisma.listingsUncheckedUpdateInput, actor: AuthPrincipal): Promise<ListingRow> {
+    return this.runWrite(() =>
+      this.prisma.$transaction(async (tx) => {
+        const claim = await tx.listings.updateMany({
+          where: { id, status: 'ACTIVE' },
+          data: {
+            ...data,
+            status: 'PENDING_MODERATION', // M14-1: leaves ACTIVE (M-P0 holds)
+            moderation_status: 'PENDING',
+            moderation_enqueued_at: new Date(), // restart the SLA clock
+            is_active: false, // not publicly visible while re-reviewing
+            assigned_to: null, // M14-5: release any stale moderator lock
+            locked_at: null,
+            lock_expires_at: null,
+            escalated_at: null, // M14-5 / SLA-4: allow the 4c job to re-escalate
+          },
+        });
+        if (claim.count !== 1) {
+          // Lost the race (a concurrent edit/withdraw already moved it off ACTIVE) — roll back, write nothing.
+          throw new ConflictException({ message: 'Listing is no longer editable (it left ACTIVE)', code: 'LISTING_NOT_EDITABLE' });
+        }
+        await this.audit.record(
+          {
+            actorId: actor.userId,
+            actorRole: actor.role,
+            actorPrincipalType: actor.principalType,
+            action: 'listing.re_moderation_requested',
+            entityType: 'listing',
+            entityId: id,
+            beforeData: { status: 'ACTIVE' },
+            afterData: { status: 'PENDING_MODERATION', fields: Object.keys(data) },
+          },
+          tx,
+        );
+        return (await tx.listings.findUnique({ where: { id } })) as unknown as ListingRow;
+      }),
+    );
   }
 
   // ── Submit (DRAFT → PENDING_MODERATION) ──────────────────────────────────────────────────────
