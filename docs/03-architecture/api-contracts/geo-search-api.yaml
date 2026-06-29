@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ZooLink Geo-Search API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Radius search over listings (Haversine + bounding box on lat/lng; spec 07),
     address geocoding proxy (Yandex.Maps), and saved searches (UC-GS-03,
@@ -93,26 +93,62 @@ paths:
     get:
       summary: List the current user's saved searches
       operationId: listSavedSearches
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Returns ONLY the authenticated caller's own saved searches (rows where user_id = actor).
+        Owner-scope is absolute: MODERATOR/ADMIN are role-gated to call this endpoint for their
+        OWN saved searches, but the operator role NEVER widens the result set to other users' rows
+        (rbac-matrix.md:78 = own/own/own). No filter or query param can return another user's rows.
+        Invariant SS-1 (own-scope) + SS-5 (list shape = {items, meta: PageMeta} envelope).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: sort
+          description: >-
+            Sort key (§12, snake_case). Whitelisted fields only; default deterministic sort is
+            created_at:desc. Unknown sort field/direction → 400 (INVALID_SORT).
+          schema: { type: string, enum: [created_at:asc, created_at:desc, updated_at:asc, updated_at:desc], default: created_at:desc }
       responses:
         '200':
-          description: Saved searches
+          description: "The caller's own saved searches, paginated ({items, meta: PageMeta})"
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/SavedSearch' }
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SavedSearch' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Save a search (filters + location)
       operationId: createSavedSearch
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Creates a saved search owned by the authenticated caller (user_id is derived server-side
+        from the actor — it is NOT accepted in the body; IDOR class). `filters` MUST conform to the
+        bounded SavedSearchFilters whitelist (SS-3): unknown keys, type mismatches, or a body over
+        the size cap → 422 (INVALID_FILTERS); arbitrary client JSON is NEVER stored. Location is
+        coherent (SS-4): lat & lng both-present-or-both-absent, and radiusM is REQUIRED when a point
+        is present and MUST be absent/null when no point. Dedup is by Idempotency-Key only (SS-6):
+        there is no (user_id, filters) uniqueness and no name uniqueness — two saves with different
+        keys are intentionally allowed.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
           schema: { type: string, format: uuid }
-          description: Client-generated key for safe retry (API_CONVENTIONS §11)
+          description: >-
+            Client-generated key for safe retry (API_CONVENTIONS §11). A replay with the same key
+            within 24h returns the stored 201 response; the same key with a different body → 422.
+            This is the ONLY dedup mechanism for saved searches (SS-6) — no DB uniqueness exists.
       requestBody:
         required: true
         content:
@@ -120,27 +156,51 @@ paths:
             schema: { $ref: '#/components/schemas/SavedSearchCreate' }
       responses:
         '201':
-          description: Saved
+          description: Saved (owner = authenticated caller)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SavedSearch' }
         '401': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: >-
+            Validation failure — INVALID_FILTERS (unknown key / type / size cap),
+            RADIUS_OUT_OF_RANGE (radiusM outside [1000,100000]),
+            GEO_PARAMS_INCOMPLETE (lat/lng/radius coherence broken), or §11 Idempotency-Key reuse
+            with a different body.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /saved-searches/{id}:
     delete:
       summary: Delete a saved search
       operationId: deleteSavedSearch
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Deletes a saved search the caller owns. Object-scope is enforced server-side: deleting an id
+        that belongs to ANOTHER user returns 404 — byte-for-byte identical to deleting a non-existent
+        id (no-leak, SS-2). It MUST NEVER return 403, because 403 vs 404 would let a caller enumerate
+        which ids exist (IDOR — the project's #1 historical risk). MODERATOR/ADMIN get no widening:
+        they too can only delete their own rows. This is a HARD delete with no tombstone, so it is
+        NOT idempotent-204: a repeated DELETE of the caller's OWN, already-deleted id returns 404 —
+        identical to a non-existent/non-owned id, because once the row is gone the server cannot tell
+        those cases apart without leaking existence. 204 is only the first successful delete; SS-2
+        (security/no-leak) is the governing rule.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Deleted }
+        '204': { description: "Deleted — first successful delete of the caller's own row (hard delete, no tombstone; a repeat returns 404 per SS-2)" }
         '401': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: >-
+            Not found OR not owned by the caller — indistinguishable by design (SS-2 no-leak).
+            code = SAVED_SEARCH_NOT_FOUND. Never 403 for a non-owned id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
@@ -213,21 +273,31 @@ components:
           format: uuid
         name:
           type: string
+          maxLength: 100
           nullable: true
         filters:
-          type: object
-          description: species/breed/price/listing_type/etc.
+          allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
+          description: Bounded saved-search filter set (SS-3). Stored verbatim in saved_searches.filters JSONB.
         lat:
           type: number
           format: double
+          minimum: -90
+          maximum: 90
           nullable: true
         lng:
           type: number
           format: double
+          minimum: -180
+          maximum: 180
           nullable: true
         radiusM:
           type: integer
+          minimum: 1000
+          maximum: 100000
           nullable: true
+          description: >-
+            Radius in meters (1km..100km, mirrors /geo-search radius_m). SS-4 coherence:
+            present (non-null) iff lat & lng are present; null iff no point.
         createdAt:
           type: string
           format: date-time
@@ -236,23 +306,81 @@ components:
           format: date-time
     SavedSearchCreate:
       type: object
+      required: [filters]
       properties:
         name:
           type: string
+          maxLength: 100
           nullable: true
         filters:
-          type: object
+          allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
+          description: >-
+            Bounded whitelist (SS-3). Unknown keys / type mismatch / over size-cap → 422
+            INVALID_FILTERS. Arbitrary client JSON is NEVER stored.
         lat:
           type: number
           format: double
+          minimum: -90
+          maximum: 90
           nullable: true
         lng:
           type: number
           format: double
+          minimum: -180
+          maximum: 180
           nullable: true
         radiusM:
           type: integer
+          minimum: 1000
+          maximum: 100000
           nullable: true
+          description: >-
+            SS-4: REQUIRED (non-null) when lat & lng are both present; MUST be null/absent when no
+            point. Out of [1000,100000] → 422 RADIUS_OUT_OF_RANGE; coherence broken → 422
+            GEO_PARAMS_INCOMPLETE. App-level validation (no DB CHECK on radius_m).
+    SavedSearchFilters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Normative whitelist for saved_searches.filters (spec 07 §156-157). Mirrors the /geo-search
+        query params so a saved search re-executes (Phase 2) against /geo-search. additionalProperties
+        is false — any key outside this set → 422 INVALID_FILTERS. Total serialized JSON MUST be
+        ≤ 2048 bytes (size cap, SS-3); over cap → 422 INVALID_FILTERS.
+      properties:
+        q:
+          type: string
+          maxLength: 200
+          description: Free-text query (Russian FTS + trigram), spec 07 §156.
+        market:
+          type: string
+          enum: [pet, livestock]
+          description: >-
+            Market scope (ADR-0002 hard separation, SS-3/G3). Optional; when set, the saved search is
+            market-pinned so Phase-2 re-execution/alerts can never blur pet vs livestock.
+        species_id:
+          type: integer
+          description: >-
+            Species lookup id (INT, ZooLink id convention). NOTE: /geo-search currently exposes
+            `species` as a string param — this int↔string drift is a documented Phase-2 re-execution
+            mapping concern (spec 07 §157), not resolved here.
+        breed_id:
+          type: integer
+        listing_type:
+          type: string
+          enum: [sale, breeding, show, adoption, stud_service]
+          description: >-
+            Mirrors the /geo-search listing_type enum for re-executability. `leasing` (listings
+            migration 0021) is intentionally NOT here until /geo-search accepts it (Phase-2 mapping).
+        price_min:
+          type: integer
+          minimum: 0
+          format: int64
+          description: Minimum price, integer minor units (kopecks), §7.
+        price_max:
+          type: integer
+          minimum: 0
+          format: int64
+          description: Maximum price, integer minor units (kopecks), §7. MUST be ≥ price_min when both set.
   responses:
     Problem:
       description: RFC7807 problem (application/problem+json)

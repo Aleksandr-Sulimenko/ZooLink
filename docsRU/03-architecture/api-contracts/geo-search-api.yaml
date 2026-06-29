@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ZooLink Geo-Search API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Поиск по радиусу среди объявлений (Haversine + bounding box по lat/lng; спека 07),
     прокси геокодирования адресов (Yandex.Maps) и сохранённые поиски (UC-GS-03,
@@ -93,26 +93,62 @@ paths:
     get:
       summary: Список сохранённых поисков текущего пользователя
       operationId: listSavedSearches
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Возвращает ТОЛЬКО собственные сохранённые поиски аутентифицированного вызывающего (строки, где
+        user_id = actor). Owner-scope абсолютен: MODERATOR/ADMIN role-gated на вызов этого эндпоинта для
+        СВОИХ сохранённых поисков, но операторская роль НИКОГДА не расширяет выборку до чужих строк
+        (rbac-matrix.md:78 = own/own/own). Никакой фильтр или query-параметр не может вернуть чужие строки.
+        Инвариант SS-1 (own-scope) + SS-5 (форма списка = обёртка {items, meta: PageMeta}).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: sort
+          description: >-
+            Ключ сортировки (§12, snake_case). Только whitelist-поля; детерминированная сортировка по
+            умолчанию — created_at:desc. Неизвестное поле/направление сортировки → 400 (INVALID_SORT).
+          schema: { type: string, enum: [created_at:asc, created_at:desc, updated_at:asc, updated_at:desc], default: created_at:desc }
       responses:
         '200':
-          description: Сохранённые поиски
+          description: "Собственные сохранённые поиски вызывающего, постранично ({items, meta: PageMeta})"
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/SavedSearch' }
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SavedSearch' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     post:
       summary: Сохранить поиск (фильтры + локация)
       operationId: createSavedSearch
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Создаёт сохранённый поиск, владельцем которого является аутентифицированный вызывающий (user_id
+        выводится на сервере из actor — он НЕ принимается в теле; класс IDOR). `filters` ДОЛЖЕН
+        соответствовать ограниченному whitelist SavedSearchFilters (SS-3): неизвестные ключи, несоответствия
+        типов или тело сверх cap размера → 422 (INVALID_FILTERS); произвольный клиентский JSON НИКОГДА не
+        сохраняется. Локация согласована (SS-4): lat и lng оба присутствуют или оба отсутствуют, а radiusM
+        ОБЯЗАТЕЛЕН, когда точка присутствует, и ДОЛЖЕН отсутствовать/быть null, когда точки нет. Дедупликация —
+        только по Idempotency-Key (SS-6): нет уникальности (user_id, filters) и нет уникальности name — два
+        сохранения с разными ключами намеренно разрешены.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
           schema: { type: string, format: uuid }
-          description: Ключ клиента для безопасного повтора (API_CONVENTIONS §11)
+          description: >-
+            Ключ клиента для безопасного повтора (API_CONVENTIONS §11). Повтор с тем же ключом в течение
+            24ч возвращает сохранённый ответ 201; тот же ключ с другим телом → 422. Это ЕДИНСТВЕННЫЙ
+            механизм дедупликации для сохранённых поисков (SS-6) — DB-уникальности не существует.
       requestBody:
         required: true
         content:
@@ -120,27 +156,51 @@ paths:
             schema: { $ref: '#/components/schemas/SavedSearchCreate' }
       responses:
         '201':
-          description: Сохранено
+          description: Сохранено (владелец = аутентифицированный вызывающий)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SavedSearch' }
         '401': { $ref: '#/components/responses/Problem' }
-        '422': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: >-
+            Сбой валидации — INVALID_FILTERS (неизвестный ключ / тип / cap размера),
+            RADIUS_OUT_OF_RANGE (radiusM вне [1000,100000]),
+            GEO_PARAMS_INCOMPLETE (нарушена согласованность lat/lng/radius), либо повтор Idempotency-Key
+            §11 с другим телом.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /saved-searches/{id}:
     delete:
       summary: Удалить сохранённый поиск
       operationId: deleteSavedSearch
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      description: >-
+        Удаляет сохранённый поиск, которым владеет вызывающий. Object-scope обеспечивается на сервере:
+        удаление id, принадлежащего ДРУГОМУ пользователю, возвращает 404 — байт-в-байт идентично удалению
+        несуществующего id (no-leak, SS-2). НИКОГДА не должен возвращать 403, потому что 403 vs 404 позволил
+        бы вызывающему перечислить, какие id существуют (IDOR — риск №1 в истории проекта). MODERATOR/ADMIN
+        не получают расширения: они тоже могут удалять только свои строки. Это ЖЁСТКОЕ удаление без tombstone,
+        поэтому оно НЕ идемпотентно-204: повторный DELETE СВОЕГО, уже удалённого id возвращает 404 —
+        идентично несуществующему/не-своему id, потому что после исчезновения строки сервер не может различить
+        эти случаи без раскрытия существования. 204 — только первое успешное удаление; SS-2 (безопасность/no-leak)
+        является управляющим правилом.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Удалено }
+        '204': { description: "Удалено — первое успешное удаление собственной строки вызывающего (жёсткое удаление, без tombstone; повтор возвращает 404 по SS-2)" }
         '401': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: >-
+            Не найдено ИЛИ не принадлежит вызывающему — неотличимо by design (SS-2 no-leak).
+            code = SAVED_SEARCH_NOT_FOUND. Никогда 403 для не-своего id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
@@ -213,21 +273,31 @@ components:
           format: uuid
         name:
           type: string
+          maxLength: 100
           nullable: true
         filters:
-          type: object
-          description: species/breed/price/listing_type/и т.п.
+          allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
+          description: Ограниченный набор фильтров сохранённого поиска (SS-3). Хранится дословно в saved_searches.filters JSONB.
         lat:
           type: number
           format: double
+          minimum: -90
+          maximum: 90
           nullable: true
         lng:
           type: number
           format: double
+          minimum: -180
+          maximum: 180
           nullable: true
         radiusM:
           type: integer
+          minimum: 1000
+          maximum: 100000
           nullable: true
+          description: >-
+            Радиус в метрах (1км..100км, зеркалит /geo-search radius_m). Согласованность SS-4:
+            присутствует (non-null) тогда и только тогда, когда присутствуют lat и lng; null, когда точки нет.
         createdAt:
           type: string
           format: date-time
@@ -236,23 +306,81 @@ components:
           format: date-time
     SavedSearchCreate:
       type: object
+      required: [filters]
       properties:
         name:
           type: string
+          maxLength: 100
           nullable: true
         filters:
-          type: object
+          allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
+          description: >-
+            Ограниченный whitelist (SS-3). Неизвестные ключи / несоответствие типа / сверх cap размера → 422
+            INVALID_FILTERS. Произвольный клиентский JSON НИКОГДА не сохраняется.
         lat:
           type: number
           format: double
+          minimum: -90
+          maximum: 90
           nullable: true
         lng:
           type: number
           format: double
+          minimum: -180
+          maximum: 180
           nullable: true
         radiusM:
           type: integer
+          minimum: 1000
+          maximum: 100000
           nullable: true
+          description: >-
+            SS-4: ОБЯЗАТЕЛЕН (non-null), когда присутствуют оба lat и lng; ДОЛЖЕН быть null/отсутствовать, когда
+            точки нет. Вне [1000,100000] → 422 RADIUS_OUT_OF_RANGE; нарушена согласованность → 422
+            GEO_PARAMS_INCOMPLETE. Валидация на уровне приложения (нет DB CHECK на radius_m).
+    SavedSearchFilters:
+      type: object
+      additionalProperties: false
+      description: >-
+        Нормативный whitelist для saved_searches.filters (спека 07 §156-157). Зеркалит query-параметры
+        /geo-search, чтобы сохранённый поиск переисполнялся (Фаза 2) против /geo-search. additionalProperties
+        равно false — любой ключ вне этого набора → 422 INVALID_FILTERS. Суммарный сериализованный JSON ДОЛЖЕН
+        быть ≤ 2048 байт (cap размера, SS-3); сверх cap → 422 INVALID_FILTERS.
+      properties:
+        q:
+          type: string
+          maxLength: 200
+          description: Полнотекстовый запрос (русский FTS + триграммы), спека 07 §156.
+        market:
+          type: string
+          enum: [pet, livestock]
+          description: >-
+            Скоуп рынка (жёсткое разделение ADR-0002, SS-3/G3). Опционально; когда задан, сохранённый поиск
+            привязан к рынку, чтобы переисполнение/алерты Фазы 2 никогда не смешивали pet и livestock.
+        species_id:
+          type: integer
+          description: >-
+            Id справочника видов (INT, конвенция id ZooLink). NOTE: /geo-search сейчас отдаёт `species` как
+            строковый параметр — этот дрейф int↔string является документированной заботой маппинга переисполнения
+            Фазы 2 (спека 07 §157), здесь не решён.
+        breed_id:
+          type: integer
+        listing_type:
+          type: string
+          enum: [sale, breeding, show, adoption, stud_service]
+          description: >-
+            Зеркалит enum listing_type из /geo-search для переисполняемости. `leasing` (миграция листингов
+            0021) намеренно НЕ здесь, пока /geo-search его не принимает (маппинг Фазы 2).
+        price_min:
+          type: integer
+          minimum: 0
+          format: int64
+          description: Минимальная цена, целое в минорных единицах (копейки), §7.
+        price_max:
+          type: integer
+          minimum: 0
+          format: int64
+          description: Максимальная цена, целое в минорных единицах (копейки), §7. ДОЛЖНА быть ≥ price_min, когда заданы обе.
   responses:
     Problem:
       description: Проблема RFC7807 (application/problem+json)

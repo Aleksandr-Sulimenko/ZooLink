@@ -146,7 +146,7 @@ ISO 4217: `{ type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }` 
 moderation decide, payment confirm — сохраняют guard-based `409`.)
 
 ## 11. Идемпотентность (небезопасный POST)
-Все неидемпотентные `POST` (создание объявления, фото, favorite, contact-reveal, content-report, payment) принимают
+Все неидемпотентные `POST` (создание объявления, фото, favorite, сохранение поиска, contact-reveal, content-report, payment) принимают
 заголовок **`Idempotency-Key`** (UUID клиента). Сервер хранит `key → (хэш запроса, ответ)` 24 ч: повтор с тем же
 ключом → сохранённый ответ; тот же ключ с другим телом → `422`. Это HTTP-дополнение к UNIQUE-ограничениям БД
 (`favorites`, OPEN-дедуп `content_reports`, `payment_transactions.idempotency_key`).

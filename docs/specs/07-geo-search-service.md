@@ -1,6 +1,6 @@
 ---
-version: "1.2"
-lastUpdated: "2026-05-28"
+version: "1.3"
+lastUpdated: "2026-06-30"
 author: "System Analyst"
 status: "Approved"
 ---
@@ -157,6 +157,51 @@ animal's `market` filter.
 filters (species/breed/price/type) compose into one query (bbox + bitmap-AND of GIN indexes). `saved_searches.filters`
 JSONB schema = the geo-search query params: `{ q?: str, species_id?: int, breed_id?: int, listing_type?: str,
 price_min?: int, price_max?: int }` plus stored `lat/lng/radius_m`; re-execution maps these to `/geo-search` params.
+
+## Saved searches — save / list / delete (round-5, normative) — Listings Slice 3
+
+> **WHAT:** Pin the `/saved-searches` contract (GET list, POST create, DELETE) to validated invariants
+> SS-1..SS-6: own-scope reads, 404-no-leak delete, a bounded `filters` whitelist (incl. `market`),
+> `radius_m` bounds + lat/lng coherence, the `{items, meta: PageMeta}` list envelope, and
+> Idempotency-Key as the only dedup. No schema change (the `saved_searches` table already exists;
+> `radius_m` has no DB CHECK, so its bounds are app-level).
+> **WHY:** the reviewer-qa Slice-3 preflight returned GO-no-migration with a gap list (G1..G6); the
+> contract was ambiguous (`filters: type:object`, raw-array list, no stated owner-scope/no-leak rule),
+> which would force the backend to guess on the project's #1 historical risk class (IDOR) and on
+> ADR-0002 market separation.
+> **WHY-BETTER-for-the-whole-project:** the build becomes mechanical and 100% test-coverable; IDOR is
+> closed at the contract (own-scope + 404-no-leak); ADR-0002 is preserved into Phase-2 alerts (a saved
+> search is market-pinned); the list shape now matches API_CONVENTIONS §5 (the file header's §5 claim
+> becomes true); arbitrary client JSON can never be persisted.
+
+These invariants are **testable** and own the saved-search lifecycle. Error `code`s are RFC7807
+(`API_CONVENTIONS §4`); reused codes are noted, new ones are introduced here.
+
+| ID | Invariant (MUST) | Enforcement | On violation |
+|----|------------------|-------------|--------------|
+| **SS-1** | `GET /saved-searches` returns **only the caller's own** rows (`user_id = actor`). No query param widens it; **MODERATOR/ADMIN do NOT see other users' saved searches** (rbac-matrix.md:78 = own/own/own — the operator role is a call-gate, never a scope-widener). | Service: `WHERE user_id = :actorId`. | n/a (scope is structural) |
+| **SS-2** | `DELETE /saved-searches/{id}` of an id that is non-existent, **owned by another user**, or the caller's **own but already-deleted** row returns **404**, byte-for-byte identical in all three cases. It MUST NEVER return **403** for a non-owned id (403 vs 404 leaks existence → IDOR/enumeration). Delete is a **hard delete, no tombstone** → NOT idempotent-204; only the first successful delete returns 204, a repeat returns 404 (the row is gone, so the cases are indistinguishable without leaking existence). | Service: `DELETE … WHERE id=:id AND user_id=:actorId`; 0 rows → 404. | `404` `SAVED_SEARCH_NOT_FOUND` (new) |
+| **SS-3** | `filters` MUST conform to the bounded whitelist `{ q?:string(≤200), market?:'pet'\|'livestock', species_id?:int, breed_id?:int, listing_type?:enum, price_min?:int(minor units,≥0), price_max?:int(minor units,≥0) }`. **Unknown keys rejected** (`additionalProperties:false`); serialized JSON **≤ 2048 bytes**; `price_max ≥ price_min` when both set. Arbitrary client JSON is **never stored**. `market` is included (ADR-0002, G3): a saved search is market-pinned so Phase-2 re-execution/alerts can never blur pet vs livestock. | DTO + class-validator; size cap checked before persist. | `422` `INVALID_FILTERS` (new) |
+| **SS-4** | Location coherence: `lat` & `lng` are **both-present-or-both-absent** (matches `chk_saved_searches_latlng`). `radius_m` is **REQUIRED (non-null) when a point is present** and **MUST be null/absent when no point** (a point without a radius — or a radius without a point — is meaningless). When present, `1000 ≤ radius_m ≤ 100000` (mirrors `/geo-search`). **App-level** validation — `radius_m` has no DB CHECK. | DTO + service guard. | `422` `RADIUS_OUT_OF_RANGE` (reused, Slice-2 listings) for the bound; `422` `GEO_PARAMS_INCOMPLETE` (reused, Slice-2 listings) for coherence (one of lat/lng missing, or radius/point mismatch) |
+| **SS-5** | `GET /saved-searches` returns the standard **`{items: [SavedSearch], meta: PageMeta}`** envelope with `page`/`limit` query params (mirrors `/geo-search`), default sort `created_at:desc`. **Not** a raw array. | Pagination lib (`backend/src/lib`). | `400` `INVALID_SORT` for a non-whitelisted `sort` |
+| **SS-6** | Dedup is by **Idempotency-Key (24h replay) ONLY** (§11): there is **no** DB unique on `(user_id, filters)` and **no** `name` uniqueness per user. Two saves with **different** keys (or no key) are **allowed by design**; same key + same body → stored 201 replayed; same key + different body → 422 (§11 platform behavior). | Platform idempotency middleware. | `422` (§11 key reuse with different body) |
+
+**Error code summary (saved searches):**
+
+| code | HTTP | When | Reuse / new |
+|------|------|------|-------------|
+| `SAVED_SEARCH_NOT_FOUND` | 404 | DELETE of a non-existent **or non-owned** id (SS-2 no-leak) | new |
+| `INVALID_FILTERS` | 422 | `filters` has an unknown key, a type mismatch, exceeds the 2 KB size cap, or `price_max < price_min` (SS-3) | new |
+| `RADIUS_OUT_OF_RANGE` | 422 | `radius_m` present but outside `[1000,100000]` (SS-4) | reused (Slice-2 listings) |
+| `GEO_PARAMS_INCOMPLETE` | 422 | lat/lng not both-present-or-both-absent, or radius/point coherence broken (SS-4) | reused (Slice-2 listings) |
+| `INVALID_SORT` | 400 | `sort` not in the whitelist (SS-5) | reused (Slice-2 listings) |
+| (§11 reuse) | 422 | Idempotency-Key replayed with a different body (SS-6) | platform §11 |
+
+**Re-execution drift (documented, not resolved — Phase 2):** saved `filters` use `species_id:int`
+while `/geo-search` exposes `species:string`. When Phase-2 alerts/re-execution map a saved search to
+`/geo-search` query params, this int↔string mapping (and the `listing_type=leasing` gap — listings
+migration 0021 added `leasing`, not yet a `/geo-search` value) must be handled by the mapping layer.
+This is recorded here per the truth-hierarchy "no requirement dropped silently" rule.
 
 ## Related Documents
 

@@ -147,7 +147,7 @@ This prevents silent last-write-wins when two owners/moderators edit the same li
 (State-transition endpoints — moderation decide, payment confirm — keep their guard-based `409` instead.)
 
 ## 11. Idempotency (unsafe POST)
-All non-idempotent `POST`s (create listing, add photo, favorite, contact-reveal, content-report, payment) accept an
+All non-idempotent `POST`s (create listing, add photo, favorite, save search, contact-reveal, content-report, payment) accept an
 **`Idempotency-Key`** request header (client-generated UUID). The server stores `key → (request-hash, response)` for
 24 h: a replay with the same key returns the stored response; the same key with a **different** body → `422`. This is
 the HTTP-layer complement to the DB unique constraints (`favorites`, `content_reports` OPEN-dedup, `payment_transactions.idempotency_key`).
