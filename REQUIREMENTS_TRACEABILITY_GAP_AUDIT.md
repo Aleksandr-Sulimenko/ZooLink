@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-lastUpdated: "2026-06-22"
+version: "1.1"
+lastUpdated: "2026-06-30"
 author: "Orchestrator (traceability sweep)"
 status: "Draft — для разбора перед планированием Admin Slice 2-4"
 scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + api-contracts/** + database_schema.sql + ADR"
@@ -33,9 +33,9 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 |----|----------|-------|----|----|---------|
 | GAP-TRACE-001 | 🔴 High | Admin | BR-006 | ⚠️ | Модель reference-data: generic UUID-таблица в BR vs отдельные INT-таблицы в схеме |
 | GAP-TRACE-002 | 🔴 High | Admin | BR-006 | ❌ | Datasets traits / health-certifications / genetic-markers / animal-statuses не существуют |
-| GAP-TRACE-003 | 🔴 High | Matching | BR-005 | ⚠️ | `matching-api.yaml` обещает scoring/feedback/history, которых нет в MVP (spec 05/схема) |
+| GAP-TRACE-003 | ✅ Resolved | Matching | BR-005 | ⚠️ | `matching-api.yaml` помечен `x-phase: 2` для scoring/feedback/history — приведён к MVP (eligible-set) |
 | GAP-TRACE-004 | 🟠 Med | Identity/Admin | BR-001/006/017 | ⚠️ | Набор ролей рассинхронизирован в 3 доках (+ SUPER_ADMIN, BREEDER/FARMER) |
-| GAP-TRACE-005 | 🟠 Med | Livestock | BR-004 | ⚠️ | LEASING описан как рабочий тип, но нет в `listing_type` enum/хуке |
+| GAP-TRACE-005 | ✅ Resolved | Livestock | BR-004 | ⚠️ | `leasing` добавлен в `listing_type` enum (миграция 0021, форма сейчас, поведение Фаза 2) |
 | GAP-TRACE-006 | 🟠 Med | Admin/Moderation | BR-006/012 | ⚠️ | FLAG FOR REVIEW в BR vs CHANGES_REQUESTED в схеме/spec 12 |
 | GAP-TRACE-007 | ✅ Resolved | Animal | BR-002 | ⚠️ | «Смена владельца запрещена в MVP» vs `ownership_transfers` в scope — **ратифицировано ADR-0013** |
 | GAP-TRACE-008 | 🟠 Med | Organization | BR-011 | ⚠️ | `role_in_org` включает MODERATOR в BR, убран миграцией |
@@ -93,12 +93,13 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 
 ## Pet / Livestock Marketplace (BR-003, BR-004)
 
-### GAP-TRACE-005 ⚠️ LEASING
+### GAP-TRACE-005 ✅ RESOLVED (2026-06-30) — LEASING
 - **Источник:** `livestock-marketplace.md:11-12,136-139` (core concept + §6), `matching-domain.md:21`, `specs/04-livestock-marketplace-domain.md:11` (purpose).
 - **Истина:** `listing_type` enum (`database_schema.sql:236`) = `sale/breeding/show/adoption/stud_service`; `leasing` отсутствует, хука/тоггла нет.
 - **ЧТО:** Решить явно: (а) добавить `leasing` в enum + правила, либо (б) пометить LEASING как Фаза 2+ во всех доках (как сделано с AUCTION/EMBRYO_TRANSFER).
 - **ПОЧЕМУ:** §6 описывает LEASING-правила как действующие, но создать такой листинг нельзя.
 - **ПОЧЕМУ ТАК ЛУЧШЕ:** Убирает «фантомный» тип; либо реальная фича, либо честно отложена — без ложного контракта.
+- **✅ Резолюция (2026-06-30):** Выбран вариант (а)-форма — `leasing` добавлен в `listing_type` enum (`database_schema.sql`, миграция 0021): форма создаётся сейчас, поведение/правила — Фаза 2. «Фантомный» тип устранён: enum-значение существует, поведение явно отложено за фазовой границей.
 
 ### GAP-TRACE-011 ❌ Аналитика продавца / организации
 - **Источник:** `pet-marketplace.md:254,292` (`GET /listings/{id}/analytics`), `organization-domain.md:76-78` (агрегаты по филиалам).
@@ -118,12 +119,13 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 
 ## Matching (BR-005)
 
-### GAP-TRACE-003 ⚠️ Контракт vs MVP-scope
+### GAP-TRACE-003 ✅ RESOLVED (2026-06-30) — Контракт vs MVP-scope
 - **Источник:** `api-contracts/matching-api.yaml` (без фазовой пометки): `find-matches` c `compatibility_score`, `/matching/{id}`, `/feedback`, `/history`. BR `matching-domain.md` целиком (scoring 0-100; веса genetic/health/repro/production/logistics; data-model таблица `matches`; feedback).
 - **Истина:** `specs/05-matching-domain.md:48-50` (normative): MVP = **stateless search/filter**, таблиц `matches`/`match_history`/`match_feedback` нет (Фаза 2+). В схеме — только `is_visible_in_breeding_search` + `reproductive_status`.
 - **ЧТО:** Привести `matching-api.yaml` к MVP (eligible/not по hard-predicates), пометить scoring/feedback/history как Фаза 2+; синхронизировать BR с spec 05.
 - **ПОЧЕМУ:** Контракт обещает персистентность и оценки, которых в MVP не существует.
 - **ПОЧЕМУ ТАК ЛУЧШЕ:** Контракт перестаёт врать о возможностях; фронтенд/потребители не закладывают несуществующие поля.
+- **✅ Резолюция (2026-06-30):** `matching-api.yaml` приведён к MVP (eligible/not по hard-predicates); scoring/`compatibility_score`/`/feedback`/`/history` помечены `x-phase: 2` (null/absent в MVP — см. шапку контракта). Контракт более не обещает несуществующую персистентность; spec 05 (stateless eligible-set) и контракт согласованы.
 
 ---
 
@@ -206,6 +208,7 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 
 ## Рекомендация по порядку
 Перед планированием **Admin Slice 2-4** закрыть 🔴-блокеры **GAP-TRACE-001/002/004** (reference-data модель + словари +
-канон ролей) — на них прямо опирается Admin-домен. **GAP-TRACE-003** (matching-контракт) — независимо, но критично для
-честности контрактов. Остальные ⚠️ (005-010) — пакетная актуализация BR-доков через `zoolink-doc-keeper` (EN↔RU
-синхронно). 🟡 (011-014) — в бэклог с явной фазовой пометкой.
+канон ролей) — на них прямо опирается Admin-домен. **GAP-TRACE-003** (matching-контракт) — ✅ закрыт (контракт помечен
+`x-phase: 2`). Остальные ⚠️ (006/008-010) — пакетная актуализация BR-доков через `zoolink-doc-keeper` (EN↔RU
+синхронно). **GAP-TRACE-005** (LEASING) и **GAP-TRACE-007** (смена владельца) — ✅ закрыты (миграции 0021/0023).
+🟡 (011-014) — в бэклог с явной фазовой пометкой.

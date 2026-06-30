@@ -205,7 +205,7 @@ Applies to all system components: backend APIs, frontend applications, database 
 - Success Criteria: 95% of queries < 1.5s, 99% < 3s, proper index usage
 
 ## Performance Optimization Roadmap
-### MVP (Facза 1)
+### MVP (Phase 1)
 - Basic indexing on query fields
 - Redis caching for reference data and sessions
 - Image optimization and CDN for static assets

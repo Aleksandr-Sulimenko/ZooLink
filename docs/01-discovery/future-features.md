@@ -1,9 +1,9 @@
 # Future Features: ZooLink
 
 ## Purpose
-Documents features and enhancements planned for post-MVP phases (Facза 2+). This helps keep the MVP scope focused while preserving ideas for future development.
+Documents features and enhancements planned for post-MVP phases (Phase 2+). This helps keep the MVP scope focused while preserving ideas for future development.
 
-## Facза 2: Growth (6-12 months)
+## Phase 2: Growth (6-12 months)
 ### Core Features
 - **Real-time Chat**: Text, voice, and video chat between users (after showing contacts or within listings)
 - **Multilingual Support**: Interface and content available in multiple languages (starting with English)
@@ -63,7 +63,7 @@ Documents features and enhancements planned for post-MVP phases (Facза 2+). Th
 
 ### Regulatory & Compliance
 - **Regulatory Integration**:
-  - Vorbereitung for Меркурий/ВетИС integration (livestock movement tracking)
+  - Preparation for Меркурий/ВетИС integration (livestock movement tracking)
   - Automated document generation (sales contracts, health certificates)
 - **Accessibility**:
   - Enhanced screen reader support
@@ -73,7 +73,7 @@ Documents features and enhancements planned for post-MVP phases (Facза 2+). Th
   - Terms of Service and Privacy Policy updates for new features
   - Consent management system
 
-## Facза 3: Maturity (12+ months)
+## Phase 3: Maturity (12+ months)
 ### Core Features
 - **Full Transaction Support**:
   - Escrow service for high-value transactions
@@ -125,7 +125,7 @@ Documents features and enhancements planned for post-MVP phases (Facза 2+). Th
   - Canary releases and feature flags at scale
   - Comprehensive observability (logs, metrics, traces)
 
-## Out of Scope for Facза 2&3 (Ideas for Far Future)
+## Out of Scope for Phase 2&3 (Ideas for Far Future)
 - Virtual reality animal viewing
 - Genetic editing consultations (ethical considerations)
 - Metaverse integration for virtual shows
@@ -179,7 +179,7 @@ ZooLink evolves from an *animal-listing marketplace* into a **multi-sided ecosys
 - **Geo privacy:** coarsened location (geohash/radius); exact address revealed to the provider only after a confirmed booking (ФЗ-152).
 
 **Monetization (finance — gated by `feature_toggles`):**
-- **First (no `payments`; we stay an information intermediary → no 54-ФЗ fiscal burden):** `vet_leadgen` (cost-per-lead), `boosted_listings` (promotion), `premium_profiles` (provider subscription / MRR).
+- **First — fiscally lightest:** `vet_leadgen` (cost-per-lead, B2B invoice between legal entities → the only model genuinely outside 54-ФЗ ККТ, as we stay a pure information intermediary). ⚠️ **`boosted_listings` & `premium_profiles` are ZooLink's *own* services sold to a consumer** → 54-ФЗ ККТ (online fiscal receipt) + acquiring fees apply **the moment money is collected, regardless of the `payments` toggle** — they need a billing rail and are NOT fiscally neutral (finance audit 2026-06-30; ruling pending legal).
 - **Then:** `service_marketplace` (lead-gen mode → later in-app booking / take-rate).
 - **New toggle to register:** `goods_marketplace` (flagged to architect).
 - **Last:** `payments` / escrow (take-rate on GMV) — enable only when GMV covers 54-ФЗ / 115-ФЗ / acquiring compliance cost; livestock (high ticket) amortizes it earlier than pet.

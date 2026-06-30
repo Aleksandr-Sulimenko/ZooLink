@@ -117,11 +117,11 @@ These users are not the primary focus but may benefit or interact with the platf
 ### 1. Service Providers
 - Veterinarians, farriers, trainers, transport companies
 - May use the platform to advertise services or connect with clients
-- Planned lead generation features (Facза 2)
+- Planned lead generation features (Phase 2)
 
 ### 2. Researchers and Analysts
 - Academics, industry analysts interested in market trends
-- Planned anonymized data exports for market intelligence (Facза 2+)
+- Planned anonymized data exports for market intelligence (Phase 2+)
 
 ### 3. Regulatory Authorities
 - Veterinary services, agricultural departments

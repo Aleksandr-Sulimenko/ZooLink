@@ -88,7 +88,7 @@ These integrations are required for the MVP to function.
   - If primary storage fails: secondary bucket in different region
   - For development: local file storage (not for prod)
 
-## Future Integrations (Facза 2+)
+## Future Integrations (Phase 2+)
 These integrations are planned for later phases.
 
 ### 6. Payment Gateway
@@ -147,7 +147,7 @@ These integrations are planned for later phases.
   - Alert users to potential genetic disorders
 
 ### 11. Regulatory Systems (Меркурий/ВетИС)
-- **Purpose**: Comply with livestock movement reporting requirements (Facза 3 for livestock)
+- **Purpose**: Comply with livestock movement reporting requirements (Phase 3 for livestock)
 - **Provider**: Russian Federal State Information System "Меркурий" (VetIS)
 - **Data exchanged**: 
   - Outgoing: Livestock movement requests (permit applications)

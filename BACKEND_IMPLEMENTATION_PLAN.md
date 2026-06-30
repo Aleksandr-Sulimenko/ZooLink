@@ -17,10 +17,10 @@ backend/
 │   ├── app.module.ts
 │   ├── config/            # env-валидация (zod/joi), типизированный ConfigService
 │   ├── lib/               # db (Prisma+Kysely), errors (RFC7807), pagination, idempotency, etag,
-│   │                      #   guards (Jwt/Roles/Policies-CASL), rate-limit, logging+PII-redaction, metrics
-│   ├── providers/         # порты+адаптеры: sms(SMS.RU), email(Unisender), maps(Yandex),
-│   │                      #   storage(S3/MinIO), payment(stub, gated), feature-toggles
-│   ├── events/            # event-catalog типы, outbox writer, relay/consumers
+│   │   │                  #   guards (Jwt/Roles/Policies-CASL), rate-limit, logging+PII-redaction, metrics
+│   │   ├── providers/     # порты+адаптеры: sms(SMS.RU), email(Unisender), maps(Yandex),
+│   │   │                  #   storage(S3/MinIO), payment(stub, gated), feature-toggles
+│   │   └── outbox/        # event-catalog типы, outbox writer, relay/consumers
 │   └── modules/           # bounded contexts (см. Фазу 2)
 ├── prisma/                # schema.prisma (через db pull) — typed client; миграции НЕ здесь
 ├── test/                  # unit/integration (PG via Testcontainers), e2e

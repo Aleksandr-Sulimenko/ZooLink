@@ -54,7 +54,7 @@ Documents key assumptions made during planning and known limitations that affect
    - Validation: Legal review confirming no immediate regulatory obstacles for pet-focused MVP.
 
 10. **Payment Processing Delay**:
-    - Assumption: Monetization can be delayed until Facза 2 without compromising validation.
+    - Assumption: Monetization can be delayed until Phase 2 without compromising validation.
     - Basis: Successful marketplaces that delayed monetization (early Facebook, Twitter, Reddit).
     - Validation: Clear path to monetization identified in future-features.md.
 
@@ -72,24 +72,24 @@ Documents key assumptions made during planning and known limitations that affect
 
 ### Technical Limitations
 1. **Real-time Features**:
-   - Limitation: Real-time chat and notifications deferred to Facза 2.
+   - Limitation: Real-time chat and notifications deferred to Phase 2.
    - Mitigation: Contact reveal mechanism provides asynchronous communication path.
-   - Future: WebSocket implementation planned for Facза 2.
+   - Future: WebSocket implementation planned for Phase 2.
 
 2. **Advanced Search**:
    - Limitation: No fuzzy search, phonetic matching, or image-based search on MVP.
    - Mitigation: Standard text filtering with exact/partial matches and geo-radius.
-   - Future: Elasticsearch integration and computer vision for Facза 2+.
+   - Future: Elasticsearch integration and computer vision for Phase 2+.
 
 3. **Data Portability**:
    - Limitation: No data import/export tools for users on MVP.
    - Mitigation: Manual data entry sufficient for early adopters.
-   - Future: CSV import/export and API access planned for Facза 2.
+   - Future: CSV import/export and API access planned for Phase 2.
 
 4. **Offline Capabilities**:
    - Limitation: Basic PWA caching only; no offline listing creation/modification.
    - Mitigation: Clear indication of online/offline status and queueing of actions.
-   - Future: Advanced service worker strategies for Facза 2.
+   - Future: Advanced service worker strategies for Phase 2.
 
 ### Business Limitations
 1. **Geographic Bias**:
@@ -105,12 +105,12 @@ Documents key assumptions made during planning and known limitations that affect
 3. **Moderator Burnout**:
    - Limitation: Volunteer moderators may experience fatigue if volume grows unexpectedly.
    - Mitigation: Clear moderation guidelines, rotation systems, and recognition.
-   - Future: Moderator incentives and potential paid moderation in Facза 2.
+   - Future: Moderator incentives and potential paid moderation in Phase 2.
 
 4. **Trust Bootstrap**:
    - Limitation: Initial lack of transaction history makes trust establishment challenging.
    - Mitigation: Emphasis on verification badges, detailed profiles, and community signals.
-   - Future: Reputation system and transaction history in Facза 2.
+   - Future: Reputation system and transaction history in Phase 2.
 
 ### Regulatory Limitations
 1. **Animal Welfare Regulations**:
@@ -121,12 +121,12 @@ Documents key assumptions made during planning and known limitations that affect
 2. **Transport Regulations**:
    - Limitation: Users responsible for compliance with animal transport regulations.
    - Mitigation: Disclaimers and resource links in listing creation flow.
-   - Future: Integration with transport logistics providers in Facза 3.
+   - Future: Integration with transport logistics providers in Phase 3.
 
 3. **Breeding Regulations**:
    - Limitation: Platform does not verify breeding licenses or permits where required.
    - Mitigation: Clear disclaimers that users must comply with local regulations.
-   - Future: Optional verification fields for licenses/certificates in Facза 2.
+   - Future: Optional verification fields for licenses/certificates in Phase 2.
 
 ## Assumption Review Schedule
 - **Bi-weekly**: Review during team retrospectives (assumption validity, new evidence)

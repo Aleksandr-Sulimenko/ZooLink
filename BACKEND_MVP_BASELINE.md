@@ -11,7 +11,7 @@
 
 | Слой | Выбор MVP | Источник решения |
 |---|---|---|
-| Язык / Runtime | Node.js 18+ (LTS) + TypeScript | [ADR-0001](docs/04-decisions/0001-tech-stack.md) |
+| Язык / Runtime | Node.js 20 LTS + TypeScript | [ADR-0001](docs/04-decisions/0001-tech-stack.md) |
 | Framework | NestJS (модульный монолит) | ADR-0001, [ADR-0009](docs/04-decisions/0009-mvp-vs-target-architecture.md) |
 | ORM | **Prisma (основной)** + Kysely/`$queryRaw` для гео и сложного JSONB | [ADR-0007](docs/04-decisions/0007-orm-strategy.md) |
 | API | REST + OpenAPI 3.0 | ADR-0001 |
