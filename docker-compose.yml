@@ -1,7 +1,9 @@
 # ZooLink MVP — local/production-ish Docker Compose topology (ADR-0009).
 # MVP = modular monolith; NO Kubernetes. Only the reverse proxy is public; db/redis/minio
 # live on an internal network and are NEVER published to the host/internet.
-# Bring up:  cp .env.example .env  &&  docker compose up -d  &&  (run migrations — see docs/06-operations/deployment-mvp.md)
+# Bring up:  cp .env.example .env  &&  docker compose up -d --build
+# The one-shot `provision` service auto-applies the canonical schema + seed before api/worker start
+# (no manual migration step). A fresh `down -v && up` reprovisions; a plain `up` is a no-op (idempotent).
 
 name: zoolink
 
@@ -23,6 +25,31 @@ services:
       - caddy_config:/config
     networks: [edge]
 
+  # One-shot DB provisioner: applies the canonical database_schema.sql (guarded — only on an empty
+  # DB, since that file is a non-idempotent fresh-bootstrap) then runs the idempotent seed. Mirrors
+  # the CI sequence (apply schema → seed). Exits 0; api/worker gate on its successful completion so
+  # the stack comes up fully provisioned with no manual step. Built from the Dockerfile `build`
+  # stage (has ts-node + pg + source); database_schema.sql and migrations/ live OUTSIDE the backend
+  # build context, so they are bind-mounted in (read-only). Applied via node-pg, no psql needed.
+  provision:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: build
+    command: ["npm", "run", "db:provision"]
+    env_file: .env
+    environment:
+      # Reference/lookup data is non-user data and is intended in every env; the seed runner refuses
+      # NODE_ENV=production (compose runs prod) unless forced. The runner stays idempotent.
+      SEED_FORCE: "true"
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./database_schema.sql:/database_schema.sql:ro
+      - ./migrations:/migrations:ro
+    networks: [internal]
+    restart: "no"
+
   api:
     build:
       context: ./backend            # NestJS monolith (created during backend dev)
@@ -30,6 +57,7 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
+      provision: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       # MinIO is not required for API readiness (health = PG + Redis). Gate on start only so a
@@ -54,6 +82,7 @@ services:
     healthcheck:
       disable: true
     depends_on:
+      provision: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     networks: [internal]

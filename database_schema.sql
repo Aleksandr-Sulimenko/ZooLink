@@ -682,7 +682,9 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 ('service_marketplace', 'Рынок услуг (ветеринары, тренеры, перевозчики)', false, 0),
 ('health_passport_api', 'Доступ к цифровому паспорту здоровья через API', false, 0),
 ('genetics_portal', 'Портал генетики и ДНК‑тестов', false, 0),
-('regulatory_integration', 'Интеграция с Меркурий/ВетИС для отслеживания перемещения скота', false, 0)
+('regulatory_integration', 'Интеграция с Меркурий/ВетИС для отслеживания перемещения скота', false, 0),
+-- migration 0023 (ADR-0013 §1): gate form for the Phase-2 verified ownership-transfer flow. Off in MVP.
+('ownership_transfer_verification', 'Phase-2 verified transfer flow (IN_PROGRESS/payment/vet/legal/two-sided ack). Off in MVP (ADR-0013 §1).', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- ========== Application-level validations ==========
