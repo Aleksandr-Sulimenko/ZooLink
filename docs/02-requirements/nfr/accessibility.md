@@ -1,10 +1,11 @@
 # Accessibility Non-Functional Requirements: ZooLink
 
 ## Purpose
-Defines accessibility requirements to ensure the platform is usable by people with diverse abilities, including visual, auditory, motor, and cognitive impairments. Complies with WCAG 2.1 AA standards and considers Russian Federal Law No. 381-FZ "On Accessibility of the Environment for Persons with Disabilities".
+Defines accessibility requirements to ensure the platform is usable by people with diverse abilities, including visual, auditory, motor, and cognitive impairments. Complies with WCAG 2.1 AA standards and considers Russian Federal Law **No. 181-FZ of 24.11.1995 "On Social Protection of Disabled Persons in the Russian Federation"** (accessibility-of-environment duties introduced by **Federal Law No. 419-FZ of 01.12.2014**), together with the RF digital-accessibility standard ГОСТ Р 52872-2019.
+> **ЧТО / ПОЧЕМУ / ПОЧЕМУ ТАК ЛУЧШЕ:** **ЧТО:** corrected the cited norm from "381-ФЗ" to **181-ФЗ (+419-ФЗ)** throughout. **ПОЧЕМУ:** 381-ФЗ is "Об основах государственного регулирования торговой деятельности" (retail-trade regulation) — entirely unrelated to disability accessibility; the disability-accessibility duty lives in **181-ФЗ** (as amended by **419-ФЗ**), with web/ICT specifics in ГОСТ Р 52872-2019. Citing the wrong statute would make the accessibility NFR legally meaningless. **ПОЧЕМУ ТАК ЛУЧШЕ:** the requirement now points at the actually-binding norm, so the frontend-phase DoD it anchors is enforceable. Confidence: high (analysis dated 2026-06-30).
 
 ## Phase & tracking status (E1, normative — GAP-014)
-> **WCAG 2.1 AA / ФЗ-381 compliance is a frontend-phase requirement, not an MVP-backend deliverable.** The
+> **WCAG 2.1 AA / ФЗ-181 (+419-ФЗ) compliance is a frontend-phase requirement, not an MVP-backend deliverable.** The
 > backend phase ships no user-facing rendering, so the success criteria below cannot be implemented or verified
 > yet. This requirement is **tracked, not dissolved**: it is mapped onto the **frontend Definition of Done** —
 > when the frontend phase opens (`zoolink-frontend-engineer`), this document is the **entry-DoD checklist** for
@@ -312,7 +313,7 @@ The platform aims to meet WCAG 2.1 Level AA success criteria. Key areas of focus
   - Note: Alternative must provide equivalent opportunity, not inferior service
 
 ## Accessibility Roadmap
-### MVP (Facза 1)
+### MVP (Phase 1)
 - Semantic HTML and proper heading structure
 - Keyboard navigable all core functionality
 - Sufficient color contrast (WCAG AA)
@@ -348,7 +349,8 @@ The platform aims to meet WCAG 2.1 Level AA success criteria. Key areas of focus
 - WCAG 2.1 AA Quick Reference: https://www.w3.org/WAI/WCAG21/quickref/
 - EN 301 549: Accessibility requirements for ICT products and services
 - Section 508 of the Rehabilitation Act (US)
-- Federal Law No. 381-FZ "On Accessibility of the Environment for Persons with Disabilities" (Russia)
+- Federal Law No. 181-FZ of 24.11.1995 "On Social Protection of Disabled Persons in the Russian Federation" (accessibility duties introduced by Federal Law No. 419-FZ of 01.12.2014)
+- ГОСТ Р 52872-2019 "Интернет-ресурсы и другая информация, представленная в электронно-цифровой форме. Приложения для стационарных и мобильных устройств, иные пользовательские интерфейсы. Требования доступности для людей с инвалидностью и других лиц с ограничениями жизнедеятельности"
 - GOST R 52872-2007 "Услуги связи. Телефонная связь. Общие технические требования"
 - Apple Accessibility Guidelines
 - Google Accessibility Guidelines

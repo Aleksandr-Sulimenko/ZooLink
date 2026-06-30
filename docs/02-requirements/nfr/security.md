@@ -128,7 +128,7 @@ Applies to all system components: backend APIs, frontend applications, databases
 - Anonymization/Pseudonymization:
   - For analytics: remove or hash PII before storage
   - For testing/development: use synthetic or masked data
-  - GDPR/ФЗ-152 right to erasure: implement deletion workflows in Фаза 2+
+  - ФЗ-152 right to erasure: **implemented in MVP** — `erase_user` anonymise-in-place workflow (`docs/specs/data-governance.md` §2, migration 0015); NOT deferred.
 
 ## Vulnerability Management
 ### Dependency Scanning
@@ -143,7 +143,7 @@ Applies to all system components: backend APIs, frontend applications, databases
 
 ### Security Testing
 - **Penetration Testing**: 
-  - Conducted before major releases (Facза 2+, 3+)
+  - Conducted before major releases (Phase 2+, 3+)
   - Performed by qualified third party or internal red team
   - Scope: network, application, API, authentication
 - **Static Application Security Testing (SAST)**:
@@ -170,21 +170,35 @@ Applies to all system components: backend APIs, frontend applications, databases
   - Lessons learned: post-incident report and update controls
 - **Communication Plan**: 
   - Internal: incident response team, management
-  - External: users affected, regulators (if personal data breach per ФЗ-152/GDPR)
-  - Timelines: notify regulator within 72 hours of awareness (ФЗ-152), users without undue delay
+  - External: users affected, regulators (if personal data breach per ФЗ-152)
+  - Timelines (ФЗ-152, ст.21 ч.3.1, ред. ФЗ-266 от 14.07.2022): notify Роскомнадзор of the **fact** of the breach within **24 hours** of discovery (presumed cause, harm, response measures), and the **results of the internal investigation** (incl. persons responsible) within **72 hours**; users notified without undue delay.
+  > **ЧТО:** corrected the breach-notification window from a single "72h" to the two-stage **24h fact + 72h investigation result**.
+  > **ПОЧЕМУ:** "72h" is the GDPR art.33 window; RF ФЗ-152 ст.21 ч.3.1 (since ФЗ-266/2022) imposes a stricter two-stage duty to РКН — understating it would put the operator out of compliance on a hard statutory deadline.
+  > **ПОЧЕМУ ТАК ЛУЧШЕ:** the incident-response runbook now carries the correct legally-binding clock; the 24h leg is the one most likely to be missed. Confidence: high; verify the current редакция of ст.21 before relying (analysis dated 2026-06-30).
 
 ## Compliance Requirements
 ### ФЗ-152 (Personal Data)
-- Lawful basis for processing: consent (for registration) and legitimate interest (for service provision)
-- Data subject rights implemented via:
-  - Right to access: export personal data in machine-readable format (Фаза 2+)
-  - Right to rectification: users can edit their profile
-  - Right to erasure: delete account and associated data (Фаза 2+)
-  - Right to restrict processing: users can deactivate account
-  - Right to object: users can opt out of non-essential processing (e.g., analytics)
-- Data Protection Officer (DPO) role assigned for compliance oversight
-- Privacy Policy and Terms of Service published and linked in footer
-- Consent mechanisms: granular consents for different processing activities (marketing, analytics, etc.)
+- **Lawful basis for processing (ст.6 ч.1 ФЗ-152):**
+  - **п.5 ч.1 ст.6** — processing necessary to **perform the contract** to which the data subject is a party: the **публичная оферта + пользовательское соглашение** (registration, account, listing, contact-reveal, moderation, transactional notifications) is that contract. This is the primary basis for core service processing — **no separate consent is required** for it.
+  - **ст.9 (separate, freely-revocable consent)** — required for **non-essential** processing: marketing communications, behavioural analytics/profiling, optional cookies. Captured by a distinct granular consent, never bundled with оферта acceptance.
+  > **ЧТО:** replaced "consent + legitimate interest" with the correct RF bases — **contract performance (п.5 ч.1 ст.6)** for core service + **separate ст.9 consent** for marketing/analytics.
+  > **ПОЧЕМУ:** "legitimate interest" is a GDPR art.6(1)(f) basis that **does not exist** as a general basis in ФЗ-152; relying on it would mean the operator has *no* valid RF basis for core processing. Bundling all processing under "consent (for registration)" is also wrong — consent that is a precondition of service is not "free" (ст.9 ч.1) and is challengeable.
+  > **ПОЧЕМУ ТАК ЛУЧШЕ:** aligns the lawful-basis claim with the actual statute and with the drafted оферта (`docs/legal/`); core service runs on contract-performance (robust, non-revocable mid-contract), marketing runs on revocable consent (ФЗ-38 ст.18 opt-in also applies to ad messaging — see launch checklist). Confidence: high.
+- **Data subject rights (ФЗ-152 ст.14, ст.20–21) implemented via:**
+  - **Right to access (ст.14):** profile view/edit (self-service) — **MVP minimum**. Full machine-readable export on request is a Phase 2+ enhancement; the MVP minimum (показать состав обрабатываемых ПДн on lawful request) is met via profile + admin support.
+  - **Right to rectification:** users edit their own profile — MVP.
+  - **Right to erasure / withdrawal (ст.9 ч.2 / отзыв согласия):** **implemented in MVP** — `erase_user` (anonymise-in-place, keep UUID) per `docs/specs/data-governance.md` §2, migration 0015 (`users.erased_at`); 30-day grace, then anonymisation; legal-hold tables (audit_log / moderation_decisions / ownership_history / financial records) deliberately retained.
+  - **Right to restrict processing:** account deactivation — MVP.
+  - **Right to object:** opt out of non-essential (analytics/marketing) processing — withdraws the ст.9 consent.
+  > **ЧТО:** moved erasure (and access-minimum) from "Фаза 2+" to **MVP**; access full-export stays Phase 2+.
+  > **ПОЧЕМУ:** the doc was stale — `erase_user` is built and runnable (data-governance §2, migration 0015, `retention.service.ts`/`admin-user.service.ts`/`profile.service.ts`); claiming erasure is deferred misrepresents compliance posture to an auditor/РКН.
+  > **ПОЧЕМУ ТАК ЛУЧШЕ:** the NFR now matches the implemented contract (truth-hierarchy: schema/code over stale spec) and the data-governance spec; erasure being live is a compliance strength, not a gap.
+- Data Protection Officer (DPO) / **ответственный за организацию обработки ПДн (ст.22.1 ФЗ-152)** designated for compliance oversight (owner action — name + contact published in the privacy policy).
+- **Privacy Policy and Terms of Service / публичная оферта — DRAFTED (status: DRAFT) in `docs/legal/` (RU mirror `docsRU/legal/`); owner must review, finalise operator identity, and publish + link in footer before go-live.**
+  > **ЧТО:** corrected the false "published" claim to "DRAFTED, awaiting owner sign-off + publication".
+  > **ПОЧЕМУ:** no offer/ToS/policy existed in the repo (audit BLOCKER) — the "published" line was a doc↔reality lie; without a published оферта there is no contract to ground the п.5 ч.1 ст.6 basis above.
+  > **ПОЧЕМУ ТАК ЛУЧШЕ:** the artifacts now exist as drafts (`docs/legal/`), the publication step is an explicit launch-checklist gate, and the lawful-basis claim becomes true the moment the owner publishes. Confidence: high.
+- Consent mechanisms: granular, independently-revocable consents per processing purpose (marketing, analytics) — never bundled with оферта acceptance (ст.9 ч.1 "free" requirement).
 
 ### GDPR Principles (for future EU expansion)
 - Similar to ФЗ-152 with additional considerations:
@@ -258,7 +272,7 @@ Applies to all system components: backend APIs, frontend applications, databases
 - External audit (if required by regulators or partners) facilitated by maintained documentation
 
 ### Bug Bounty
-- Consider launching a responsible disclosure program post-MVP (Facза 2+)
+- Consider launching a responsible disclosure program post-MVP (Phase 2+)
 - Clear policy: scope, rewards, safe harbor, communication channel
 
 ## Exceptions & Risk Acceptance
