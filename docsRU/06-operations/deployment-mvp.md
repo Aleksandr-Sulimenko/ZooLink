@@ -15,47 +15,55 @@ NestJS, масштабируемый), `worker` (вычитка outbox/cron/за
 - Репозиторий бэкенда в `./backend` (приложение NestJS с `Dockerfile`, Prisma-схемой, `dist/main.js`, `dist/worker.js`).
 
 ## Первое развёртывание — по шагам
+Схема **никогда** не применяется через `prisma migrate deploy` (ADR-0007: SQL-канон + интроспекция Prisma — Prisma
+Migrate намеренно не используется). На свежем стеке это делает за вас одноразовый сервис **`provision`**: он применяет
+канонический `database_schema.sql` (с защитой — только на пустой БД), затем запускает **идемпотентный** seed
+(справочники: species, breeds, cities, supported_languages, feature_toggles, причины/шаблоны модерации). `api`/`worker`
+ждут успешного завершения `provision`, поэтому стек поднимается полностью провизионированным **без ручных шагов**.
+
 1. **Клонировать и сконфигурировать**
    ```bash
    git clone <repo> && cd zoolink
    cp .env.example .env
-   # отредактировать .env: задать сильные POSTGRES_PASSWORD/REDIS_PASSWORD, JWT-секреты, ключи провайдеров, PUBLIC_DOMAIN
+   # отредактировать .env: задать сильные POSTGRES_PASSWORD/REDIS_PASSWORD, JWT-секреты (≥32 символов), ключи
+   # провайдеров, PUBLIC_DOMAIN. Env валидируется zod при старте (fail-fast) — держать .env в соответствии с
+   # backend/src/config/env.validation.ts.
    chmod 600 .env
    ```
-2. **Собрать и запустить данные + приложение**
+2. **Поднять весь стек** — Compose упорядочивает: `postgres` healthy → `provision` (схема + seed) выходит с 0 →
+   старт `api`/`worker` → `proxy` последним.
    ```bash
-   docker compose up -d postgres redis minio
-   docker compose up -d --build api worker
+   docker compose up -d --build
    ```
-3. **Прогнать миграции** (схема — `database_schema.sql`; миграции в `migrations/`). Либо:
+3. **Проверить** (`provision` должен выйти с кодом 0; остальное — healthy)
    ```bash
-   # Prisma (предпочтительно, когда schema.prisma зеркалит database_schema.sql):
-   docker compose exec api npx prisma migrate deploy
-   # …либо применить SQL напрямую для канонической схемы + миграций:
-   docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < database_schema.sql
+   docker compose ps                               # provision = Exited (0); proxy/api/worker/postgres/redis/minio healthy
+   docker compose logs provision                   # "✓ canonical schema applied" + "✓ provisioning complete"
+   curl -fsS https://$PUBLIC_DOMAIN/health/ready   # ожидаем 200 (PG + Redis доступны, через edge)
    ```
-4. **Засеять справочники** (species, breeds, cities, supported_languages, feature_toggles).
-5. **Запустить proxy**
-   ```bash
-   docker compose up -d proxy
-   ```
-6. **Проверить**
-   ```bash
-   curl -fsS https://$PUBLIC_DOMAIN/health/ready   # ожидаем 200
-   docker compose ps                               # все healthy
-   ```
+
+> Свежий `down -v && up` провизионирует заново; обычный `up` на существующем томе — no-op (применение схемы
+> пропускается, т.к. БД непустая; seed перезапускается, но идемпотентен). Без `prisma migrate deploy`, без ручного psql.
 
 ## Health-эндпоинты (реализует API)
 - `GET /health/live` — процесс жив.
 - `GET /health/ready` — БД + Redis доступны (для healthcheck Compose и uptime-монитора).
 
-## Миграции при обновлении
+## Изменения схемы при обновлении (roll-forward, SQL-канон)
+Сервис `provision` применяет **полный** `database_schema.sql` только на *пустой* БД, поэтому на заполненном томе новое
+изменение схемы применяется **прогоном новой идемпотентной миграции(й)** (ADR-0007 — только вперёд, никогда
+`prisma migrate deploy`, никогда не редактировать применённую миграцию). Сначала бэкап (ниже):
 ```bash
 git pull
-docker compose up -d --build api worker
-docker compose exec api npx prisma migrate deploy
+# применить каждую НОВУЮ идемпотентную миграцию, добавленную с последнего деплоя, по порядку:
+for f in migrations/<new-NNNN>_*.sql; do
+  docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$f"
+done
+docker compose up -d --build api worker        # выкатывает новый образ (Prisma-клиент уже в нём)
+docker compose run --rm provision              # опц.: перезапускает идемпотентный seed (применение схемы пропускается)
 ```
-Только вперёд; не редактировать применённую миграцию. Бэкап БД перед каждым деплоем (ниже).
+Миграции идемпотентны (CI прогоняет `migrations/*` дважды + диффит два пути bootstrap — см. job `migration-drift`
+в `.github/workflows/ci.yml`), поэтому повторный прогон безопасен.
 
 ## Бэкапы и восстановление (MVP)
 - **Ежедневный** логический бэкап (cron на хосте или `worker`):

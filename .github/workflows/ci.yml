@@ -91,6 +91,77 @@ jobs:
           S3_BUCKET: zoolink-media
         run: npm run test:e2e
 
+  # Schema↔migrations convergence guard (ADR-0007: SQL-canonical + Prisma introspect, NO prisma migrate).
+  # The two supported bootstrap paths must agree:
+  #   (1) a fresh DB built from the canonical database_schema.sql, and
+  #   (2) the same canonical schema with every migrations/*.sql replayed on top.
+  # WHY: provision.ts / the compose `provision` service apply ONLY database_schema.sql (+seed); the
+  # migrations are never replayed in compose, so a broken/non-idempotent migration, or schema↔migration
+  # drift, would otherwise surface only in production. This job catches it in CI.
+  #  - HARD GATE: every migration applies cleanly on the canonical schema AND is idempotent (replayed
+  #    twice — same proof as the seed×2 check above). A non-idempotent/broken migration fails the build.
+  #  - ADVISORY (continue-on-error, like the Semgrep/Trivy gates): a normalized DDL diff between the two
+  #    paths surfaces any structural divergence. Promote to blocking (drop continue-on-error) once the
+  #    known ownership_transfers duplicate-CHECK drift (migration 0023 vs database_schema.sql) is
+  #    reconciled by backend/architect.
+  migration-drift:
+    runs-on: ubuntu-latest
+    env:
+      PGUSER: zoolink
+      PGPASSWORD: ci
+      PGHOST: localhost
+      PGPORT: '5432'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: zoolink
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create throwaway databases (canonical vs migrated)
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE canonical;'
+          psql -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE migrated;'
+
+      - name: Path 1 — fresh DB from canonical database_schema.sql
+        run: psql -d canonical -v ON_ERROR_STOP=1 -f database_schema.sql
+
+      - name: Path 2 — canonical schema + replay migrations (pass 1, must apply cleanly)
+        run: |
+          psql -d migrated -v ON_ERROR_STOP=1 -f database_schema.sql
+          for f in migrations/*.sql; do
+            echo "::group::apply $f (pass 1)"; psql -d migrated -v ON_ERROR_STOP=1 -f "$f"; echo "::endgroup::"
+          done
+
+      - name: Idempotency — replay all migrations AGAIN (pass 2, HARD GATE, like seed×2)
+        run: |
+          for f in migrations/*.sql; do
+            echo "::group::apply $f (pass 2)"; psql -d migrated -v ON_ERROR_STOP=1 -f "$f"; echo "::endgroup::"
+          done
+
+      - name: DDL drift diff — canonical vs migrated (advisory until migration 0023 reconciled)
+        continue-on-error: true
+        run: |
+          # Normalize: drop pg_dump session tokens (\restrict/\unrestrict), SQL comment lines (incl.
+          # inside function bodies), SET / SELECT pg_catalog noise, and blanks. --no-comments drops
+          # COMMENT ON statements at the source. What remains is pure DDL (tables/columns/constraints/
+          # indexes/functions/triggers) — the structural surface drift would actually break.
+          norm() { grep -vE '^(\\restrict|\\unrestrict)' | grep -vE '^[[:space:]]*--' \
+                   | grep -vE '^(SET |SELECT pg_catalog|$)'; }
+          pg_dump -d canonical --schema-only --no-owner --no-privileges --no-comments -n public | norm > canonical.ddl
+          pg_dump -d migrated  --schema-only --no-owner --no-privileges --no-comments -n public | norm > migrated.ddl
+          if diff -u canonical.ddl migrated.ddl; then
+            echo "✅ no schema↔migrations DDL drift — both bootstrap paths are structurally identical"
+          else
+            echo "::warning::schema↔migrations DDL drift detected (diff above) — reconcile database_schema.sql with migrations/ per ADR-0007 (known: ownership_transfers duplicate CHECK in migration 0023)"
+          fi
+
   security:
     runs-on: ubuntu-latest
     steps:

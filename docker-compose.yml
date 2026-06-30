@@ -117,7 +117,12 @@ services:
     networks: [internal]
 
   minio:
-    image: minio/minio:latest
+    # Pinned (was floating `:latest`). RELEASE.2025-09-07T16-13-09Z is the last stable image Docker
+    # Hub `latest` resolves to (verified hub.docker.com/r/minio/minio/tags, 2026-06-30). NOTE: MinIO
+    # archived the `minio/minio` community repo and stopped publishing new community images (Oct 2025),
+    # so this is the practical end-of-line community tag — reinforces the ADR-0008 production swap to
+    # Yandex Object Storage / Selectel. MinIO stays the self-host/dev default only.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:

@@ -16,47 +16,54 @@ Only `proxy` is published (80/443). `postgres`/`redis`/`minio` are on the intern
 - The backend repo present in `./backend` (NestJS app with `Dockerfile`, Prisma schema, `dist/main.js`, `dist/worker.js`).
 
 ## First deploy — step by step
+The schema is **never** applied with `prisma migrate deploy` (ADR-0007: SQL-canonical + Prisma introspect — Prisma
+Migrate is intentionally unused). On a fresh stack the one-shot **`provision`** service does it for you: it applies
+the canonical `database_schema.sql` (guarded — only on an empty DB) then runs the **idempotent** seed (reference
+data: species, breeds, cities, supported_languages, feature_toggles, moderation reasons/templates). `api`/`worker`
+gate on `provision` completing successfully, so the stack comes up fully provisioned with **no manual step**.
+
 1. **Clone & configure**
    ```bash
    git clone <repo> && cd zoolink
    cp .env.example .env
-   # edit .env: set strong POSTGRES_PASSWORD/REDIS_PASSWORD, JWT secrets, provider keys, PUBLIC_DOMAIN
+   # edit .env: set strong POSTGRES_PASSWORD/REDIS_PASSWORD, JWT secrets (≥32 chars), provider keys, PUBLIC_DOMAIN.
+   # Env is zod-validated at boot (fail-fast) — keep .env consistent with backend/src/config/env.validation.ts.
    chmod 600 .env
    ```
-2. **Build & start data + app**
+2. **Bring the whole stack up** — Compose orders it: `postgres` healthy → `provision` (schema + seed) exits 0 →
+   `api`/`worker` start → `proxy` last.
    ```bash
-   docker compose up -d postgres redis minio
-   docker compose up -d --build api worker
+   docker compose up -d --build
    ```
-3. **Run migrations** (schema is `database_schema.sql`; migrations in `migrations/`). Either:
+3. **Verify** (`provision` should have exited 0; everything else healthy)
    ```bash
-   # Prisma (preferred once schema.prisma mirrors database_schema.sql):
-   docker compose exec api npx prisma migrate deploy
-   # …or apply the SQL directly for the canonical schema + migrations:
-   docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < database_schema.sql
+   docker compose ps                               # provision = Exited (0); proxy/api/worker/postgres/redis/minio healthy
+   docker compose logs provision                   # "✓ canonical schema applied" + "✓ provisioning complete"
+   curl -fsS https://$PUBLIC_DOMAIN/health/ready   # expect 200 (PG + Redis reachable, through the edge)
    ```
-4. **Seed reference data** (species, breeds, cities, supported_languages, feature_toggles).
-5. **Start proxy**
-   ```bash
-   docker compose up -d proxy
-   ```
-6. **Verify**
-   ```bash
-   curl -fsS https://$PUBLIC_DOMAIN/health/ready   # expect 200
-   docker compose ps                               # all healthy
-   ```
+
+> A fresh `down -v && up` reprovisions from scratch; a plain `up` on an existing volume is a no-op (schema apply is
+> skipped because the DB is non-empty; the seed re-runs but is idempotent). No `prisma migrate deploy`, no manual psql.
 
 ## Health endpoints (must be implemented by the API)
 - `GET /health/live` — process up.
 - `GET /health/ready` — DB + Redis reachable (used by Compose healthchecks and the uptime monitor).
 
-## Migrations on update
+## Schema changes on update (roll-forward, SQL-canonical)
+The `provision` service applies the **full** `database_schema.sql` only on an *empty* DB, so on a populated volume a
+new schema change is applied by **replaying the new idempotent migration(s)** (ADR-0007 — roll-forward only, never
+`prisma migrate deploy`, never edit an applied migration). Take a backup first (below):
 ```bash
 git pull
-docker compose up -d --build api worker
-docker compose exec api npx prisma migrate deploy
+# apply each NEW idempotent migration added since the last deploy, in order:
+for f in migrations/<new-NNNN>_*.sql; do
+  docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$f"
+done
+docker compose up -d --build api worker        # ships the new image (Prisma client baked in)
+docker compose run --rm provision              # optional: re-runs the idempotent seed (schema apply is skipped)
 ```
-Roll forward only; never edit an applied migration. Take a DB backup before each deploy (below).
+Migrations are idempotent (CI replays `migrations/*` twice + diffs the two bootstrap paths — see the
+`migration-drift` job in `.github/workflows/ci.yml`), so a re-run is safe.
 
 ## Backups & restore (MVP)
 - **Daily** logical backup (cron on host or `worker`):
