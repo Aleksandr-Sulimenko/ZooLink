@@ -10,6 +10,7 @@ import { AnimalService } from './animal.service';
 import { AbilityFactory } from '../../lib/auth/ability.factory';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
+import type { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { AnimalCreateDto } from './dto/animal.dto';
@@ -69,19 +70,19 @@ function setup(opts: { animal?: Record<string, unknown> | null; orgAdmin?: boole
     create,
     update,
   };
-  // findFirst backs isOrgAdmin (create/mutate authz); findMany (= orgFind) backs listScope.
-  const orgFindFirst = jest.fn().mockResolvedValue(opts.orgAdmin ? { id: 'm1' } : null);
-  const orgFind = jest.fn().mockResolvedValue([]);
   const tx = { animals };
   const prisma = {
     animals,
-    organization_users: { findFirst: orgFindFirst, findMany: orgFind },
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
-  const svc = new AnimalService(prisma, audit, new AbilityFactory());
-  return { svc, animals, create, update, record, orgFind };
+  // isOrgAdmin backs create/mutate authz; orgAdminIds backs listScope.
+  const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
+  const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
+  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  const svc = new AnimalService(prisma, audit, new AbilityFactory(), orgMembership);
+  return { svc, animals, create, update, record, orgAdminIds };
 }
 
 const validCreate = (over: Partial<AnimalCreateDto> = {}): AnimalCreateDto => ({
@@ -338,8 +339,8 @@ describe('AnimalService', () => {
     });
 
     it('includes org-owned animals for an org-admin USER', async () => {
-      const { svc, animals, orgFind } = setup();
-      orgFind.mockResolvedValueOnce([{ organization_id: ORG }]);
+      const { svc, animals, orgAdminIds } = setup();
+      orgAdminIds.mockResolvedValueOnce([ORG]);
       await svc.list(q(), user());
       const arg = animals.findMany.mock.calls[0][0] as { where: { OR?: unknown[]; AND?: unknown[] } };
       const scope = arg.where.AND ? (arg.where.AND[1] as { OR: unknown[] }) : (arg.where as { OR: unknown[] });

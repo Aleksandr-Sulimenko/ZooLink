@@ -10,12 +10,20 @@ import type { OutboxPublishInput } from './outbox.types';
 @Injectable()
 export class OutboxService {
   publish(tx: Prisma.TransactionClient, event: OutboxPublishInput): Promise<unknown> {
+    // The stored payload is `{ envelope … , …domainFields }` (event-catalog §1). The envelope keys
+    // are written first so a domain field can never shadow them; consumers read both from `payload`.
+    const payload: Record<string, unknown> = {
+      schemaVersion: event.schemaVersion,
+      occurredAt: (event.occurredAt ?? new Date()).toISOString(),
+      market: event.market,
+      ...event.payload,
+    };
     return tx.outbox_events.create({
       data: {
         aggregate_type: event.aggregateType,
         aggregate_id: event.aggregateId,
         event_type: event.eventType,
-        payload: event.payload as Prisma.InputJsonValue,
+        payload: payload as Prisma.InputJsonValue,
       },
     });
   }

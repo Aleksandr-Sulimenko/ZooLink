@@ -72,6 +72,9 @@ Every operation must document at least `400, 401, 403, 404, 500` referencing `Pr
 - **Moderation claim/lock (B10, `specs/12-moderation-domain.md`):** `ALREADY_CLAIMED` (409, claim on an item
   with another principal's live lock), `NOT_LOCK_HOLDER` (409, release/decide by a non-holder),
   `ITEM_NOT_CLAIMED` (409, decide on an item with no live lock).
+- **Idempotency (§11):** `IDEMPOTENCY_KEY_REUSED` (422, same key + a different request body),
+  `IDEMPOTENCY_KEY_IN_PROGRESS` (409, a request with the same key is still in flight — retry after the
+  `Retry-After` hint).
 
 ## 5. Pagination (list endpoints)
 Query params `page` (1-based, default 1) and `limit` (default 20, max 100). Response envelope:
@@ -149,8 +152,23 @@ This prevents silent last-write-wins when two owners/moderators edit the same li
 ## 11. Idempotency (unsafe POST)
 All non-idempotent `POST`s (create listing, add photo, favorite, save search, contact-reveal, content-report, payment) accept an
 **`Idempotency-Key`** request header (client-generated UUID). The server stores `key → (request-hash, response)` for
-24 h: a replay with the same key returns the stored response; the same key with a **different** body → `422`. This is
-the HTTP-layer complement to the DB unique constraints (`favorites`, `content_reports` OPEN-dedup, `payment_transactions.idempotency_key`).
+24 h: a replay with the same key returns the stored response (including the significant response headers, at minimum
+`ETag`); the same key with a **different** body → `422` (`IDEMPOTENCY_KEY_REUSED`). The key is claimed **atomically at the
+start** of the first request with a short-lived in-progress reservation: a **concurrent** request that arrives with the
+same key while the first is still executing receives `409` (`IDEMPOTENCY_KEY_IN_PROGRESS`) + a `Retry-After` hint rather
+than running a duplicate side-effect in parallel; if the first request fails, the reservation is released so a retry may
+proceed (only successful responses are cached for replay). This is the HTTP-layer complement to the DB unique constraints
+(`favorites`, `content_reports` OPEN-dedup, `payment_transactions.idempotency_key`).
+
+> **(round-N, normative — in-flight idempotency, audit 2026-06-30) WHAT:** §11 now mandates an atomic
+> in-progress reservation at request start (not only store-on-completion), a `409 IDEMPOTENCY_KEY_IN_PROGRESS`
+> for a concurrent duplicate, replay of significant headers (`ETag`), and reservation release on failure.
+> **WHY:** the prior "store after completion" left a window in which two identical POSTs (double-tap / client
+> retry) could both execute before either stored its result — the exact backstop the marketplace's new
+> offering/booking flows (Part B) will rely on, where no DB unique constraint catches the duplicate.
+> **WHY-BETTER-for-the-whole-project:** closes a replay/race seam with the platform's existing Redis primitive
+> (`SET NX`) — no new dependency; keeps idempotency the HTTP complement to the DB unique keys; and the header
+> replay keeps `ETag`/`If-Match` optimistic-concurrency working across a replayed response. RU mirror updated.
 
 ## 12. Filtering & sorting (list endpoints)
 - **Sort:** `sort=<field>:<asc|desc>` (repeatable), fields in **snake_case** matching the resource (e.g.

@@ -23,7 +23,21 @@ notification flow.
   natural idempotency key). A failed handler leaves `processed_at` NULL → retried with capped exponential backoff;
   after `OUTBOX_MAX_ATTEMPTS` (default 10) the row is parked (`processed_at` set + alert) for manual inspection.
 - **Ordering:** per-`aggregate_id` order is preserved by processing a single aggregate's events sequentially.
-- **Payload:** JSONB; every payload includes `event_id`, `occurred_at`, `aggregate_id`, and a `schema_version`.
+- **Payload envelope:** JSONB; every payload carries the envelope fields `schemaVersion` (number; bump on a
+  payload-shape change), `occurredAt` (ISO-8601 domain occurrence time) and `market` (`pet`|`livestock` per
+  ADR-0002, or `null` for a market-agnostic event), alongside the event's domain fields. `aggregate_id` and the
+  row id (the event id) are columns on `outbox_events`. Envelope keys use the API `camelCase` convention; the
+  `OutboxService.publish` writer stamps them so a producer cannot omit them.
+
+> **(round-N, normative — event envelope `market`/`schemaVersion`/`occurredAt`, audit 2026-06-30) WHAT:** the
+> required payload envelope now explicitly lists `schemaVersion`, `occurredAt` and **`market`** (the last was
+> not previously named), and pins them to `camelCase`, stamped centrally by the outbox writer.
+> **WHY:** the analytics/notification consumers (and Part B marketplace-health metrics by market) need the
+> market on every event without re-joining species per event; capturing it from the first event means history
+> is never un-attributable. `schemaVersion`/`occurredAt` were already implied by §1 but unenforced in code.
+> **WHY-BETTER-for-the-whole-project:** a single writer-stamped envelope keeps producers honest (no per-call
+> drift), preserves ADR-0002 market separation in the event stream, and makes the deferred consumers a pure
+> add-on — they read a complete envelope the day they are registered. RU mirror updated.
 
 ## 2. MVP event catalog
 

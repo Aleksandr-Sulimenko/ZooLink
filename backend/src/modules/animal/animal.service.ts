@@ -12,6 +12,7 @@ import { subject } from '@casl/ability';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { AbilityFactory } from '../../lib/auth/ability.factory';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { assertCan } from '../../lib/auth/policies.guard';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
@@ -75,6 +76,7 @@ export class AnimalService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly abilities: AbilityFactory,
+    private readonly orgMembership: OrgMembershipService,
   ) {}
 
   /** POST /animals — create. Validates all service-layer invariants, then inserts + audits atomically. */
@@ -279,11 +281,7 @@ export class AnimalService {
    */
   private async listScope(actor: AuthPrincipal): Promise<Prisma.animalsWhereInput | null> {
     if (actor.role === 'MODERATOR' || actor.role === 'ADMIN') return null;
-    const orgs = await this.prisma.organization_users.findMany({
-      where: { user_id: actor.userId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { organization_id: true },
-    });
-    const orgIds = orgs.map((o) => o.organization_id);
+    const orgIds = await this.orgMembership.orgAdminIds(actor.userId);
     const clauses: Prisma.animalsWhereInput[] = [{ owner_id: actor.userId }];
     if (orgIds.length > 0) clauses.push({ organization_id: { in: orgIds } });
     return { OR: clauses };
@@ -351,7 +349,7 @@ export class AnimalService {
     // Org-owned animal: a member who is an org-admin of organization_id may mutate (not expressible in
     // the static CASL map, which keys on owner_id). MODERATOR has no Animal update grant → still denied.
     if (row.organization_id && actor.role !== 'MODERATOR') {
-      const isOrgAdmin = await this.isOrgAdmin(actor.userId, row.organization_id);
+      const isOrgAdmin = await this.orgMembership.isOrgAdmin(actor.userId, row.organization_id);
       if (isOrgAdmin) return;
     }
     throw new ForbiddenException({ message: 'Operation not permitted', code: 'FORBIDDEN' });
@@ -360,20 +358,12 @@ export class AnimalService {
   /** A USER creating an org-owned animal must be an org-admin of that organization. */
   private async assertOrgAdmin(actor: AuthPrincipal, organizationId: string): Promise<void> {
     if (actor.role === 'ADMIN') return; // platform-admin operator scope
-    if (!(await this.isOrgAdmin(actor.userId, organizationId))) {
+    if (!(await this.orgMembership.isOrgAdmin(actor.userId, organizationId))) {
       throw new ForbiddenException({
         message: 'You must be an admin of the organization to create an animal it owns',
         code: 'FORBIDDEN',
       });
     }
-  }
-
-  private async isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
-    const membership = await this.prisma.organization_users.findFirst({
-      where: { user_id: userId, organization_id: organizationId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return membership !== null;
   }
 
   private assertOwnershipXor(ownerId?: string, organizationId?: string): void {

@@ -10,6 +10,7 @@ import { ListingService } from './listing.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { ModerationService } from '../moderation/moderation.service';
+import type { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListingCreateDto } from './dto/listing.dto';
@@ -101,8 +102,6 @@ function setup(opts: SetupOpts = {}) {
     create: photoCreate,
     delete: jest.fn().mockResolvedValue({}),
   };
-  const orgFindFirst = jest.fn().mockResolvedValue(opts.orgAdmin ? { id: 'm' } : null);
-  const orgFindMany = jest.fn().mockResolvedValue([]);
   // Discovery path uses $queryRaw (data rows then a count row). Default: empty page.
   const queryRaw = jest
     .fn()
@@ -113,7 +112,6 @@ function setup(opts: SetupOpts = {}) {
     listings,
     animals,
     listing_photos,
-    organization_users: { findFirst: orgFindFirst, findMany: orgFindMany },
     $queryRaw: queryRaw,
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
@@ -122,8 +120,12 @@ function setup(opts: SetupOpts = {}) {
   // Slice-4c embed: a stub ModerationService.latestEffectiveResult (null = never moderated by default).
   const latestEffectiveResult = jest.fn().mockResolvedValue(null);
   const moderation = { latestEffectiveResult } as unknown as ModerationService;
-  const svc = new ListingService(prisma, audit, moderation);
-  return { svc, listings, animals, listing_photos, record, orgFindFirst, orgFindMany, queryRaw, latestEffectiveResult };
+  // isOrgAdmin backs create/mutate authz; orgAdminIds backs listScope.
+  const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
+  const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
+  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  const svc = new ListingService(prisma, audit, moderation, orgMembership);
+  return { svc, listings, animals, listing_photos, record, isOrgAdmin, orgAdminIds, queryRaw, latestEffectiveResult };
 }
 
 const validCreate = (over: Partial<ListingCreateDto> = {}): ListingCreateDto => ({

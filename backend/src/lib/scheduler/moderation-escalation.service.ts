@@ -93,9 +93,10 @@ export class ModerationEscalationService {
         aggregateType: 'Listing',
         aggregateId: item.id,
         eventType: 'Moderation.Escalated',
+        schemaVersion: 1,
+        market: item.market === 'livestock' ? 'livestock' : 'pet',
         payload: {
           entityId: item.id,
-          market: item.market,
           waitingSeconds: item.waiting_seconds,
           slaState: 'ESCALATED',
         },

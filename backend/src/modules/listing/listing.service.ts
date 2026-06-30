@@ -10,6 +10,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
@@ -107,6 +108,7 @@ export class ListingService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly moderation: ModerationService,
+    private readonly orgMembership: OrgMembershipService,
   ) {}
 
   // ── Create (→ DRAFT) ─────────────────────────────────────────────────────────────────────────
@@ -639,7 +641,7 @@ export class ListingService {
     const ors: Prisma.Sql[] = [Prisma.sql`l.status = 'ACTIVE'`];
     if (actor) {
       ors.push(Prisma.sql`l.seller_id = ${actor.userId}::uuid`);
-      const orgIds = await this.orgAdminIds(actor.userId);
+      const orgIds = await this.orgMembership.orgAdminIds(actor.userId);
       if (orgIds.length) {
         ors.push(Prisma.sql`l.organization_id IN (${Prisma.join(orgIds.map((o) => Prisma.sql`${o}::uuid`))})`);
       }
@@ -657,7 +659,7 @@ export class ListingService {
     const ors: Prisma.listingsWhereInput[] = [{ status: 'ACTIVE' }];
     if (actor) {
       ors.push({ seller_id: actor.userId });
-      const orgIds = await this.orgAdminIds(actor.userId);
+      const orgIds = await this.orgMembership.orgAdminIds(actor.userId);
       if (orgIds.length) ors.push({ organization_id: { in: orgIds } });
     }
     return { OR: ors };
@@ -754,7 +756,7 @@ export class ListingService {
   private async assertOwnsAnimal(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
     throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   }
 
@@ -762,7 +764,7 @@ export class ListingService {
   private async assertCanMutate(actor: AuthPrincipal, row: ListingRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (row.seller_id === actor.userId) return;
-    if (row.organization_id && (await this.isOrgAdmin(actor.userId, row.organization_id))) return;
+    if (row.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.organization_id))) return;
     throw new ForbiddenException({ message: 'Operation not permitted', code: 'FORBIDDEN' });
   }
 
@@ -771,31 +773,15 @@ export class ListingService {
     if (!actor) return false;
     if (actor.role === 'ADMIN' || actor.role === 'MODERATOR') return true;
     if (row.seller_id === actor.userId) return true;
-    if (row.organization_id && (await this.isOrgAdmin(actor.userId, row.organization_id))) return true;
+    if (row.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.organization_id))) return true;
     return false;
   }
 
   private async assertOrgAdmin(actor: AuthPrincipal, organizationId: string): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (!(await this.isOrgAdmin(actor.userId, organizationId))) {
+    if (!(await this.orgMembership.isOrgAdmin(actor.userId, organizationId))) {
       throw new ForbiddenException({ message: 'You must be an admin of the organization', code: 'FORBIDDEN' });
     }
-  }
-
-  private async isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
-    const m = await this.prisma.organization_users.findFirst({
-      where: { user_id: userId, organization_id: organizationId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return m !== null;
-  }
-
-  private async orgAdminIds(userId: string): Promise<string[]> {
-    const rows = await this.prisma.organization_users.findMany({
-      where: { user_id: userId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { organization_id: true },
-    });
-    return rows.map((r) => r.organization_id);
   }
 
   private assertLatLng(lat?: number, lng?: number): void {

@@ -10,6 +10,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { FeatureToggleService } from '../../lib/feature-toggle/feature-toggle.service';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
+import { OutboxService } from '../../lib/outbox/outbox.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import type { AuthPrincipal, PrincipalType } from '../../lib/auth/principal';
 import {
@@ -56,6 +58,15 @@ interface ListingRow {
   lock_expires_at: Date | null;
 }
 
+/** One paginated queue row, with market + SLA/lock state computed SQL-side (M-13 read-only). */
+interface QueueItemRow extends ListingRow {
+  market: string;
+  species_code: string | null;
+  waiting_seconds: number;
+  sla_state: string;
+  lock_state: string;
+}
+
 interface DecisionRow {
   id: string;
   moderator_id: string;
@@ -88,6 +99,8 @@ export class ModerationService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly toggles: FeatureToggleService,
+    private readonly orgMembership: OrgMembershipService,
+    private readonly outbox: OutboxService,
   ) {}
 
   // ── Queue ────────────────────────────────────────────────────────────────────────────────────
@@ -95,42 +108,104 @@ export class ModerationService {
     query: ModerationQueueQueryDto,
     actor: AuthPrincipal,
   ): Promise<{ items: ModerationQueueItemView[]; meta: { page: number; limit: number; total: number; totalPages: number; counts: QueueGroupCounts } }> {
-    // Base condition: PENDING_MODERATION, joined to species for market. lockState/slaState are derived
-    // post-fetch (computed from columns), so we fetch the filtered base then refine for tab counts.
-    const marketCond = query.market !== undefined ? Prisma.sql`AND s.market = ${query.market}` : Prisma.empty;
-    const rows = await this.prisma.$queryRaw<(ListingRow & { market: string; species_code: string | null })[]>`
-      SELECT l.id, l.animal_id, l.seller_id, l.organization_id, l.title_localized, l.status, l.moderation_status,
-             l.moderation_enqueued_at, l.assigned_to, l.locked_at, l.lock_expires_at,
-             s.market AS market, s.code AS species_code
-      FROM listings l
-      JOIN animals a ON a.id = l.animal_id
-      JOIN species s ON s.id = a.species_id
-      WHERE l.status = 'PENDING_MODERATION' ${marketCond}
-      ORDER BY l.moderation_enqueued_at ASC NULLS LAST, l.id ASC`;
+    // CRITICAL fix (audit 2026-06-30): the whole queue used to be loaded into memory with app-side
+    // pagination + counts → OOM/degradation at scale. Everything now runs in SQL: the species-join
+    // market filter, SLA/lock state as computed expressions, LIMIT/OFFSET pagination, and tab counts
+    // as separate COUNT(*) … GROUP BY (never materialising the full set). M-13 holds: this is a pure
+    // read — slaState/lockState are derived, never written, and the queue never transitions an item.
+    const base = this.queueBaseCte(actor.userId);
 
-    const now = Date.now();
-    let items = rows.map((r) => this.toQueueItem(r, r.market as Market, r.species_code, actor, now));
+    // Tab filters (market / slaState|escalated). lockState is the only NON-tab filter (it has no
+    // counted facet in QueueGroupCounts), so counts narrow by lockState only — see counts below.
+    const marketCond = query.market !== undefined ? Prisma.sql` AND market = ${query.market}` : Prisma.empty;
+    const slaCond = query.slaState !== undefined ? Prisma.sql` AND sla_state = ${query.slaState}` : Prisma.empty;
+    const escalatedCond = query.escalated === true ? Prisma.sql` AND sla_state = 'ESCALATED'` : Prisma.empty;
+    const lockCond = query.lockState !== undefined ? Prisma.sql` AND lock_state = ${query.lockState}` : Prisma.empty;
 
-    // Derived filters (slaState / escalated / lockState) — computed, applied in memory (M-13 read-only).
-    if (query.slaState !== undefined) items = items.filter((i) => i.slaState === query.slaState);
-    if (query.escalated === true) items = items.filter((i) => i.slaState === 'ESCALATED');
-    if (query.lockState !== undefined) items = items.filter((i) => i.lockState === query.lockState);
+    // Page (all filters), FIFO order (moderation-api.yaml: moderation_enqueued_at ASC), paginated SQL-side.
+    const rows = await this.prisma.$queryRaw<QueueItemRow[]>`
+      ${base}
+      SELECT * FROM q
+      WHERE TRUE${marketCond}${slaCond}${escalatedCond}${lockCond}
+      ORDER BY moderation_enqueued_at ASC NULLS LAST, id ASC
+      LIMIT ${query.limit} OFFSET ${query.skip}`;
 
-    // counts over the FULL filtered-by-non-tab set (before pagination).
+    // total over the FULL filtered queue (not just this page) — separate count so an out-of-range
+    // page still reports the true total.
+    const totalRows = await this.prisma.$queryRaw<{ count: bigint }[]>`
+      ${base}
+      SELECT COUNT(*)::bigint AS count FROM q
+      WHERE TRUE${marketCond}${slaCond}${escalatedCond}${lockCond}`;
+    const total = Number(totalRows[0]?.count ?? 0n);
+
+    // Tab counts (moderation-api.yaml: "Counts span the entire queue under the active NON-tab
+    // filters"). byMarket and bySlaState are themselves the tab dimensions, so they are NOT narrowed
+    // by the market/slaState/escalated tab filters — only by lockState (the lone non-tab filter).
+    // Separate COUNT(*) … GROUP BY each, so the full set is never materialised.
+    const [marketCounts, slaCounts] = await Promise.all([
+      this.prisma.$queryRaw<{ market: string; n: bigint }[]>`
+        ${base}
+        SELECT market, COUNT(*)::bigint AS n FROM q WHERE TRUE${lockCond} GROUP BY market`,
+      this.prisma.$queryRaw<{ sla_state: string; n: bigint }[]>`
+        ${base}
+        SELECT sla_state, COUNT(*)::bigint AS n FROM q WHERE TRUE${lockCond} GROUP BY sla_state`,
+    ]);
+
     const counts: QueueGroupCounts = {
       byMarket: { pet: 0, livestock: 0 },
       bySlaState: { ON_TRACK: 0, BREACHED: 0, ESCALATED: 0 },
     };
-    for (const i of items) {
-      counts.byMarket[i.market] += 1;
-      counts.bySlaState[i.slaState] += 1;
+    for (const r of marketCounts) {
+      if (r.market === 'pet' || r.market === 'livestock') counts.byMarket[r.market] = Number(r.n);
+    }
+    for (const r of slaCounts) {
+      if (r.sla_state in counts.bySlaState) counts.bySlaState[r.sla_state as SlaState] = Number(r.n);
     }
 
-    const total = items.length;
-    const page = items.slice(query.skip, query.skip + query.limit);
-    const paged = paginate(page, total, query.page, query.limit);
+    const items = rows.map((r) => this.toQueueItem(r));
+    const paged = paginate(items, total, query.page, query.limit);
     // Contract: counts live INSIDE meta (PageMeta.counts, additive — moderation-api.yaml).
     return { items: paged.items, meta: { ...paged.meta, counts } };
+  }
+
+  /**
+   * The PENDING_MODERATION base CTE with market (species join) and the M-13 read-only SLA/lock state
+   * computed SQL-side. `sla_state` mirrors {@link SLA_TARGET_SECONDS} × {@link ESCALATE_FACTOR}
+   * (pet <4h, livestock <6h; 2× → ESCALATED); `lock_state` is relative to the calling principal and
+   * `now()`. Shared by every getQueue sub-query so the page, total and tab counts stay consistent.
+   */
+  private queueBaseCte(actorUserId: string): Prisma.Sql {
+    const petBreach = SLA_TARGET_SECONDS.pet;
+    const liveBreach = SLA_TARGET_SECONDS.livestock;
+    const petEscalate = petBreach * ESCALATE_FACTOR;
+    const liveEscalate = liveBreach * ESCALATE_FACTOR;
+    return Prisma.sql`
+      WITH base AS (
+        SELECT l.id, l.animal_id, l.seller_id, l.organization_id, l.title_localized,
+               l.status, l.moderation_status, l.moderation_enqueued_at,
+               l.assigned_to, l.locked_at, l.lock_expires_at,
+               s.market AS market, s.code AS species_code,
+               GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - COALESCE(l.moderation_enqueued_at, l.locked_at, now())))))::int AS waiting_seconds
+        FROM listings l
+        JOIN animals a ON a.id = l.animal_id
+        JOIN species s ON s.id = a.species_id
+        WHERE l.status = 'PENDING_MODERATION'
+      ),
+      q AS (
+        SELECT base.*,
+               CASE
+                 WHEN waiting_seconds >= (CASE WHEN market = 'livestock' THEN ${liveEscalate} ELSE ${petEscalate} END) THEN 'ESCALATED'
+                 WHEN waiting_seconds >= (CASE WHEN market = 'livestock' THEN ${liveBreach} ELSE ${petBreach} END) THEN 'BREACHED'
+                 ELSE 'ON_TRACK'
+               END AS sla_state,
+               CASE
+                 WHEN assigned_to IS NULL THEN 'FREE'
+                 WHEN lock_expires_at IS NULL OR lock_expires_at <= now() THEN 'LOCK_EXPIRED'
+                 WHEN assigned_to = ${actorUserId}::uuid THEN 'CLAIMED_BY_ME'
+                 ELSE 'CLAIMED_BY_OTHER'
+               END AS lock_state
+        FROM base
+      )`;
   }
 
   async getReviewListing(id: string): Promise<{ listing: unknown; animal: unknown; photos: unknown[] }> {
@@ -264,6 +339,8 @@ export class ModerationService {
 
     // The flip target (M-P0: APPROVE is the only path to ACTIVE; trigger is the backstop).
     const transition = this.transitionFor(dto.action);
+    // Market for the event envelope (ADR-0002) — resolved before the tx (immutable species join).
+    const market = await this.marketOf(listing.animal_id);
 
     const created = await this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
@@ -333,6 +410,39 @@ export class ModerationService {
           },
           tx,
         );
+
+        // 4. Event seam (audit 2026-06-30 CRITICAL; event-catalog §2) — emitted in the SAME tx as the
+        //    decision so the outbox row is atomic with the state change (the seller-notification +
+        //    funnel-analytics signal that was previously never produced). `Moderation.Decided` always;
+        //    `Listing.Activated` additionally when APPROVE moves the listing to ACTIVE.
+        //    NB: no consumer is registered yet, so the relay currently parks these as processed-with-
+        //    no-consumer — they persist in `outbox_events` as the deliberate START of analytics history
+        //    capture (history is irrecoverable if not captured now). Registering the notification/
+        //    search-index consumers and the relay's no-consumer policy are an architect follow-up.
+        await this.outbox.publish(tx, {
+          aggregateType: 'Listing',
+          aggregateId: dto.listingId,
+          eventType: 'Moderation.Decided',
+          schemaVersion: 1,
+          market,
+          payload: {
+            entityType: 'LISTING',
+            entityId: dto.listingId,
+            sellerId: listing.seller_id,
+            decision,
+            reason: dto.action === 'APPROVE' ? null : dto.reason,
+          },
+        });
+        if (transition.status === 'ACTIVE') {
+          await this.outbox.publish(tx, {
+            aggregateType: 'Listing',
+            aggregateId: dto.listingId,
+            eventType: 'Listing.Activated',
+            schemaVersion: 1,
+            market,
+            payload: { listingId: dto.listingId, sellerId: listing.seller_id },
+          });
+        }
         return row;
       }),
     );
@@ -395,7 +505,7 @@ export class ModerationService {
 
     // M-12: owner (seller or org-admin) OR MODERATOR/ADMIN. Non-owner USER → 403 (no detail leak).
     const isOperator = actor.role === 'MODERATOR' || actor.role === 'ADMIN';
-    const isOwner = listing.seller_id === actor.userId || (listing.organization_id ? await this.isOrgAdmin(actor.userId, listing.organization_id) : false);
+    const isOwner = listing.seller_id === actor.userId || (listing.organization_id ? await this.orgMembership.isOrgAdmin(actor.userId, listing.organization_id) : false);
     if (!isOperator && !isOwner) {
       throw new ForbiddenException({ message: 'Not permitted to view this listing’s moderation result', code: 'FORBIDDEN' });
     }
@@ -463,52 +573,36 @@ export class ModerationService {
     return row;
   }
 
+  /** The market (ADR-0002) of a listing via its animal's species, or null if unresolved. */
+  private async marketOf(animalId: string): Promise<Market | null> {
+    const rows = await this.prisma.$queryRaw<{ market: string }[]>`
+      SELECT s.market FROM animals a JOIN species s ON s.id = a.species_id WHERE a.id = ${animalId}::uuid`;
+    const m = rows[0]?.market;
+    return m === 'pet' || m === 'livestock' ? m : null;
+  }
+
   private assertModeratable(row: ListingRow): void {
     if (row.status !== 'PENDING_MODERATION') {
       throw new ConflictException({ message: 'Listing is not awaiting moderation', code: 'INVALID_STATE' });
     }
   }
 
-  private toQueueItem(row: ListingRow, market: Market, speciesCode: string | null, actor: AuthPrincipal, now: number): ModerationQueueItemView {
-    const submittedAt = row.moderation_enqueued_at ?? row.locked_at ?? new Date(now);
-    const waitingSeconds = Math.max(0, Math.floor((now - submittedAt.getTime()) / 1000));
+  /** Map an enriched queue row to the view. SLA/lock state + waitingSeconds are computed SQL-side. */
+  private toQueueItem(row: QueueItemRow): ModerationQueueItemView {
+    const submittedAt = row.moderation_enqueued_at ?? row.locked_at ?? new Date();
     return {
       listingId: row.id,
       titleLocalized: (row.title_localized as LocalizedString) ?? { en: '', ru: '' },
-      market,
-      species: speciesCode,
+      market: row.market as Market,
+      species: row.species_code,
       submittedAt,
-      waitingSeconds,
-      slaState: this.slaState(market, waitingSeconds),
-      lockState: this.lockState(row, actor, now),
+      waitingSeconds: row.waiting_seconds,
+      slaState: row.sla_state as SlaState,
+      lockState: row.lock_state as LockState,
       assignedTo: row.assigned_to ? this.actorView(row.assigned_to, 'HUMAN') : null,
       lockedAt: row.locked_at,
       lockExpiresAt: row.lock_expires_at,
     };
-  }
-
-  /** Derived SLA state (M-13, read-only — no auto-decide). */
-  private slaState(market: Market, waitingSeconds: number): SlaState {
-    const target = SLA_TARGET_SECONDS[market];
-    if (waitingSeconds >= target * ESCALATE_FACTOR) return 'ESCALATED';
-    if (waitingSeconds >= target) return 'BREACHED';
-    return 'ON_TRACK';
-  }
-
-  /** Derived lock state relative to the caller. */
-  private lockState(row: ListingRow, actor: AuthPrincipal, now: number): LockState {
-    if (row.assigned_to === null) return 'FREE';
-    const live = row.lock_expires_at !== null && row.lock_expires_at.getTime() > now;
-    if (!live) return 'LOCK_EXPIRED';
-    return row.assigned_to === actor.userId ? 'CLAIMED_BY_ME' : 'CLAIMED_BY_OTHER';
-  }
-
-  private async isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
-    const m = await this.prisma.organization_users.findFirst({
-      where: { user_id: userId, organization_id: organizationId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return m !== null;
   }
 
   /** Resolve a user's CURRENT principal_type for an Actor badge (best-effort; null if no id). */

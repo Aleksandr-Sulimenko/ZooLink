@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { TransferService } from './transfer.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
+import type { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListTransfersQueryDto } from './dto/transfer.dto';
@@ -108,8 +109,6 @@ function setup(opts: SetupOpts = {}) {
   };
   const users = { findUnique: jest.fn().mockResolvedValue(opts.recipientUserExists === false ? null : { id: RECIP }) };
   const organizations = { findUnique: jest.fn().mockResolvedValue({ id: ORG }) };
-  const orgFindFirst = jest.fn().mockResolvedValue(opts.orgAdmin ? { id: 'm' } : null);
-  const orgFindMany = jest.fn().mockResolvedValue([]);
 
   const tx = { ownership_transfers, animals, animal_ownership_history, $executeRaw: jest.fn().mockResolvedValue(1) };
   const prisma = {
@@ -118,13 +117,16 @@ function setup(opts: SetupOpts = {}) {
     animal_ownership_history,
     users,
     organizations,
-    organization_users: { findFirst: orgFindFirst, findMany: orgFindMany },
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
-  const svc = new TransferService(prisma, audit);
-  return { svc, ownership_transfers, animals, animal_ownership_history, users, record, orgFindFirst, tx };
+  // isOrgAdmin backs party-side org authz; orgAdminIds backs the org branch of list scope.
+  const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
+  const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
+  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  const svc = new TransferService(prisma, audit, orgMembership);
+  return { svc, ownership_transfers, animals, animal_ownership_history, users, record, isOrgAdmin, orgAdminIds, tx };
 }
 
 const etagOf = (): string => weakEtag(`transfer:${XFER}`, UPDATED);

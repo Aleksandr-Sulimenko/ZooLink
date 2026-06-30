@@ -4,6 +4,8 @@ import { ModerationService } from './moderation.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { FeatureToggleService } from '../../lib/feature-toggle/feature-toggle.service';
+import type { OrgMembershipService } from '../../lib/org/org-membership.service';
+import type { OutboxService } from '../../lib/outbox/outbox.service';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ModerationActionDto, ModerationQueueQueryDto } from './dto/moderation.dto';
 
@@ -114,8 +116,14 @@ function setup(opts: SetupOpts = {}) {
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
   const toggles = { isEnabled: jest.fn().mockResolvedValue(opts.agentEnabled ?? false) } as unknown as FeatureToggleService;
-  const svc = new ModerationService(prisma, audit, toggles);
-  return { svc, listings, moderation_decisions, moderation_reasons, decision_templates, record, decCreate, lUpdate, lUpdateMany };
+  const orgMembership = {
+    isOrgAdmin: jest.fn().mockResolvedValue(opts.orgAdmin ?? false),
+    orgAdminIds: jest.fn().mockResolvedValue([]),
+  } as unknown as OrgMembershipService;
+  const publish = jest.fn().mockResolvedValue(undefined);
+  const outbox = { publish } as unknown as OutboxService;
+  const svc = new ModerationService(prisma, audit, toggles, orgMembership, outbox);
+  return { svc, listings, moderation_decisions, moderation_reasons, decision_templates, record, decCreate, lUpdate, lUpdateMany, publish };
 }
 
 const act = (over: Partial<ModerationActionDto> = {}): ModerationActionDto => ({ listingId: LISTING, action: 'APPROVE', ...over });
@@ -339,16 +347,31 @@ describe('ModerationService', () => {
     });
   });
 
-  describe('queue — SLA/lock derivation (M-13)', () => {
-    it('derives ESCALATED for a pet item waiting > 8h, and never transitions it', async () => {
+  describe('queue — SQL pagination + counts (M-13 read-only)', () => {
+    it('maps the SQL-computed SLA/lock state, assembles meta.counts, and never transitions an item', async () => {
       const { svc, listings } = setup();
-      // The queue uses $queryRaw (species join) — feed a far-overdue pet row.
+      // getQueue now runs SQL-side: state is computed by the CTE, paginated + counted in SQL. Mock the
+      // four sub-queries in order: page rows, total, byMarket GROUP BY, bySlaState GROUP BY.
       const prismaQueryRaw = (svc as unknown as { prisma: { $queryRaw: jest.Mock } }).prisma.$queryRaw;
-      prismaQueryRaw.mockResolvedValueOnce([
-        { ...listingRow({ moderation_enqueued_at: new Date(Date.now() - 9 * 3600_000) }), market: 'pet', species_code: 'dog' },
-      ]);
+      prismaQueryRaw
+        .mockResolvedValueOnce([
+          {
+            ...listingRow({ moderation_enqueued_at: new Date(Date.now() - 9 * 3600_000) }),
+            market: 'pet',
+            species_code: 'dog',
+            waiting_seconds: 9 * 3600,
+            sla_state: 'ESCALATED',
+            lock_state: 'FREE',
+          },
+        ]) // page
+        .mockResolvedValueOnce([{ count: 1n }]) // total
+        .mockResolvedValueOnce([{ market: 'pet', n: 1n }]) // byMarket
+        .mockResolvedValueOnce([{ sla_state: 'ESCALATED', n: 1n }]); // bySlaState
       const res = await svc.getQueue(queueQuery(), p(MOD));
       expect(res.items[0].slaState).toBe('ESCALATED');
+      expect(res.items[0].lockState).toBe('FREE');
+      expect(res.meta.total).toBe(1);
+      expect(res.meta.counts.byMarket.pet).toBe(1);
       expect(res.meta.counts.bySlaState.ESCALATED).toBe(1);
       // No write path on timeout (M-13): the listing update was never called from the queue read.
       expect(listings.update).not.toHaveBeenCalled();

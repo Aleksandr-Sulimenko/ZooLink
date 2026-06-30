@@ -9,6 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
@@ -71,6 +72,7 @@ export class TransferService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly orgMembership: OrgMembershipService,
   ) {}
 
   // ── Initiate (T1) ────────────────────────────────────────────────────────────────────────────
@@ -283,7 +285,7 @@ export class TransferService {
 
   // ── List (principal-scoped) ──────────────────────────────────────────────────────────────────
   async list(query: ListTransfersQueryDto, actor: AuthPrincipal): Promise<Paginated<TransferView>> {
-    const orgIds = await this.orgAdminIds(actor.userId);
+    const orgIds = await this.orgMembership.orgAdminIds(actor.userId);
     const where: Prisma.ownership_transfersWhereInput = {};
     if (query.role === 'initiated') {
       where.OR = [{ from_user_id: actor.userId }, ...(orgIds.length ? [{ from_organization_id: { in: orgIds } }] : [])];
@@ -464,7 +466,7 @@ export class TransferService {
   private async assertIsCurrentOwner(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
     throw new ForbiddenException({ message: 'Only the current owner may initiate a transfer', code: 'FORBIDDEN' });
   }
 
@@ -472,7 +474,7 @@ export class TransferService {
   private async assertIsRecipient(actor: AuthPrincipal, row: TransferRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (row.to_user_id && row.to_user_id === actor.userId) return;
-    if (row.to_organization_id && (await this.isOrgAdmin(actor.userId, row.to_organization_id))) return;
+    if (row.to_organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.to_organization_id))) return;
     throw new ForbiddenException({ message: 'Only the named recipient may accept or decline', code: 'FORBIDDEN' });
   }
 
@@ -480,7 +482,7 @@ export class TransferService {
   private async assertIsInitiator(actor: AuthPrincipal, row: TransferRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (row.from_user_id && row.from_user_id === actor.userId) return;
-    if (row.from_organization_id && (await this.isOrgAdmin(actor.userId, row.from_organization_id))) return;
+    if (row.from_organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.from_organization_id))) return;
     throw new ForbiddenException({ message: 'Only the initiator may cancel', code: 'FORBIDDEN' });
   }
 
@@ -489,7 +491,7 @@ export class TransferService {
     if (actor.role === 'MODERATOR' || actor.role === 'ADMIN') return;
     if (row.from_user_id === actor.userId || row.to_user_id === actor.userId) return;
     for (const org of [row.from_organization_id, row.to_organization_id]) {
-      if (org && (await this.isOrgAdmin(actor.userId, org))) return;
+      if (org && (await this.orgMembership.isOrgAdmin(actor.userId, org))) return;
     }
     throw new ForbiddenException({ message: 'Not a party to this transfer', code: 'FORBIDDEN' });
   }
@@ -498,24 +500,8 @@ export class TransferService {
   private async assertCanViewAnimal(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
     if (actor.role === 'MODERATOR' || actor.role === 'ADMIN') return;
     if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
     throw new ForbiddenException({ message: 'Not permitted to view this animal’s ownership history', code: 'FORBIDDEN' });
-  }
-
-  private async isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
-    const m = await this.prisma.organization_users.findFirst({
-      where: { user_id: userId, organization_id: organizationId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return m !== null;
-  }
-
-  private async orgAdminIds(userId: string): Promise<string[]> {
-    const rows = await this.prisma.organization_users.findMany({
-      where: { user_id: userId, role_in_org: 'OWNER', status: 'ACTIVE' },
-      select: { organization_id: true },
-    });
-    return rows.map((r) => r.organization_id);
   }
 
   // ── error mapping / projection ───────────────────────────────────────────────────────────────

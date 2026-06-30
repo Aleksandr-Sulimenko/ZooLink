@@ -27,6 +27,16 @@ describe('Outbox relay (integration, real PG)', () => {
     await prisma.onModuleInit();
   });
 
+  // Determinism: the relay claims a GLOBAL batch of the 20 oldest pending events ordered by
+  // created_at (outbox.relay.ts:80-93) — it is not scoped to this suite's aggregate. In the shared
+  // PG, leftover pending events from other emitting suites (e.g. moderation APPROVE → Listing.*)
+  // can fill/starve the batch so this suite's freshly-published event is not claimed in the single
+  // tick → flaky. Start each test from a clean slate by draining all currently-pending events (test
+  // artifacts; no real consumer drains them in e2e).
+  beforeEach(async () => {
+    await prisma.outbox_events.deleteMany({ where: { processed_at: null } });
+  });
+
   afterEach(async () => {
     await prisma.outbox_events.deleteMany({ where: { aggregate_type: AGG } });
   });
@@ -52,6 +62,8 @@ describe('Outbox relay (integration, real PG)', () => {
         aggregateType: AGG,
         aggregateId: aggId,
         eventType: 'E2E.Ping',
+        schemaVersion: 1,
+        market: null,
         payload: { hello: 'world' },
       }),
     );
@@ -60,7 +72,10 @@ describe('Outbox relay (integration, real PG)', () => {
 
     const mine = received.filter((e) => e.aggregateId === aggId);
     expect(mine).toHaveLength(1);
-    expect(mine[0].payload).toEqual({ hello: 'world' });
+    // The stored payload carries the event envelope (event-catalog §1) alongside the domain field.
+    expect(mine[0].payload).toEqual(
+      expect.objectContaining({ hello: 'world', schemaVersion: 1, market: null, occurredAt: expect.any(String) }),
+    );
 
     const row = await prisma.outbox_events.findFirst({ where: { aggregate_id: aggId } });
     expect(row?.processed_at).not.toBeNull();
@@ -85,6 +100,8 @@ describe('Outbox relay (integration, real PG)', () => {
         aggregateType: AGG,
         aggregateId: aggId,
         eventType: 'E2E.Flaky',
+        schemaVersion: 1,
+        market: null,
         payload: {},
       }),
     );
@@ -121,6 +138,8 @@ describe('Outbox relay (integration, real PG)', () => {
         aggregateType: AGG,
         aggregateId: aggId,
         eventType: 'E2E.Leased',
+        schemaVersion: 1,
+        market: null,
         payload: {},
       }),
     );
