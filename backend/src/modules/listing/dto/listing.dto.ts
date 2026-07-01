@@ -401,3 +401,28 @@ export interface ListingPhotoView {
   orderIndex: number;
   createdAt: Date;
 }
+
+/**
+ * Wire shape of a contact reveal result (contact-exchange spec 16 / listings-api ContactRevealResult).
+ * Carries only the seller-enabled channels — a disabled/unset channel is absent. Never email. The
+ * `phone` is decrypted at reveal (ADR-0019); `telegram` is a plaintext handle.
+ */
+export interface ContactRevealView {
+  listingId: string;
+  sellerId: string;
+  sellerName: string | null;
+  channels: { phone?: string; telegram?: string };
+  revealedAt: Date;
+}
+
+/**
+ * Wire shape of per-listing analytics (listings-api ListingAnalytics). `contactReveals` is sourced
+ * from the `contact_reveals` table; `views` has no capture source in MVP (GAP-TRACE-006) → 0.
+ * `series` (x-phase:2) is intentionally omitted in MVP.
+ */
+export interface ListingAnalyticsView {
+  listingId: string;
+  views: number;
+  contactReveals: number;
+  lastActivityAt: Date | null;
+}

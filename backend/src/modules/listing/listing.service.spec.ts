@@ -12,6 +12,9 @@ import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { ModerationService } from '../moderation/moderation.service';
 import type { AnimalService } from '../animal/animal.service';
 import type { OrgMembershipService } from '../../lib/org/org-membership.service';
+import type { CryptoService } from '../../lib/crypto/crypto.service';
+import type { OutboxService } from '../../lib/outbox/outbox.service';
+import type { RedisService } from '../../lib/redis/redis.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListingCreateDto } from './dto/listing.dto';
@@ -65,6 +68,14 @@ interface SetupOpts {
   animal?: Record<string, unknown> | null;
   orgAdmin?: boolean;
   photoCount?: number;
+  /** Seller users row returned for a contact reveal (null = seller not found). */
+  seller?: Record<string, unknown> | null;
+  /** Starting value for the Redis reveal counter — incr returns start+1, +2, … per call. */
+  revealCounterStart?: number;
+  /** contact_reveals.count() result (analytics). */
+  revealCount?: number;
+  /** contact_reveals.findFirst() result (analytics lastActivityAt). */
+  lastReveal?: Record<string, unknown> | null;
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -108,11 +119,24 @@ function setup(opts: SetupOpts = {}) {
     .fn()
     .mockResolvedValueOnce([]) // data rows
     .mockResolvedValueOnce([{ count: 0n }]); // count
-  const tx = { listings, animals, listing_photos };
+  // Contact-exchange (reveal) + analytics mocks.
+  const seller =
+    'seller' in opts
+      ? opts.seller
+      : { full_name: 'Seller Name', contact_phone: '+79990001122', contact_telegram: 'sellertg', contact_prefs: { show_phone: true, show_telegram: true } };
+  const usersFindUnique = jest.fn().mockResolvedValue(seller);
+  const users = { findUnique: usersFindUnique };
+  const crCreate = jest.fn().mockResolvedValue({ id: 'reveal-1' });
+  const crCount = jest.fn().mockResolvedValue(opts.revealCount ?? 0);
+  const crFindFirst = jest.fn().mockResolvedValue('lastReveal' in opts ? opts.lastReveal : null);
+  const contact_reveals = { create: crCreate, count: crCount, findFirst: crFindFirst };
+  const tx = { listings, animals, listing_photos, contact_reveals };
   const prisma = {
     listings,
     animals,
     listing_photos,
+    users,
+    contact_reveals,
     $queryRaw: queryRaw,
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
@@ -137,8 +161,39 @@ function setup(opts: SetupOpts = {}) {
     throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   });
   const animalService = { getOwnedAnimalForActor } as unknown as AnimalService;
-  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService);
-  return { svc, listings, animals, listing_photos, record, isOrgAdmin, orgAdminIds, getOwnedAnimalForActor, queryRaw, latestEffectiveResult };
+  // Contact-exchange collaborators: crypto (decrypt = plaintext passthrough by default), outbox (publish),
+  // redis (a stateful incr counter so repeated reveals in one test cross the per-market limit).
+  const decrypt = jest.fn().mockImplementation((v: string | null) => v);
+  const crypto = { decrypt } as unknown as CryptoService;
+  const publish = jest.fn().mockResolvedValue(undefined);
+  const outbox = { publish } as unknown as OutboxService;
+  let revealCounter = opts.revealCounterStart ?? 0;
+  const incr = jest.fn().mockImplementation(() => Promise.resolve(++revealCounter));
+  const expire = jest.fn().mockResolvedValue(1);
+  const ttl = jest.fn().mockResolvedValue(3600);
+  const redis = { client: { incr, expire, ttl } } as unknown as RedisService;
+  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService, crypto, outbox, redis);
+  return {
+    svc,
+    listings,
+    animals,
+    listing_photos,
+    users,
+    contact_reveals,
+    record,
+    isOrgAdmin,
+    orgAdminIds,
+    getOwnedAnimalForActor,
+    queryRaw,
+    latestEffectiveResult,
+    usersFindUnique,
+    crCreate,
+    crCount,
+    crFindFirst,
+    decrypt,
+    publish,
+    incr,
+  };
 }
 
 const validCreate = (over: Partial<ListingCreateDto> = {}): ListingCreateDto => ({
@@ -520,6 +575,156 @@ describe('ListingService', () => {
       const { svc } = setup();
       const err = await svc.list(q({ market: 'pet', sort: 'distance:asc' }), undefined).catch((e: unknown) => e);
       expect((err as HttpException).getStatus()).toBe(400);
+    });
+  });
+
+  // ── Contact reveal (spec 16, no-chat MVP) ────────────────────────────────────────────────────
+  describe('revealContact', () => {
+    const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
+
+    it('reveals the seller-enabled channels, logs a contact_reveals row, emits ContactReveal.Created', async () => {
+      const { svc, crCreate, publish, decrypt } = setup({ listing: active() });
+      const res = await svc.revealContact(LISTING, p(OTHER));
+      expect(res).toMatchObject({ listingId: LISTING, sellerId: SELLER, sellerName: 'Seller Name' });
+      expect(res.channels).toEqual({ phone: '+79990001122', telegram: 'sellertg' });
+      expect(res.revealedAt).toBeInstanceOf(Date);
+      expect(crCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ listing_id: LISTING, viewer_id: OTHER, seller_id: SELLER }) }),
+      );
+      expect(decrypt).toHaveBeenCalledWith('+79990001122'); // ADR-0019: decrypt at reveal
+      expect(publish).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'ContactReveal.Created', payload: expect.objectContaining({ viewerId: OTHER, sellerId: SELLER }) }),
+      );
+    });
+
+    it('self-reveal → 422 SELF_REVEAL and logs nothing', async () => {
+      const { svc, crCreate } = setup({ listing: active() });
+      const err = await svc.revealContact(LISTING, p(SELLER)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'SELF_REVEAL' });
+      expect(crCreate).not.toHaveBeenCalled();
+    });
+
+    it('a non-ACTIVE listing → 404 (no existence leak)', async () => {
+      const { svc } = setup({ listing: listingRow({ status: 'DRAFT' }) });
+      await expect(svc.revealContact(LISTING, p(OTHER))).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('returns only the seller-enabled channels (show_telegram off → phone only)', async () => {
+      const { svc } = setup({
+        listing: active(),
+        seller: { full_name: 'S', contact_phone: '+70000000000', contact_telegram: 'tg', contact_prefs: { show_phone: true, show_telegram: false } },
+      });
+      const res = await svc.revealContact(LISTING, p(OTHER));
+      expect(res.channels).toEqual({ phone: '+70000000000' });
+    });
+
+    it('both channels disabled → empty channels, but the reveal is still logged (audit/abuse)', async () => {
+      const { svc, crCreate } = setup({
+        listing: active(),
+        seller: { full_name: 'S', contact_phone: '+7', contact_telegram: 'tg', contact_prefs: { show_phone: false, show_telegram: false } },
+      });
+      const res = await svc.revealContact(LISTING, p(OTHER));
+      expect(res.channels).toEqual({});
+      expect(crCreate).toHaveBeenCalled();
+    });
+
+    it('pet market: the 11th reveal within the hour → 429 + Retry-After (spec 16); the over-limit attempt logs nothing', async () => {
+      const { svc, queryRaw, crCreate } = setup({ listing: active() });
+      queryRaw.mockReset();
+      queryRaw.mockResolvedValue([{ market: 'pet' }]); // marketOf → pet on every call
+      for (let i = 0; i < 10; i++) await svc.revealContact(LISTING, p(OTHER));
+      const err = await svc.revealContact(LISTING, p(OTHER)).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(429);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'RATE_LIMITED', retryAfter: 3600 });
+      expect(crCreate).toHaveBeenCalledTimes(10);
+    });
+
+    it('livestock market: the 6th reveal within the hour → 429 (stricter 5/h limit, ADR-0002)', async () => {
+      const { svc, queryRaw } = setup({ listing: active() });
+      queryRaw.mockReset();
+      queryRaw.mockResolvedValue([{ market: 'livestock' }]);
+      for (let i = 0; i < 5; i++) await svc.revealContact(LISTING, p(OTHER));
+      const err = await svc.revealContact(LISTING, p(OTHER)).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(429);
+    });
+  });
+
+  // ── Mark sold (ACTIVE → SOLD, MVP) ───────────────────────────────────────────────────────────
+  describe('markSold', () => {
+    const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
+
+    it('marks an ACTIVE listing SOLD: sold_at set, is_active=false, emits Listing.Sold + audit', async () => {
+      const { svc, listings, publish, record } = setup({ listing: active() });
+      const { listing } = await svc.markSold(LISTING, etagOf(), p(SELLER));
+      expect(listing.status).toBe('SOLD');
+      expect(listing.isActive).toBe(false);
+      expect(listing.soldAt).toBeInstanceOf(Date);
+      expect(listings.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: LISTING, status: 'ACTIVE' }, data: expect.objectContaining({ status: 'SOLD', is_active: false }) }),
+      );
+      expect(publish).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'Listing.Sold', payload: expect.objectContaining({ listingId: LISTING, sellerId: SELLER }) }),
+      );
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'listing.marked_sold' }), expect.anything());
+    });
+
+    it('owner-only: a non-owner → 403', async () => {
+      const { svc } = setup({ listing: active() });
+      await expect(svc.markSold(LISTING, etagOf(), p(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('a non-ACTIVE listing → 409 LISTING_NOT_ACTIVE', async () => {
+      const { svc } = setup({ listing: listingRow({ status: 'DRAFT' }) });
+      const err = await svc.markSold(LISTING, etagOf(), p(SELLER)).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(409);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_ACTIVE' });
+    });
+
+    it('missing If-Match → 428; stale → 412', async () => {
+      const { svc } = setup({ listing: active() });
+      expect((await svc.markSold(LISTING, undefined, p(SELLER)).catch((e: unknown) => e) as HttpException).getStatus()).toBe(428);
+      expect((await svc.markSold(LISTING, 'W/"x"', p(SELLER)).catch((e: unknown) => e) as HttpException).getStatus()).toBe(412);
+    });
+
+    it('guarded single-winner: a lost ACTIVE→SOLD race → 409, writes nothing (no event/audit)', async () => {
+      const { svc, listings, publish, record } = setup({ listing: active() });
+      listings.updateMany.mockResolvedValueOnce({ count: 0 }); // a concurrent transition already left ACTIVE
+      const err = await svc.markSold(LISTING, etagOf(), p(SELLER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'LISTING_NOT_ACTIVE' });
+      expect(publish).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Analytics (listings-api ListingAnalytics) ────────────────────────────────────────────────
+  describe('getAnalytics', () => {
+    const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
+
+    it('owner sees contactReveals (sourced) + lastActivityAt; views is 0 in MVP (GAP-TRACE-006)', async () => {
+      const when = new Date('2026-06-28T10:00:00Z');
+      const { svc } = setup({ listing: active(), revealCount: 3, lastReveal: { created_at: when } });
+      const { analytics } = await svc.getAnalytics(LISTING, p(SELLER));
+      expect(analytics).toMatchObject({ listingId: LISTING, views: 0, contactReveals: 3, lastActivityAt: when });
+    });
+
+    it('no reveals → contactReveals 0, lastActivityAt null', async () => {
+      const { svc } = setup({ listing: active(), revealCount: 0, lastReveal: null });
+      const { analytics } = await svc.getAnalytics(LISTING, p(SELLER));
+      expect(analytics).toMatchObject({ contactReveals: 0, lastActivityAt: null });
+    });
+
+    it('a non-owner → 404 (no-leak), even on a public ACTIVE listing', async () => {
+      const { svc } = setup({ listing: active() });
+      await expect(svc.getAnalytics(LISTING, p(OTHER))).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('a MODERATOR (operator) may read analytics', async () => {
+      const { svc } = setup({ listing: active(), revealCount: 1 });
+      const { analytics } = await svc.getAnalytics(LISTING, p(OTHER, 'MODERATOR'));
+      expect(analytics.listingId).toBe(LISTING);
     });
   });
 });

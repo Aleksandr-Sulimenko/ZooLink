@@ -340,6 +340,110 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }   # submit guard failed (no photo / price<min for sale / required fields)
         '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
+  # ── (round-N, нормативно — Impl-волна C / Q3) ──────────────────────────────────────────────────
+  # WHAT: добавлены `POST /listings/{id}/contact-reveal` и `POST /listings/{id}/mark-sold` в контракт
+  #   плюс схема `ContactRevealResult`. Оба действия уже нормативны в спеках (contact-exchange спека 16;
+  #   listing_state_machine ACTIVE→SOLD) и уже имели таблицы (`contact_reveals`, `listings.sold_at`),
+  #   но эндпоинтов в контракте не было — «связаться с продавцом» и «отметить проданным» не имели HTTP-
+  #   поверхности (CRITICAL-разрывы).
+  # WHY: путь покупателя обрывался на «связаться с продавцом» без механизма, а `sold_at` был объявлен,
+  #   но никогда не записывался — контракт был недостающим звеном между схемой/спекой и кодом.
+  # WHY-BETTER: закрывает два блокирующих разрыва к апекс-требованию (работающий маркетплейс) ничего не
+  #   выдумывая — reveal с пер-маркет rate-limit (сплит ADR-0002, минимизация данных ФЗ-152), контакт-PII
+  #   расшифровывается только на reveal (ADR-0019), SOLD не связан с передачей владения (ADR-0013).
+  #   Обмен контактами остаётся без чата (ADR-0005).
+  /listings/{id}/contact-reveal:
+    post:
+      summary: Раскрыть контактные каналы продавца для ACTIVE-объявления (MVP, без чата)
+      operationId: revealListingContact
+      description: >
+        MVP-обмен контактами (без чата — ADR-0005, спека 16). **Аутентифицированный** покупатель
+        запрашивает публичные контактные каналы продавца для **ACTIVE**-объявления. Возвращаются только
+        каналы, включённые продавцом в `contact_prefs` (`phone` при `show_phone`, `telegram` при
+        `show_telegram`) — никогда email и ничего иного. Каждый reveal логируется в `contact_reveals`
+        (аудит + статистика владельца + детекция злоупотреблений) и эмитит `ContactReveal.Created`.
+        **Гейтинг:** аутентификация; объявление ACTIVE (иначе 404, без утечки существования); вызывающий
+        ≠ продавец (self-reveal → 422). **Rate-limit (анти-скрейпинг, минимизация данных ФЗ-152):** пер
+        маркет, пер пользователь, пер час — **pet 10/ч, livestock 5/ч** — ключ по viewer id в Redis;
+        превышение → 429 с `Retry-After`. `contact_phone` хранится зашифрованным (ADR-0019) и
+        расшифровывается только здесь. Идемпотентно под Idempotency-Key (реплей возвращает закэшированный
+        reveal и не расходует квоту).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, format: uuid }
+          description: Клиентский ключ безопасного ретрая (§11); реплей не расходует квоту
+      responses:
+        '200':
+          description: Контактные каналы продавца раскрыты (reveal залогирован)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactRevealResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # не найдено ИЛИ не ACTIVE (без утечки)
+        '422': { $ref: '#/components/responses/Problem' }   # self-reveal (SELF_REVEAL)
+        '429':
+          description: Превышен rate-limit reveal для этого маркета (pet 10/ч, livestock 5/ч)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Секунд до сброса часового окна
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/mark-sold:
+    post:
+      summary: Отметить ACTIVE-объявление как SOLD (действие владельца, MVP)
+      operationId: markListingSold
+      description: >
+        Владелец отмечает **ACTIVE**-объявление проданным (listing_state_machine ACTIVE → SOLD, MVP).
+        Ставит `soldAt=now`, убирает из публичного поиска (`isActive=false`) и эмитит `Listing.Sold`.
+        **Отметка SOLD НЕ инициирует передачу владения автоматически** — передача это отдельный явный
+        поток, инициируемый владельцем (ADR-0013); авто-передача-на-SOLD это Фаза 2. Объектное правило:
+        только продавец или org-admin (MODERATOR исключён, R-only). Guarded ACTIVE→SOLD переход с одним
+        победителем; повтор по уже-SOLD/терминальному объявлению → 409 `LISTING_NOT_ACTIVE`. If-Match
+        защищает от действия по устаревшему виду; идемпотентно под Idempotency-Key.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, format: uuid }
+          description: Клиентский ключ безопасного ретрая (§11)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag из предыдущего GET /listings/{id} (§10)
+      responses:
+        '200':
+          description: Объявление отмечено SOLD
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Новый weak-валидатор после перехода
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # не продавец / org-admin
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # не ACTIVE (LISTING_NOT_ACTIVE)
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (несовпадение If-Match)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match отсутствует
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos:
     get:
       summary: Получить фото объявления
@@ -889,6 +993,42 @@ components:
         contactReveals:
           type: integer
           description: Показы контактов за этот день
+    ContactRevealResult:
+      type: object
+      description: >
+        Результат reveal контакта (спека 16, MVP без чата). Содержит только каналы, включённые
+        продавцом — `phone` при `show_phone`, `telegram` при `show_telegram`; выключенный или незаданный
+        канал отсутствует. Никогда не включает email. `sellerName` это публичное отображаемое имя.
+      required: [listingId, sellerId, channels, revealedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Объявление, для которого раскрыт контакт
+        sellerId:
+          type: string
+          format: uuid
+          description: Продавец, чей контакт раскрыт
+        sellerName:
+          type: string
+          nullable: true
+          description: Публичное отображаемое имя продавца (не более отображаемой идентичности)
+        channels:
+          type: object
+          description: Только каналы, включённые продавцом в `contact_prefs`
+          properties:
+            phone:
+              type: string
+              nullable: true
+              description: Телефон продавца (расшифрован на reveal; только при `show_phone` и заданном)
+            telegram:
+              type: string
+              nullable: true
+              description: Telegram-хэндл продавца (только при `show_telegram` и заданном)
+        revealedAt:
+          type: string
+          format: date-time
+          description: Когда reveal был залогирован
     ListingAnalytics:
       type: object
       description: >
@@ -903,7 +1043,12 @@ components:
           description: Объявление, которое описывает снимок
         views:
           type: integer
-          description: Сколько раз объявление показано/просмотрено (BR `view_count`)
+          description: >
+            Сколько раз объявление показано/просмотрено (BR `view_count`). ЗАМЕЧАНИЕ (Impl-волна C):
+            источника захвата просмотров пока нет (нет колонки `listings.view_count`, нет события
+            `Listing.Viewed` — GAP-TRACE-006), поэтому MVP возвращает `0`. Захват просмотров (durable
+            колонка vs. event-sourced) — отслеживаемый follow-up для architect/data-analyst; форма поля
+            финальна и стабильна.
         contactReveals:
           type: integer
           description: Всего показов контактов (BR `contact_shown_count`; источник — `contact_reveals`)

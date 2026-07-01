@@ -340,6 +340,109 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }   # submit guard failed (no photo / price<min for sale / required fields)
         '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
         '500': { $ref: '#/components/responses/Problem' }
+  # ── (round-N, normative — Impl-wave C / Q3) ────────────────────────────────────────────────────
+  # WHAT: added `POST /listings/{id}/contact-reveal` and `POST /listings/{id}/mark-sold` to the
+  #   OpenAPI contract, plus the `ContactRevealResult` schema. Both actions were already normative in
+  #   the specs (contact-exchange spec 16; listing_state_machine ACTIVE→SOLD) and the schema already
+  #   had the backing tables (`contact_reveals`, `listings.sold_at`) — but neither endpoint existed in
+  #   this contract, so the seam "reach the seller" and "mark sold" had no HTTP surface (CRITICAL gaps).
+  # WHY: the buyer journey ended at "contact seller" with no mechanism, and `sold_at` was declared but
+  #   never written — the contract was the missing link between validated schema/spec and code.
+  # WHY-BETTER: closes two build-blocking contract gaps toward the apex business requirement (a working
+  #   marketplace) without inventing anything new — reveal is per-market rate-limited (ADR-0002 split,
+  #   ФЗ-152 data-minimisation), contact PII is decrypted only at reveal (ADR-0019), and SOLD stays
+  #   decoupled from ownership transfer (ADR-0013). Contact-exchange remains chat-free (ADR-0005).
+  /listings/{id}/contact-reveal:
+    post:
+      summary: Reveal the seller's contact channels for an ACTIVE listing (MVP, no chat)
+      operationId: revealListingContact
+      description: >
+        MVP contact exchange (no chat — ADR-0005, spec 16). An **authenticated** buyer requests the
+        seller's shareable contact channels for an **ACTIVE** listing. Returns only the channels the
+        seller enabled in `contact_prefs` (`phone` if `show_phone`, `telegram` if `show_telegram`) —
+        never email or anything else. Every reveal is logged in `contact_reveals` (audit + owner
+        statistics + abuse detection) and emits `ContactReveal.Created`. **Gating:** authenticated;
+        listing must be ACTIVE (else 404, no existence leak); caller ≠ seller (self-reveal → 422).
+        **Rate limit (anti-scraping, ФЗ-152 data-minimisation):** per market, per user, per hour —
+        **pet 10/h, livestock 5/h** — keyed by viewer id in Redis; exceeding → 429 with `Retry-After`.
+        `contact_phone` is stored field-encrypted (ADR-0019) and decrypted only here. Idempotent under
+        Idempotency-Key (a replay returns the cached reveal and does not consume rate-limit quota).
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (§11); a replay does not consume quota
+      responses:
+        '200':
+          description: Seller contact channels revealed (and the reveal logged)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactRevealResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }   # not found OR not ACTIVE (no existence leak)
+        '422': { $ref: '#/components/responses/Problem' }   # self-reveal (SELF_REVEAL)
+        '429':
+          description: Reveal rate limit exceeded for this market (pet 10/h, livestock 5/h)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the hourly window resets
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/mark-sold:
+    post:
+      summary: Mark an ACTIVE listing as SOLD (owner action, MVP)
+      operationId: markListingSold
+      description: >
+        Owner marks an **ACTIVE** listing sold (listing_state_machine ACTIVE → SOLD, MVP). Sets
+        `soldAt=now`, removes it from public search (`isActive=false`), and emits `Listing.Sold`.
+        **Marking SOLD does NOT auto-initiate ownership transfer** — transfer is a separate, explicit
+        owner-initiated flow (ADR-0013); auto-transfer-on-SOLD is Фаза 2. Object-level rule: seller or
+        org-admin only (MODERATOR excluded, R-only). Guarded ACTIVE→SOLD single-winner transition; a
+        repeat on an already-SOLD/terminal listing → 409 `LISTING_NOT_ACTIVE`. If-Match guards against
+        acting on a stale view; idempotent under Idempotency-Key.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (§11)
+        - in: header
+          name: If-Match
+          required: true
+          schema: { type: string }
+          description: ETag from a prior GET /listings/{id} (§10)
+      responses:
+        '200':
+          description: Listing marked SOLD
+          headers:
+            ETag:
+              schema: { type: string }
+              description: New weak validator after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Listing' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # not the seller / org-admin
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }   # not ACTIVE (LISTING_NOT_ACTIVE)
+        '412': { $ref: '#/components/responses/Problem' }   # STALE_RESOURCE (If-Match mismatch)
+        '428': { $ref: '#/components/responses/Problem' }   # If-Match missing
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos:
     get:
       summary: Get photos for a listing
@@ -889,6 +992,42 @@ components:
         contactReveals:
           type: integer
           description: Contact reveals on this day
+    ContactRevealResult:
+      type: object
+      description: >
+        Result of a contact reveal (spec 16, no-chat MVP). Carries only the seller-enabled channels —
+        `phone` when the seller has `show_phone`, `telegram` when `show_telegram`; a disabled or unset
+        channel is absent. Never includes email. `sellerName` is the seller's public display name.
+      required: [listingId, sellerId, channels, revealedAt]
+      properties:
+        listingId:
+          type: string
+          format: uuid
+          description: Listing the contact was revealed for
+        sellerId:
+          type: string
+          format: uuid
+          description: Seller whose contact was revealed
+        sellerName:
+          type: string
+          nullable: true
+          description: Seller's public display name (never more than the display identity)
+        channels:
+          type: object
+          description: Only the channels the seller enabled in `contact_prefs`
+          properties:
+            phone:
+              type: string
+              nullable: true
+              description: Seller phone (decrypted at reveal; present only if `show_phone` and set)
+            telegram:
+              type: string
+              nullable: true
+              description: Seller Telegram handle (present only if `show_telegram` and set)
+        revealedAt:
+          type: string
+          format: date-time
+          description: When this reveal was logged
     ListingAnalytics:
       type: object
       description: >
@@ -902,7 +1041,11 @@ components:
           description: Listing this snapshot describes
         views:
           type: integer
-          description: Total times the listing appeared/was viewed (BR `view_count`)
+          description: >
+            Total times the listing appeared/was viewed (BR `view_count`). NOTE (Impl-wave C): there is
+            no page-view capture source yet (no `listings.view_count` column, no `Listing.Viewed` event
+            — GAP-TRACE-006), so MVP returns `0`. Capturing views (durable column vs. event-sourced)
+            is a tracked follow-up for architect/data-analyst; the field shape is final and stable.
         contactReveals:
           type: integer
           description: Total contact reveals (BR `contact_shown_count`; sourced from `contact_reveals`)

@@ -24,7 +24,9 @@ import { IdempotencyInterceptor } from '../../lib/http/idempotency.interceptor';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import { ListingService } from './listing.service';
 import {
+  type ContactRevealView,
   ListingCreateDto,
+  type ListingAnalyticsView,
   ListingListQueryDto,
   ListingPhotoCreateDto,
   type ListingPhotoView,
@@ -34,6 +36,10 @@ import {
 
 /** Roles permitted to WRITE a listing (listings-api.yaml x-required-roles; MODERATOR dropped — L-3). */
 const WRITE_ROLES = ['USER', 'BREEDER', 'FARMER', 'ADMIN'] as const;
+/** Any authenticated principal may request a contact reveal as a buyer (contact-reveal x-required-roles). */
+const REVEAL_ROLES = ['USER', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER', 'MODERATOR', 'ADMIN'] as const;
+/** Roles permitted to read seller-owned analytics (analytics x-required-roles). */
+const ANALYTICS_ROLES = ['USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN'] as const;
 
 /**
  * Listing aggregate CRUD + owner-side lifecycle (listings-api.yaml Slice 1) under /v1/listings.
@@ -126,6 +132,48 @@ export class ListingController {
     const { listing, etag } = await this.service.submit(id, ifMatch, actor);
     res.setHeader('ETag', etag);
     return listing;
+  }
+
+  @Post(':id/contact-reveal')
+  @Roles(...REVEAL_ROLES)
+  @HttpCode(200)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiOperation({ summary: 'Reveal seller contact for an ACTIVE listing (per-market rate-limited; MVP no-chat)' })
+  revealContact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthPrincipal,
+  ): Promise<ContactRevealView> {
+    return this.service.revealContact(id, actor);
+  }
+
+  @Post(':id/mark-sold')
+  @Roles(...WRITE_ROLES)
+  @HttpCode(200)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiOperation({ summary: 'Mark an ACTIVE listing SOLD (owner; If-Match required; no auto-transfer — ADR-0013)' })
+  async markSold(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('if-match') ifMatch: string | undefined,
+    @CurrentUser() actor: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ListingView> {
+    const { listing, etag } = await this.service.markSold(id, ifMatch, actor);
+    res.setHeader('ETag', etag);
+    return listing;
+  }
+
+  @Get(':id/analytics')
+  @Roles(...ANALYTICS_ROLES)
+  @ApiOperation({ summary: 'Get per-listing analytics (seller/operator; contactReveals sourced; views 0 in MVP)' })
+  async getAnalytics(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ListingAnalyticsView> {
+    const { analytics, etag } = await this.service.getAnalytics(id, actor);
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=30');
+    return analytics;
   }
 
   @Get(':id/photos')

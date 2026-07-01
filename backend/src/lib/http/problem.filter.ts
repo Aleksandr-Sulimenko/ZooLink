@@ -50,6 +50,15 @@ export class ProblemExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const response = exception.getResponse();
       this.applyHttpExceptionBody(problem, response);
+      // Retry-After header (§8): a thrown HttpException may carry a numeric `retryAfter` (seconds) —
+      // e.g. a per-market contact-reveal rate limit. Surface it as the header (kept out of the JSON
+      // body). The header persists because this filter never strips previously-set headers.
+      if (typeof response === 'object' && response !== null) {
+        const retryAfter = (response as Record<string, unknown>).retryAfter;
+        if (typeof retryAfter === 'number' && Number.isFinite(retryAfter)) {
+          res.setHeader('Retry-After', String(Math.max(0, Math.ceil(retryAfter))));
+        }
+      }
     } else if (exception instanceof ProviderError) {
       // External provider failed. Log the (possibly sensitive) detail server-side only and
       // return a generic 503 UPSTREAM_UNAVAILABLE — never echo the upstream message/body.

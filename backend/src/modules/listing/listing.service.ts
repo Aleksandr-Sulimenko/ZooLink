@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,12 +13,17 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { OrgMembershipService } from '../../lib/org/org-membership.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
+import { OutboxService } from '../../lib/outbox/outbox.service';
+import { RedisService } from '../../lib/redis/redis.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import { ModerationService } from '../moderation/moderation.service';
 import { AnimalService } from '../animal/animal.service';
 import {
+  type ContactRevealView,
+  type ListingAnalyticsView,
   type ListingCreateDto,
   type ListingListQueryDto,
   type ListingPhotoCreateDto,
@@ -25,6 +32,7 @@ import {
   type ListingUpdateDto,
   type ListingView,
   type LocalizedString,
+  type Market,
 } from './dto/listing.dto';
 
 /** MAX_MEDIA_ITEMS (listing_state_machine.md constants) — L-14. */
@@ -33,6 +41,14 @@ const MAX_MEDIA_ITEMS = 10;
 const MIN_LISTING_PRICE = 0;
 /** States from which an owner soft-withdraw is allowed (L-8); terminal states reject with 409. */
 const WITHDRAWABLE: ReadonlySet<ListingStatus> = new Set(['DRAFT', 'PENDING_MODERATION', 'ACTIVE']);
+
+// ── Contact-reveal rate limit (spec 16 §"Rate limiting"; ADR-0002 per-market, ФЗ-152 minimisation) ──
+/** Reveals per hour per viewer on the pet marketplace. */
+const PET_REVEAL_LIMIT_PER_HOUR = 10;
+/** Reveals per hour per viewer on the livestock marketplace (stricter — higher-value/lower-volume). */
+const LIVESTOCK_REVEAL_LIMIT_PER_HOUR = 5;
+/** The rolling window (seconds) for the reveal counter — a fixed hour from the first reveal. */
+const CONTACT_REVEAL_WINDOW_SEC = 3600;
 
 // ── Geo search constants (Slice 2; geo-spec 07-geo-search-service.md §137–153) ─────────────────
 const EARTH_RADIUS_M = 6_371_000;
@@ -105,6 +121,9 @@ export class ListingService {
     private readonly moderation: ModerationService,
     private readonly orgMembership: OrgMembershipService,
     private readonly animals: AnimalService, // ADR-0018: cross-aggregate animal access via AnimalService
+    private readonly crypto: CryptoService, // ADR-0019: decrypt contact_phone at reveal
+    private readonly outbox: OutboxService, // transactional event emission (ContactReveal.Created / Listing.Sold)
+    private readonly redis: RedisService, // per-market contact-reveal rate limit
   ) {}
 
   // ── Create (→ DRAFT) ─────────────────────────────────────────────────────────────────────────
@@ -411,6 +430,204 @@ export class ListingService {
 
     this.logger.log(`Listing withdrawn ${id} (DEACTIVATED) by ${actor.userId}`);
     return this.toView(row);
+  }
+
+  // ── Contact reveal (MVP, no chat — ADR-0005 / spec 16) ───────────────────────────────────────
+  /**
+   * Reveal the seller's enabled contact channels for an ACTIVE listing (spec 16). Gating: listing
+   * ACTIVE (else 404, no existence leak); caller ≠ seller (self-reveal → 422). Per-market, per-viewer,
+   * per-hour Redis rate limit (pet 10/h, livestock 5/h) — the counter is the gate (over-limit → 429
+   * with Retry-After, nothing logged). `contact_phone` is decrypted here (ADR-0019). The reveal row +
+   * `ContactReveal.Created` are written in ONE transaction (outbox atomicity). Only the seller-enabled
+   * channels (`contact_prefs`) are returned — never email.
+   */
+  async revealContact(id: string, actor: AuthPrincipal): Promise<ContactRevealView> {
+    const listing = await this.findRow(id);
+    // Only an ACTIVE listing exposes contact. A non-ACTIVE listing → 404 (IDOR-safe, mirrors L-5).
+    if (listing.status !== 'ACTIVE') {
+      throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
+    }
+    // Self-reveal is a business no-op (you already hold your own contact) — not an authz leak.
+    if (listing.seller_id === actor.userId) {
+      throw new UnprocessableEntityException({ message: 'You cannot reveal your own contact', code: 'SELF_REVEAL' });
+    }
+
+    const market = await this.marketOf(listing.animal_id);
+    // Rate-limit gate BEFORE any reveal write — a rejected precondition above never consumes quota.
+    await this.enforceRevealRateLimit(actor.userId, market);
+
+    const seller = await this.prisma.users.findUnique({
+      where: { id: listing.seller_id },
+      select: { full_name: true, contact_phone: true, contact_telegram: true, contact_prefs: true },
+    });
+    if (!seller) {
+      // The FK guarantees a seller; defensive (treat as not-found, no leak).
+      throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
+    }
+
+    const prefs = (seller.contact_prefs ?? {}) as { show_phone?: boolean; show_telegram?: boolean };
+    const channels: { phone?: string; telegram?: string } = {};
+    if (prefs.show_phone) {
+      const phone = this.crypto.decrypt(seller.contact_phone); // ADR-0019: decrypt at reveal only
+      if (phone) channels.phone = phone;
+    }
+    if (prefs.show_telegram && seller.contact_telegram) {
+      channels.telegram = seller.contact_telegram;
+    }
+
+    const revealedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contact_reveals.create({
+        data: { listing_id: id, viewer_id: actor.userId, seller_id: listing.seller_id, created_at: revealedAt },
+      });
+      await this.outbox.publish(tx, {
+        aggregateType: 'Listing',
+        aggregateId: id,
+        eventType: 'ContactReveal.Created',
+        schemaVersion: 1,
+        market,
+        occurredAt: revealedAt,
+        payload: { listingId: id, viewerId: actor.userId, sellerId: listing.seller_id },
+      });
+    });
+
+    this.logger.log(`Contact revealed for listing ${id} to ${actor.userId} (${market ?? 'unknown'} market)`);
+    return {
+      listingId: id,
+      sellerId: listing.seller_id,
+      sellerName: seller.full_name ?? null,
+      channels,
+      revealedAt,
+    };
+  }
+
+  /**
+   * Per-market, per-viewer, per-hour reveal rate limit (spec 16). Redis INCR is the gate: the first
+   * hit sets the hour TTL, and count > limit rejects with 429 + Retry-After (from the key's TTL). The
+   * window is fixed (an hour from the first reveal), not sliding.
+   */
+  private async enforceRevealRateLimit(viewerId: string, market: Market | null): Promise<void> {
+    const limit = market === 'livestock' ? LIVESTOCK_REVEAL_LIMIT_PER_HOUR : PET_REVEAL_LIMIT_PER_HOUR;
+    const key = `contact-reveal:${market ?? 'pet'}:${viewerId}`;
+    const count = await this.redis.client.incr(key);
+    if (count === 1) {
+      await this.redis.client.expire(key, CONTACT_REVEAL_WINDOW_SEC);
+    }
+    if (count > limit) {
+      const ttl = await this.redis.client.ttl(key);
+      const retryAfter = ttl > 0 ? ttl : CONTACT_REVEAL_WINDOW_SEC;
+      throw new HttpException(
+        {
+          message: `Contact reveal limit reached (${limit}/hour for the ${market ?? 'pet'} marketplace)`,
+          code: 'RATE_LIMITED',
+          retryAfter,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  // ── Mark sold (owner action, MVP — ACTIVE → SOLD; listing_state_machine) ──────────────────────
+  /**
+   * Owner marks an ACTIVE listing sold (state machine ACTIVE→SOLD, MVP). Sets `sold_at`, removes it
+   * from public search (`is_active=false`), emits `Listing.Sold`. **Does NOT auto-initiate ownership
+   * transfer** (ADR-0013 — transfer is a separate explicit flow; auto-transfer-on-SOLD is Фаза 2).
+   * Object-level rule: seller/org-admin/ADMIN (MODERATOR excluded). The ACTIVE→SOLD flip is a guarded
+   * conditional updateMany (TOCTOU single-winner) so a concurrent withdraw/edit/mark-sold has exactly
+   * one winner — a repeat on an already-SOLD/terminal listing loses the race → 409 LISTING_NOT_ACTIVE.
+   */
+  async markSold(id: string, ifMatch: string | undefined, actor: AuthPrincipal): Promise<{ listing: ListingView; etag: string }> {
+    const existing = await this.findRow(id);
+    await this.assertCanMutate(actor, existing); // L-3 (owner / org-admin / ADMIN)
+    assertIfMatch(ifMatch, this.etag(existing));
+
+    if (existing.status !== 'ACTIVE') {
+      throw new ConflictException({ message: 'Only an ACTIVE listing can be marked sold', code: 'LISTING_NOT_ACTIVE' });
+    }
+
+    const market = await this.marketOf(existing.animal_id);
+    const soldAt = new Date();
+    const row = await this.runWrite(() =>
+      this.prisma.$transaction(async (tx) => {
+        const claim = await tx.listings.updateMany({
+          where: { id, status: 'ACTIVE' },
+          data: { status: 'SOLD', sold_at: soldAt, is_active: false, updated_at: soldAt },
+        });
+        if (claim.count !== 1) {
+          // Lost the race (already left ACTIVE) — roll back, write nothing.
+          throw new ConflictException({ message: 'Only an ACTIVE listing can be marked sold', code: 'LISTING_NOT_ACTIVE' });
+        }
+        await this.audit.record(
+          {
+            actorId: actor.userId,
+            actorRole: actor.role,
+            actorPrincipalType: actor.principalType,
+            action: 'listing.marked_sold',
+            entityType: 'listing',
+            entityId: id,
+            beforeData: { status: 'ACTIVE' },
+            afterData: { status: 'SOLD', soldAt: soldAt.toISOString() },
+          },
+          tx,
+        );
+        // ADR-0013: SOLD does NOT initiate ownership transfer — no transfer side effect here.
+        await this.outbox.publish(tx, {
+          aggregateType: 'Listing',
+          aggregateId: id,
+          eventType: 'Listing.Sold',
+          schemaVersion: 1,
+          market,
+          occurredAt: soldAt,
+          payload: { listingId: id, sellerId: existing.seller_id },
+        });
+        return (await tx.listings.findUnique({ where: { id } })) as unknown as ListingRow;
+      }),
+    );
+
+    this.logger.log(`Listing ${id} marked SOLD by ${actor.userId}`);
+    return { listing: this.toView(row), etag: this.etag(row) };
+  }
+
+  // ── Analytics (seller-owned — listings-api ListingAnalytics) ─────────────────────────────────
+  /**
+   * Seller-facing per-listing analytics. Owner-scoped: seller, org-admin, MODERATOR, or ADMIN
+   * (canSeeNonActive's exact set); anyone else → 404 (no-leak, even for a public ACTIVE listing —
+   * analytics are private, and the contract permits 404). `contactReveals` is sourced from the now-
+   * populated `contact_reveals` table; `views` has no capture source in MVP (GAP-TRACE-006) → 0.
+   */
+  async getAnalytics(id: string, actor: AuthPrincipal): Promise<{ analytics: ListingAnalyticsView; etag: string }> {
+    const row = await this.findRow(id);
+    if (!(await this.canSeeNonActive(actor, row))) {
+      throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
+    }
+    const [contactReveals, latest] = await Promise.all([
+      this.prisma.contact_reveals.count({ where: { listing_id: id } }),
+      this.prisma.contact_reveals.findFirst({
+        where: { listing_id: id },
+        orderBy: { created_at: 'desc' },
+        select: { created_at: true },
+      }),
+    ]);
+    const lastActivityAt = latest?.created_at ?? null;
+    const analytics: ListingAnalyticsView = {
+      listingId: id,
+      // FLAG (GAP-TRACE-006): no page-view capture source in MVP (no listings.view_count column, no
+      // Listing.Viewed event) → 0. Capturing views (durable column vs event-sourced) is a tracked
+      // follow-up for architect/data-analyst; contactReveals below is the real, sourced count.
+      views: 0,
+      contactReveals,
+      lastActivityAt,
+    };
+    const etag = weakEtag(`analytics:${id}`, lastActivityAt ?? row.updated_at);
+    return { analytics, etag };
+  }
+
+  /** The market (ADR-0002) of a listing via its animal's species, or null if unresolved. */
+  private async marketOf(animalId: string): Promise<Market | null> {
+    const rows = await this.prisma.$queryRaw<{ market: string }[]>`
+      SELECT s.market FROM animals a JOIN species s ON s.id = a.species_id WHERE a.id = ${animalId}::uuid`;
+    const m = rows[0]?.market;
+    return m === 'pet' || m === 'livestock' ? m : null;
   }
 
   // ── List & search (Slice 1 filters + Slice 2 market/geo/species/breed/sort) ──────────────────
