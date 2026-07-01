@@ -18,7 +18,11 @@ export interface UserProfile {
 
 const INACTIVE = new Set(['SUSPENDED', 'DEACTIVATED']);
 
-export function toUserProfile(u: users): UserProfile {
+/**
+ * @param email the DECRYPTED account email (ADR-0019: `u.email` is AES-256-GCM ciphertext at rest —
+ *   callers pass `crypto.decrypt(u.email)` so this projection never leaks ciphertext).
+ */
+export function toUserProfile(u: users, email: string | null): UserProfile {
   return {
     id: u.id,
     fullName: u.full_name,
@@ -26,7 +30,7 @@ export function toUserProfile(u: users): UserProfile {
     status: u.status,
     isActive: !INACTIVE.has(u.status), // derived from status (round-4)
     cityId: u.city_id,
-    email: u.email,
+    email,
     emailVerified: u.email_verified ?? false,
     avatarUrl: u.avatar_url,
     preferredLanguage: u.preferred_language,

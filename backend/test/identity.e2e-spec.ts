@@ -17,11 +17,13 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { SMS_PROVIDER, EMAIL_PROVIDER } from '../src/lib/providers';
 import type { SmsMessage, SmsSendResult, EmailMessage, EmailSendResult } from '../src/lib/providers';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { CryptoService } from '../src/lib/crypto/crypto.service';
 import { resetThrottle } from './throttle-reset.util';
 
 describe('Identity phone OTP (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let crypto: CryptoService;
   const sentCodes: string[] = [];
   const sentEmailCodes: string[] = [];
   const phone = `+7999${Math.floor(1000000 + Math.random() * 8999999)}`;
@@ -59,6 +61,7 @@ describe('Identity phone OTP (e2e)', () => {
     await app.init();
     await resetThrottle(app);
     prisma = app.get(PrismaService);
+    crypto = app.get(CryptoService);
   });
 
   afterAll(async () => {
@@ -213,7 +216,10 @@ describe('Identity phone OTP (e2e)', () => {
     const u = await prisma.users.create({
       data: {
         full_name: 'Recover Me',
-        email: recoverEmail,
+        // ADR-0019: a directly-seeded account must mirror the write path — ciphertext + blind index,
+        // otherwise the blind-index recovery lookup can't find it.
+        email: crypto.encrypt(recoverEmail),
+        email_bidx: crypto.emailBlindIndex(recoverEmail),
         email_verified: true,
         role: 'USER',
         principal_type: 'HUMAN',

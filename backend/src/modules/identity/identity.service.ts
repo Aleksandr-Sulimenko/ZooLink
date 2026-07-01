@@ -14,6 +14,7 @@ import { PrismaService } from '../../lib/db/prisma.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { SMS_PROVIDER, type SmsProvider } from '../../lib/providers';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principal';
 import { AuthService, type TokenPair } from '../auth/auth.service';
 import { OtpService, OtpCooldownError } from './otp.service';
@@ -57,6 +58,7 @@ export class IdentityService {
     private readonly auth: AuthService,
     private readonly audit: AuditLogService,
     private readonly oauth: OAuthRegistry,
+    private readonly crypto: CryptoService,
     @Inject(SMS_PROVIDER) private readonly sms: SmsProvider,
   ) {}
 
@@ -90,7 +92,9 @@ export class IdentityService {
             phone_hash: ph,
             full_name: dto.fullName,
             city_id: dto.cityId ?? null,
-            email: dto.email ?? null,
+            // ADR-0019: email stored as ciphertext + a deterministic blind index for lookup.
+            email: this.crypto.encrypt(dto.email ?? null),
+            email_bidx: dto.email ? this.crypto.emailBlindIndex(dto.email) : null,
             avatar_url: dto.avatarUrl ?? null,
             preferred_language: dto.preferredLanguage ?? 'ru',
             role: 'USER',
@@ -169,7 +173,7 @@ export class IdentityService {
     };
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`Phone verified, account ACTIVE: ${activated.id}`);
-    return { ...tokens, user: toUserProfile(activated) };
+    return { ...tokens, user: toUserProfile(activated, this.crypto.decrypt(activated.email)) };
   }
 
   /**
@@ -198,12 +202,15 @@ export class IdentityService {
     let isNew = false;
 
     if (!user) {
+      const emailVal = identity.email ?? dto.email ?? null;
       try {
         user = await this.prisma.users.create({
           data: {
             ...filter,
             full_name: identity.fullName ?? dto.fullName,
-            email: identity.email ?? dto.email ?? null,
+            // ADR-0019: ciphertext + blind index.
+            email: this.crypto.encrypt(emailVal),
+            email_bidx: emailVal ? this.crypto.emailBlindIndex(emailVal) : null,
             email_verified: identity.emailVerified ?? false,
             avatar_url: identity.avatarUrl ?? dto.avatarUrl ?? null,
             city_id: dto.cityId ?? null,
@@ -256,7 +263,7 @@ export class IdentityService {
     };
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`OAuth ${provider.name} ${isNew ? 'register' : 'login'}: ${user.id}`);
-    return { response: { ...tokens, user: toUserProfile(user) }, isNew };
+    return { response: { ...tokens, user: toUserProfile(user, this.crypto.decrypt(user.email)) }, isNew };
   }
 
   private async sendOtp(ph: string, language: string, phoneE164: string): Promise<number> {

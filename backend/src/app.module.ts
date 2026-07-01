@@ -7,6 +7,7 @@ import { RateLimitModule } from './lib/rate-limit/rate-limit.module';
 import { MetricsModule } from './lib/metrics/metrics.module';
 import { ProvidersModule } from './lib/providers/providers.module';
 import { AuditModule } from './lib/audit/audit.module';
+import { CryptoModule } from './lib/crypto/crypto.module';
 import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module';
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { OrgMembershipModule } from './lib/org/org-membership.module';
@@ -35,6 +36,7 @@ import { HealthModule } from './health/health.module';
     MetricsModule,
     ProvidersModule,
     AuditModule,
+    CryptoModule,
     FeatureToggleModule,
     OutboxModule,
     OrgMembershipModule,

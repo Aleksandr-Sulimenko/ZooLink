@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { AdminUserService } from './admin-user.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AppConfigService } from '../../config/app-config.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
@@ -48,9 +49,10 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const audit = { record } as unknown as AuditLogService;
   const logout = jest.fn().mockResolvedValue(undefined);
   const auth = { logout } as unknown as AuthService;
+  const crypto = new CryptoService(config);
   return {
-    svc: new AdminUserService(prisma, config, audit, auth),
-    findUnique, update, findMany, count, updateMany, txUpdate, $transaction, record, logout,
+    svc: new AdminUserService(prisma, config, audit, auth, crypto),
+    findUnique, update, findMany, count, updateMany, txUpdate, $transaction, record, logout, crypto,
   };
 }
 
@@ -149,15 +151,17 @@ describe('AdminUserService.listWithRoles', () => {
     expect(item).not.toHaveProperty('oauth_google_id');
   });
 
-  it('passes role/isActive filters and an ILIKE name/email search to Prisma', async () => {
-    const { svc, findMany, count } = setup();
+  it('passes role/isActive filters and a name-ILIKE / email-blind-index search to Prisma (ADR-0019)', async () => {
+    const { svc, findMany, count, crypto } = setup();
     await svc.listWithRoles({ page: 2, limit: 10, skip: 10, role: 'MODERATOR', isActive: false, search: 'ann' });
     const expectedWhere = {
       role: 'MODERATOR',
       is_active: false,
       OR: [
         { full_name: { contains: 'ann', mode: 'insensitive' } },
-        { email: { contains: 'ann', mode: 'insensitive' } },
+        // ADR-0019: email is ciphertext → substring match is impossible; email search is EXACT via the
+        // deterministic blind index (full_name stays substring). Same normalisation as write/lookup.
+        { email_bidx: crypto.emailBlindIndex('ann') },
       ],
     };
     expect(findMany).toHaveBeenCalledWith(
@@ -182,6 +186,7 @@ describe('AdminUserService.erase', () => {
         data: expect.objectContaining({
           phone_hash: null,
           email: null,
+          email_bidx: null, // ADR-0019: blind index cleared on erase
           full_name: '[deleted]',
           oauth_google_id: null,
           contact_phone: null,

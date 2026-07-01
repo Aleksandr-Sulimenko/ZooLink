@@ -1,5 +1,6 @@
 import { ForbiddenException, HttpException } from '@nestjs/common';
 import { RecoveryService } from './recovery.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import { OtpCooldownError, type OtpVerifyResult } from './otp.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AppConfigService } from '../../config/app-config.service';
@@ -47,7 +48,7 @@ function setup(opts: {
   const sendEmail = jest.fn().mockResolvedValue({ accepted: true, providerMessageId: null });
   const email = { sendEmail } as unknown as EmailProvider;
   return {
-    svc: new RecoveryService(prisma, config, otp, auth, audit, email),
+    svc: new RecoveryService(prisma, config, otp, auth, audit, new CryptoService(config), email),
     findFirst, update, issue, verify, issueSession, record, sendEmail,
   };
 }

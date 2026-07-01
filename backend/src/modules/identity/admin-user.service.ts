@@ -9,6 +9,7 @@ import { Prisma, type users } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import { AuthService } from '../auth/auth.service';
 import type { AuthPrincipal, Role } from '../../lib/auth/principal';
 import { normalizePhone, phoneHash } from './phone.util';
@@ -49,6 +50,7 @@ export class AdminUserService {
     private readonly config: AppConfigService,
     private readonly audit: AuditLogService,
     private readonly auth: AuthService,
+    private readonly crypto: CryptoService,
   ) {}
 
   /**
@@ -63,9 +65,12 @@ export class AdminUserService {
     if (query.isActive !== undefined) where.is_active = query.isActive;
     if (query.search) {
       const contains = query.search;
+      // ADR-0019: email is ciphertext at rest, so a substring ILIKE is impossible — email matching
+      // degrades to EXACT match via the deterministic blind index (full_name stays substring; it is a
+      // T2 column, not yet encrypted). Contract ("filter by full name or email") is preserved.
       where.OR = [
         { full_name: { contains, mode: 'insensitive' } },
-        { email: { contains, mode: 'insensitive' } },
+        { email_bidx: this.crypto.emailBlindIndex(contains) },
       ];
     }
 
@@ -86,7 +91,7 @@ export class AdminUserService {
     return {
       id: u.id,
       fullName: u.full_name,
-      email: u.email,
+      email: this.crypto.decrypt(u.email), // ADR-0019: decrypt ciphertext for the admin projection
       role: u.role as AuthPrincipal['role'],
       isActive: u.is_active,
       createdAt: u.created_at,
@@ -105,7 +110,7 @@ export class AdminUserService {
     }
     const user = await this.load(userId);
     if (user.role === dto.role) {
-      return toUserProfile(user); // no-op, no session churn
+      return toUserProfile(user, this.crypto.decrypt(user.email)); // no-op, no session churn
     }
 
     const updated = await this.prisma.users.update({ where: { id: userId }, data: { role: dto.role } });
@@ -120,7 +125,7 @@ export class AdminUserService {
       afterData: { role: dto.role },
     });
     this.logger.log(`Role changed ${user.role}→${dto.role} for ${userId} by ${actor.userId}`);
-    return toUserProfile(updated);
+    return toUserProfile(updated, this.crypto.decrypt(updated.email));
   }
 
   /**
@@ -182,7 +187,7 @@ export class AdminUserService {
       afterData: { ...auditAfter, reason: dto.reason ?? null },
     });
     this.logger.log(`Identifier rebound for ${userId} by ${actor.userId} (${String(auditAfter.identifier)})`);
-    return toUserProfile(updated);
+    return toUserProfile(updated, this.crypto.decrypt(updated.email));
   }
 
   /** ADMIN-triggered erase. Idempotent. */
@@ -209,6 +214,7 @@ export class AdminUserService {
           oauth_telegram_id: null,
           oauth_vk_id: null,
           email: null,
+          email_bidx: null, // ADR-0019: clear the blind index alongside the ciphertext (ФЗ-152 erase)
           email_verified: false,
           full_name: '[deleted]', // column is NOT NULL → tombstone (spec 01 Slice-4 reconciliation)
           avatar_url: null,

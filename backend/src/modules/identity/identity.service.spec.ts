@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdentityService } from './identity.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import { OtpCooldownError } from './otp.service';
 import { OAuthVerificationError, type OAuthProvider } from './oauth/oauth.types';
 import type { PrismaService } from '../../lib/db/prisma.service';
@@ -73,7 +74,7 @@ function setup(overrides: {
     record,
     resolve,
   };
-  return { svc: new IdentityService(prisma, config, otp, auth, audit, oauth, sms), mocks };
+  return { svc: new IdentityService(prisma, config, otp, auth, audit, oauth, new CryptoService(config), sms), mocks };
 }
 
 function prismaError(code: string): Prisma.PrismaClientKnownRequestError {

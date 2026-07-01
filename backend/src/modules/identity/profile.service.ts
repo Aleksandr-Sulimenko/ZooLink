@@ -8,6 +8,7 @@ import {
 import { Prisma, type users } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import { AuthService } from '../auth/auth.service';
 import { toUserProfile, type UserProfile } from './user-profile.util';
@@ -24,11 +25,12 @@ export class ProfileService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly auth: AuthService,
+    private readonly crypto: CryptoService,
   ) {}
 
   async getMe(userId: string): Promise<{ profile: UserProfile; etag: string }> {
     const user = await this.load(userId);
-    return { profile: toUserProfile(user), etag: this.etag(user) };
+    return { profile: toUserProfile(user, this.crypto.decrypt(user.email)), etag: this.etag(user) };
   }
 
   async updateMe(
@@ -42,12 +44,16 @@ export class ProfileService {
     const data: Prisma.usersUncheckedUpdateInput = {};
     if (dto.fullName !== undefined) data.full_name = dto.fullName;
     if (dto.cityId !== undefined) data.city_id = dto.cityId;
-    if (dto.email !== undefined) data.email = dto.email;
+    if (dto.email !== undefined) {
+      // ADR-0019: encrypt the email + (re)compute its blind index; clearing it (null) clears both.
+      data.email = this.crypto.encrypt(dto.email);
+      data.email_bidx = dto.email ? this.crypto.emailBlindIndex(dto.email) : null;
+    }
     if (dto.avatarUrl !== undefined) data.avatar_url = dto.avatarUrl;
     if (dto.preferredLanguage !== undefined) data.preferred_language = dto.preferredLanguage;
 
     if (Object.keys(data).length === 0) {
-      return { profile: toUserProfile(user), etag: this.etag(user) };
+      return { profile: toUserProfile(user, this.crypto.decrypt(user.email)), etag: this.etag(user) };
     }
 
     let updated: users;
@@ -68,7 +74,7 @@ export class ProfileService {
       entityId: userId,
       afterData: { fields: Object.keys(data) },
     });
-    return { profile: toUserProfile(updated), etag: this.etag(updated) };
+    return { profile: toUserProfile(updated, this.crypto.decrypt(updated.email)), etag: this.etag(updated) };
   }
 
   /** Soft-deactivate (recoverable for 30 days) + revoke all sessions. Idempotent. */
@@ -105,7 +111,7 @@ export class ProfileService {
     await this.audit.record({
       actorId: userId, actorRole: updated.role, action: 'identity.account_reactivated', entityType: 'user', entityId: userId,
     });
-    return toUserProfile(updated);
+    return toUserProfile(updated, this.crypto.decrypt(updated.email));
   }
 
   /**

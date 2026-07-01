@@ -123,6 +123,7 @@ export class RetentionService {
           oauth_telegram_id: null,
           oauth_vk_id: null,
           email: null,
+          email_bidx: null, // ADR-0019: clear the blind index alongside the ciphertext (ФЗ-152 erase)
           email_verified: false,
           full_name: '[deleted]', // column is NOT NULL → tombstone (spec 01 Slice-4)
           avatar_url: null,

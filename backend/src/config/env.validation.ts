@@ -32,6 +32,15 @@ export const envSchema = z.object({
   // (spec 01 round-4). Must be long/secret; rotating it invalidates phone-based lookups.
   PHONE_HASH_PEPPER: z.string().min(32),
 
+  // PII-at-rest crypto seam (ADR-0019, enforcing ADR-0012). Two independent secrets, no default
+  // (boot-blocking, same discipline as JWT/pepper) — the KMS/СКЗИ swap-point is inside CryptoService.
+  //  - PII_DATA_KEY: source of the AES-256-GCM data key (field-encrypt email/contact_phone). Rotating
+  //    it requires a re-encrypt migration of the affected columns.
+  //  - PII_BLIND_INDEX_KEY: HMAC key for the deterministic email blind index (email_bidx). Rotating it
+  //    requires a blind-index backfill (recovery/admin-search lookups would otherwise stop matching).
+  PII_DATA_KEY: z.string().min(32),
+  PII_BLIND_INDEX_KEY: z.string().min(32),
+
   // Agent service-auth signing secret (ADR-0011 §5.2). FORM ONLY in MVP: declared and length-validated
   // (≥32) at boot, but the AGENT gate is off so no agent service token is ever issued/verified. Optional
   // in dev/test; the prod-required check is enforced by the .superRefine below (same discipline as JWT

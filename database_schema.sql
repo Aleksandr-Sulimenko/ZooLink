@@ -108,7 +108,8 @@ CREATE TABLE users (
     full_name VARCHAR(100) NOT NULL,
     city_id INTEGER REFERENCES cities(id) ON DELETE SET NULL, -- for geo-search
     avatar_url TEXT,
-    email VARCHAR(255),
+    email TEXT, -- ADR-0019: AES-256-GCM ciphertext (enc:v1: prefix) — reversible/sendable; lookup via email_bidx, NEVER this column
+    email_bidx VARCHAR(60), -- ADR-0019/ADR-0011: deterministic HMAC-SHA256 blind index over normalised (trim+lowercase) email — searchable equality lookup
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60), -- bcrypt; OPERATOR-only (ADMIN/MODERATOR) per spec 01 round-4 — end users are passwordless (phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',
@@ -139,7 +140,7 @@ CREATE INDEX idx_users_oauth_google ON users(oauth_google_id) WHERE oauth_google
 CREATE INDEX idx_users_oauth_apple ON users(oauth_apple_id) WHERE oauth_apple_id IS NOT NULL;
 CREATE INDEX idx_users_oauth_telegram ON users(oauth_telegram_id) WHERE oauth_telegram_id IS NOT NULL;
 CREATE INDEX idx_users_oauth_vk ON users(oauth_vk_id) WHERE oauth_vk_id IS NOT NULL;
-CREATE INDEX idx_users_email ON users(email) WHERE email IS NOT NULL;
+CREATE INDEX idx_users_email_bidx ON users(email_bidx) WHERE email_bidx IS NOT NULL; -- ADR-0019: email is ciphertext; equality lookup uses the blind index
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_city ON users(city_id);
 CREATE INDEX idx_users_status ON users(status);
@@ -966,7 +967,7 @@ ALTER TABLE animals ADD  CONSTRAINT chk_animals_nickname_lang CHECK (
 );
 
 -- ========== Contact exchange (MVP, no chat — ADR-0005; mirrored in migration 0005) ==========
-ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_phone    VARCHAR(30);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_phone    TEXT; -- ADR-0019 OD-1: AES-256-GCM ciphertext (enc:v1: prefix), field-encrypted before launch; widened from VARCHAR(30) for ciphertext
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_telegram VARCHAR(64);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_prefs    JSONB NOT NULL
     DEFAULT '{"show_phone": true, "show_telegram": false}'::jsonb;

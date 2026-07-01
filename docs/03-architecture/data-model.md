@@ -177,7 +177,8 @@ CREATE TABLE users (
     full_name VARCHAR(100) NOT NULL,
     city_id INTEGER REFERENCES cities(id) ON DELETE SET NULL,
     avatar_url TEXT,
-    email VARCHAR(255),
+    email TEXT, -- ADR-0019: AES-256-GCM ciphertext (enc:v1: prefix); lookup via email_bidx, never this column
+    email_bidx VARCHAR(60), -- ADR-0019/ADR-0011: HMAC-SHA256 blind index over normalised email (searchable equality lookup)
     email_verified BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(60), -- bcrypt; OPERATOR-only (end users are passwordless: phone OTP + OAuth)
     role VARCHAR(20) NOT NULL CHECK (role IN ('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN', 'VETERINARIAN', 'GROOMER')) DEFAULT 'USER',

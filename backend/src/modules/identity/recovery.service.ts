@@ -11,6 +11,7 @@ import { PrismaService } from '../../lib/db/prisma.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { EMAIL_PROVIDER, type EmailProvider } from '../../lib/providers';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
 import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principal';
 import { AuthService } from '../auth/auth.service';
 import { OtpService, OtpCooldownError } from './otp.service';
@@ -41,6 +42,7 @@ export class RecoveryService {
     private readonly otp: OtpService,
     private readonly auth: AuthService,
     private readonly audit: AuditLogService,
+    private readonly crypto: CryptoService,
     @Inject(EMAIL_PROVIDER) private readonly email: EmailProvider,
   ) {}
 
@@ -62,7 +64,8 @@ export class RecoveryService {
   ): Promise<{ status: 'VERIFICATION_REQUIRED'; expiresInSeconds: number }> {
     const email = dto.email.trim().toLowerCase();
     const user = await this.prisma.users.findFirst({
-      where: { email, email_verified: true, erased_at: null },
+      // ADR-0019: email is ciphertext at rest — look up by the deterministic blind index, never plaintext.
+      where: { email_bidx: this.crypto.emailBlindIndex(email), email_verified: true, erased_at: null },
     });
 
     // Constant-ish response: only actually send when there is a recoverable account.
@@ -100,7 +103,8 @@ export class RecoveryService {
     const subject = this.subject(email);
 
     const user = await this.prisma.users.findFirst({
-      where: { email, email_verified: true, erased_at: null },
+      // ADR-0019: lookup via the email blind index (email column is ciphertext).
+      where: { email_bidx: this.crypto.emailBlindIndex(email), email_verified: true, erased_at: null },
     });
     // Run verify even when no user, to keep timing/behaviour uniform, but a missing user always 400s.
     const result = user ? await this.otp.verify(subject, dto.code, RECOVER_NS) : 'INVALID';
@@ -149,7 +153,7 @@ export class RecoveryService {
     };
     const tokens = await this.auth.issueSession(principal);
     this.logger.log(`Account recovered via email OTP: ${target.id}`);
-    return { ...tokens, user: toUserProfile(target) };
+    return { ...tokens, user: toUserProfile(target, this.crypto.decrypt(target.email)) };
   }
 
   private subjectLine(language: string): string {

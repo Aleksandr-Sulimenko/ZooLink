@@ -5,6 +5,7 @@ import { DbModule } from './lib/db/db.module';
 import { RedisModule } from './lib/redis/redis.module';
 import { ProvidersModule } from './lib/providers/providers.module';
 import { AuditModule } from './lib/audit/audit.module';
+import { CryptoModule } from './lib/crypto/crypto.module';
 import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module';
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { OutboxRelayModule } from './lib/outbox/outbox-relay.module';
@@ -23,6 +24,7 @@ import { SchedulerModule } from './lib/scheduler/scheduler.module';
     RedisModule,
     ProvidersModule,
     AuditModule,
+    CryptoModule,
     FeatureToggleModule,
     OutboxModule,
     OutboxRelayModule,

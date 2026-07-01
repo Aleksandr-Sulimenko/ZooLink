@@ -51,6 +51,7 @@ import { AppConfigService } from '../../config/app-config.service';
               'req.body.email',
               '*.password',
               '*.phone_hash',
+              '*.email_bidx',
               '*.passwordHash',
               '*.accessToken',
               '*.refreshToken',

@@ -4,6 +4,10 @@ import { weakEtag } from '../../lib/http/etag.util';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { AuthService } from '../auth/auth.service';
+import { CryptoService } from '../../lib/crypto/crypto.service';
+import type { AppConfigService } from '../../config/app-config.service';
+
+const testCrypto = new CryptoService({ get: () => 'test_pii_key_0000000000000000000000000000' } as unknown as AppConfigService);
 
 const baseUser = {
   id: 'u1',
@@ -28,7 +32,7 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const audit = { record } as unknown as AuditLogService;
   const logout = jest.fn().mockResolvedValue(undefined);
   const auth = { logout } as unknown as AuthService;
-  return { svc: new ProfileService(prisma, audit, auth), findUnique, update, record, logout };
+  return { svc: new ProfileService(prisma, audit, auth, testCrypto), findUnique, update, record, logout };
 }
 
 const currentEtag = weakEtag(baseUser.id, baseUser.updated_at);
