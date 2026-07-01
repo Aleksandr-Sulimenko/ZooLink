@@ -145,13 +145,20 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     // DEACTIVATED. Tracked as the it.todo below (needs a trigger fix).
   });
 
-  // FINDING (reviewer-qa 2026-06-30): both cascade triggers (database_schema.sql:994-1019) set
-  // status='DEACTIVATED' but DO NOT clear is_active, so a cascade-DEACTIVATED listing keeps
-  // is_active=true — drift from the app-level paths (listing.service.ts:291/391) that always pair
-  // is_active=false with DEACTIVATED. No visibility leak (reads gate on status='ACTIVE'), but the
-  // flag is misleading and breaks any future is_active-based filter. Activate once the trigger also
-  // sets is_active=false (schema + idempotent migration).
-  it.todo('cascade triggers should also clear is_active (status→DEACTIVATED leaves is_active=true)');
+  // FIXED (migration 0025, fix-wave 1.1): both cascade triggers now set is_active=false alongside
+  // status='DEACTIVATED', matching the app-level paths (listing.service.ts:293/393). is_active is a
+  // DERIVED flag (data-model.md §"derived from status"); the cascade must keep it bit-identical with
+  // the lifecycle status so future is_active-based filters stay correct.
+  it('cascade triggers clear is_active (status→DEACTIVATED also sets is_active=false)', async () => {
+    const animalId = await newAnimal(sellerId);
+    const listingId = await makeActive(animalId);
+
+    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+
+    const row = await prisma.listings.findUnique({ where: { id: listingId } });
+    expect(row?.status).toBe('DEACTIVATED');
+    expect(row?.is_active).toBe(false);
+  });
 
   // ── cascade_user_deactivation ─────────────────────────────────────────────────────────────────
   it('deactivating the seller cascades their ACTIVE listing → DEACTIVATED', async () => {
@@ -206,16 +213,29 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
   });
 
   // ── uq_active_listing_per_type: two ACTIVE of the same type on one animal → clean 409 ─────────
-  // NOTE: marked it.todo — the partial unique index uq_active_listing_per_type fires at the second
-  // APPROVE flip, but moderation.service.ts:552-577 runWrite() maps ACTIVE-unless-approved / FK /
-  // append-only to 4xx and does NOT map the unique violation (P2002 / SQLSTATE 23505) → it bubbles
-  // as a 500. Verified empirically (see reviewer-qa report 2026-06-30). Activate this test once
-  // backend-engineer adds a 23505/P2002 → 409 CONFLICT mapping in runWrite().
-  // EMPIRICALLY VERIFIED 2026-06-30 (reviewer-qa): driving a SECOND 'sale' listing on the same
-  // animal to the APPROVE flip currently returns 500 INTERNAL — Prisma "Unique constraint failed on
-  // the fields: (animal_id, listing_type)" bubbles past moderation.service.ts runWrite() (lines
-  // 552-577), which maps ACTIVE-unless-approved/FK/append-only to 4xx but NOT P2002/SQLSTATE 23505.
-  // The contract wants a clean 409 CONFLICT. Activate this test (assert 409 + code CONFLICT) once
-  // backend-engineer adds the P2002 → 409 mapping in runWrite().
-  it.todo('uq_active_listing_per_type: second ACTIVE listing of the same type on one animal → 409 (currently 500; needs P2002→409 map in moderation runWrite)');
+  // FIXED (fix-wave 1.1): moderation.service.ts runWrite() now maps the partial-unique violation
+  // (Prisma P2002 / SQLSTATE 23505) on the APPROVE flip to a clean 409 CONFLICT (code
+  // ACTIVE_LISTING_EXISTS) instead of bubbling as a 500. A second ACTIVE listing of the same type on
+  // one animal is blocked by uq_active_listing_per_type; the second APPROVE must surface that as 409.
+  it('uq_active_listing_per_type: second ACTIVE listing of the same type on one animal → 409 ACTIVE_LISTING_EXISTS', async () => {
+    const animalId = await newAnimal(sellerId);
+    await makeActive(animalId, 'sale'); // first 'sale' listing → ACTIVE
+
+    // Drive a SECOND 'sale' listing to the APPROVE step; the flip collides with the partial-unique index.
+    const id2 = (await create(sellerTok, baseBody({ animalId, listingType: 'sale' })).expect(201)).body.id as string;
+    await addPhoto(sellerTok, id2).expect(201);
+    const etag2 = await getEtag(sellerTok, id2);
+    await request(server()).post(`/v1/listings/${id2}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag2).expect(200);
+    await request(server()).post(`/v1/moderation/queue/${id2}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+
+    const res = await request(server())
+      .post('/v1/moderation/action')
+      .set('Authorization', `Bearer ${modTok}`)
+      .send({ listingId: id2, action: 'APPROVE' })
+      .expect(409);
+    expect(res.body.code).toBe('ACTIVE_LISTING_EXISTS');
+
+    // The second listing must NOT have flipped to ACTIVE (the guarded flip rolled back).
+    expect((await prisma.listings.findUnique({ where: { id: id2 } }))?.status).not.toBe('ACTIVE');
+  });
 });

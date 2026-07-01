@@ -659,9 +659,18 @@ export class ModerationService {
         if (/append-only/i.test(msg)) {
           throw new ConflictException({ message: 'Moderation decisions are append-only', code: 'CONFLICT' });
         }
+        // uq_active_listing_per_type: APPROVE → ACTIVE collides with an existing ACTIVE listing of the
+        // same (animal_id, listing_type). The flip (tx.listings.updateMany, is_active=true) raises
+        // Prisma P2002 / SQLSTATE 23505 → clean 409, never a 500 (AUDIT_2026-06-30).
+        if (/unique constraint failed|uq_active_listing_per_type|23505/i.test(msg)) {
+          throw new ConflictException({ message: 'An active listing of this type already exists for this animal', code: 'ACTIVE_LISTING_EXISTS' });
+        }
         if (/foreign key|23503/i.test(msg)) {
           throw new UnprocessableEntityException({ message: 'A referenced reason/template/decision does not exist', code: 'VALIDATION_ERROR' });
         }
+      }
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException({ message: 'An active listing of this type already exists for this animal', code: 'ACTIVE_LISTING_EXISTS' });
       }
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
         throw new UnprocessableEntityException({ message: 'A referenced reason/template/decision does not exist', code: 'VALIDATION_ERROR' });

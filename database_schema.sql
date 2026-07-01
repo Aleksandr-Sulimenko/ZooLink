@@ -531,11 +531,18 @@ CREATE TABLE ownership_transfers (
     failure_reason TEXT,                              -- terminal reason for CANCELLED: declined|cancelled_by_initiator|expired
     transfer_reason TEXT,                             -- free-text reason the initiator gave; copied to history on completion
     completed_at TIMESTAMP WITH TIME ZONE,            -- when finalized to COMPLETED (distinct from updated_at)
-    initiated_by_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN' CHECK (initiated_by_principal_type IN ('HUMAN','AGENT')), -- ADR-0011 snapshot
-    responded_by_principal_type VARCHAR(10) CHECK (responded_by_principal_type IS NULL OR responded_by_principal_type IN ('HUMAN','AGENT')),
+    initiated_by_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN', -- ADR-0011 snapshot
+    responded_by_principal_type VARCHAR(10),
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- Principal-type snapshots (ADR-0011). EXPLICITLY NAMED so the fresh-from-schema path and the
+    -- replay-migrations path (migration 0023 ADDs these same names) are byte-identical — no auto-named
+    -- `ownership_transfers_*_principal_type_check` divergence (AUDIT_2026-06-30 migration-drift).
+    CONSTRAINT chk_owntransfer_initiated_ptype CHECK (initiated_by_principal_type IN ('HUMAN','AGENT')),
+    CONSTRAINT chk_owntransfer_responded_ptype CHECK (
+        responded_by_principal_type IS NULL OR responded_by_principal_type IN ('HUMAN','AGENT')
+    ),
     -- Exactly one of user/org on EACH side (mirrors animals.chk_animal_ownership).
     CONSTRAINT chk_owntransfer_from_party CHECK (
         (from_user_id IS NOT NULL AND from_organization_id IS NULL) OR
@@ -995,7 +1002,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_open_report_per_reporter_entity
 CREATE OR REPLACE FUNCTION cascade_animal_deactivation() RETURNS trigger AS $$
 BEGIN
     IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
-        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now()
          WHERE animal_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
     END IF;
     RETURN NEW;
@@ -1008,7 +1015,7 @@ CREATE TRIGGER trg_cascade_animal_deactivation AFTER UPDATE ON animals
 CREATE OR REPLACE FUNCTION cascade_user_deactivation() RETURNS trigger AS $$
 BEGIN
     IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
-        UPDATE listings SET status = 'DEACTIVATED', updated_at = now()
+        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now()
          WHERE seller_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
     END IF;
     RETURN NEW;
