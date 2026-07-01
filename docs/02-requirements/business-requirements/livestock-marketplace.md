@@ -20,7 +20,7 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 - Each listing must be linked to **one** animal from the user's owned animals (see Animal Domain).
 - Mandatory fields at creation:
   - `animal_id` (reference to Animal Domain)
-  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service) - AUCTION and EMBRYO_TRANSFER reserved for future
+  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service) - AUCTION and EMBRYO_TRANSFER reserved for future. **`show` is likewise a Фаза-2 placeholder** (GAP-BA-005): unlike AUCTION/EMBRYO_TRANSFER it **is** in the schema enum (form present, like `leasing`), but it carries **no MVP-specific rules** — no `show`-specific `price_or_terms`, validation, or flow is defined. In MVP treat `show` as **form-only**; show-listing behavior is deferred to Фаза 2+. (No schema change — the value stays in the enum, so enabling it later is not a contract break.)
   - `title` (short headline, max 100 chars)
   - `description` (detailed text, max 3000 chars - longer to accommodate production records)
   - `price_or_terms`:
@@ -188,7 +188,8 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 | `metadata` | JSONB | No | For future extensibility (e.g., video_url, social_links, auction_id) |
 
 ## Validation Rules
-- `animal_id` must reference an active animal owned by `creator_id`.
+- `animal_id` must reference an active animal owned by the creator (either personally via `creator_id` → animal's `owner_id`, or via `organization_id` when listing on behalf of an organization).
+- For organization-linked listings: the `creator_id` must have an active affiliation with the specified `organization_id`; if `organization_id` is specified, `branch_id` (if provided) must belong to that organization.
 - `photos` array must have 1-8 items; each item is a URL to storage (min 3 recommended).
 - `price_or_terms`:
   - If numeric string, must be parseable as positive integer.
@@ -197,6 +198,9 @@ Handles listings for farm and ranch livestock (cattle, horses, sheep, goats, pig
 - `description` cannot be empty or solely whitespace.
 - For MATING/LEASING: if `price_or_terms` suggests fee, it should be numeric or "negotiable".
 - Minimum 3 photos recommended for livestock to show conformation (not enforced but suggested in UI).
+- **Ownership Rule** (GAP-BA-009: synced with the pet-marketplace formulation and the shared `chk_listing_ownership` invariant; both markets use the same `listings` table): Exactly one of the following must be true:
+  - Listing is personal: `organization_id` IS NULL and `creator_id` references the animal's `owner_id`
+  - Listing is organizational: `organization_id` IS NOT NULL and `creator_id` is affiliated with that organization
 
 ## User Journey: Creating and Receiving Interest in a Livestock Listing
 ```mermaid

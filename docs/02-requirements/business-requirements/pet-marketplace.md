@@ -19,7 +19,7 @@ Handles listings for companion animals (pets) such as cats, dogs, birds, rabbits
 - Each listing must be linked to **one** animal from the user's owned animals (see Animal Domain).
 - Mandatory fields at creation:
   - `animal_id` (reference to Animal Domain)
-  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service)
+  - `listing_type` (ENUM: sale, breeding, show, adoption, stud_service). **`show` is a Фаза-2 placeholder** (GAP-BA-005): the enum value exists in `database_schema.sql` (form present, like `leasing`), but it carries **no MVP-specific rules** — no `show`-specific `price_or_terms`, validation, or flow is defined. In MVP treat `show` as **form-only**; show-listing behavior is deferred to Фаза 2+. (No schema change — the value stays in the enum, so enabling it later is not a contract break.)
   - `title` (short headline, max 100 chars)
   - `description` (detailed text, max 2000 chars)
   - `price_or_terms`:

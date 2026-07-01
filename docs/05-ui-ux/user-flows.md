@@ -59,7 +59,7 @@ This document describes the key user journeys in the ZooLink system, covering th
    - The required number of photos (min 1 for pet, min 3 recommended for livestock; uploaded via pre-signed URLs)
    - Specific fields (see below by listing type and domain)
 5. The user clicks "Submit for moderation".
-6. The listing status changes to `PENDING_MODERATION`.
+6. The listing now carries **two** status fields (canonical model, see `specs/statemachines/listing_state_machine.md`): the lifecycle **`status`** (set to `PENDING_MODERATION`) and the moderation outcome **`moderation_status`** (set to `PENDING`). The two fields are **not independent** — the core invariant (`status = 'ACTIVE'` is permitted only when `moderation_status = 'APPROVED'`) is stated in §5.2.
 
 ### Specific fields by listing type (Pet Marketplace)
 - **Sale**: price (a number or "free"/"negotiable"), sterilization/neutering status (optional)
@@ -86,12 +86,14 @@ The moderator checks:
 - Whether the required fields are filled in
 - Compliance with the rules (no spam, no illegal content, no false claims)
 - For livestock: regulatory flags are optionally noted (accompanying documentation is required for transport)
-The moderator can:
-- **Approve** → the status becomes `ACTIVE`, the listing appears in search
-- **Reject** → the status returns to `DRAFT` with comments about the required corrections; the owner can fix the issues and resubmit.
+The moderator records **one of three** canonical decisions (per `specs/statemachines/listing_state_machine.md`); each sets the listing's `moderation_status` and drives its lifecycle `status`. **Core invariant (P0):** `status = 'ACTIVE'` is permitted only when `moderation_status = 'APPROVED'`.
+- **Approve** → `moderation_status = APPROVED`, `status` becomes `ACTIVE`; the listing appears in search.
+- **Request changes** (fixable issues) → `moderation_status = CHANGES_REQUESTED`, `status` returns to `DRAFT` with comments about the required corrections; the owner edits and resubmits (DRAFT → PENDING_MODERATION).
+- **Hard reject** (policy violation, not fixable) → `moderation_status = REJECTED`, `status` becomes `DEACTIVATED` (**terminal**); the owner is notified with the reason and cannot resubmit this listing.
 
-### 5.3 Moderation time
-- Target time: under 4 hours during business hours (9:00–21:00) for pet, under 6 hours for livestock.
+### 5.3 Moderation time (SLA)
+- Target time: **TBD** — the exact SLA threshold is an **open decision**; candidates are 4 hours (pet) / 6 hours (livestock) during business hours (9:00–21:00), or a single 24-hour window. See [ADR-0003](../04-decisions/0003-pre-moderation-workflow.md) and the pending owner ruling (cross-team audit 2026-06-30, Q5). The numbers above are not final.
+- **On SLA timeout the listing is escalated** (alert to admin/lead) and **stays in `PENDING_MODERATION`** — it is never auto-approved or auto-rejected (per `specs/statemachines/listing_state_machine.md`).
 
 ## 6. Searching and viewing listings
 ### 6.1 Search
@@ -124,17 +126,21 @@ Clicking a card opens the listing's detail page.
 - Full description
 - Animal data (species, breed, sex, approximate age, nickname, coat, health/reproductive notes – depend on the type and the owner's consent)
 - Specific fields (productivity, health, mating terms, etc.)
-- A "Show contacts" button (available only after the `ACTIVE` status)
-    When clicked:
-    - The system logs the request (who, when, which listing)
-    - Shows the phone number (if the owner allowed it to be shown) and links to Telegram/VK profiles (if linked and allowed)
-    - The exact address is NOT shown
+- A "Show contacts" button. Revealing contacts (`POST /api/v1/listings/{id}/contact-reveal`) has these **preconditions** (per [16-contact-exchange.md](../specs/16-contact-exchange.md)):
+    - **Authentication required** — a guest must sign in first; an anonymous reveal is rejected.
+    - The listing **must be `ACTIVE`** (contact is exposed only after moderation approval).
+    - The caller **must not be the seller** (a self-reveal is rejected).
+    When the preconditions hold and the button is clicked:
+    - The system logs the reveal in `contact_reveals` (who, when, which listing) for owner stats and abuse detection.
+    - It returns **only the channels the seller enabled** in `contact_prefs`: the phone (if `show_phone`) and/or Telegram/VK links (if linked and `show_telegram`). If the seller enabled **no** channels, there is nothing to reveal (empty result).
+    - The exact address is **never** shown.
+    - **Rate limit:** 10 reveals/hour/user (pet) or 5/hour/user (livestock); exceeding returns `429` with a `Retry-After` header.
 
 ## 7. Post-view interaction (Contact)
-1. A user interested in a listing clicks "Show contacts"
-2. The system shows the owner's contact information (or the organization representative's)
+1. An **authenticated** user interested in an `ACTIVE` listing clicks "Show contacts" (preconditions and rate limits per §6.3 and [16-contact-exchange.md](../specs/16-contact-exchange.md); a self-reveal by the seller is rejected).
+2. The system returns the seller-enabled contact channels (or the organization representative's); if the seller enabled none, nothing is revealed.
 3. The user gets in touch off-platform (phone, messengers) to discuss the deal details and arrange a meeting.
-4. After a successful deal (as agreed by the parties), a participant can mark the listing as `COMPLETED` in their account (for statistics and feedback).
+4. After a successful deal (as agreed by the parties), **only the listing owner (seller)** can mark the listing as `SOLD` in their account (canonical lifecycle value per `database_schema.sql` / `specs/statemachines/listing_state_machine.md`; the buyer cannot). Marking `SOLD` does **not** auto-transfer animal ownership — that is the separate, explicit owner-initiated transfer flow ([ADR-0013](../04-decisions/0013-mvp-ownership-transfer.md)).
 
 ## 8. Analytics and statistics
 ### 8.1 For the listing owner
@@ -149,7 +155,7 @@ Clicking a card opens the listing's detail page.
 ## 9. Moderator and Administrator
 ### 9.1 Moderator
 - Reviews the queue of listings for pre-moderation
-- Approves/rejects with comments
+- Records one of the **three** canonical decisions with comments — approve / request changes / hard-reject (see §5.2)
 - Can block users for rule violations
 - Manages the species/breed reference catalogs (via the admin panel linked to the Admin domain)
 
@@ -158,6 +164,13 @@ Clicking a card opens the listing's detail page.
 - Assigning moderator/admin roles
 - Viewing system analytics (number of users, listings, activity)
 - Managing global settings (limit pricing, moderation rules, etc.)
+
+---
+
+## Change note (alignment to canonical specs — audit 2026-06-30)
+> **WHAT:** aligned the moderation, mark-sold, and contact-reveal flows to the validated contract — (1) moderation is now the canonical **3-valued** decision (Approve→ACTIVE / Request changes→DRAFT / **hard-Reject→DEACTIVATED terminal**) instead of binary Approve/Reject-to-DRAFT (§5.2, §9.1); (2) "mark `COMPLETED`" → **`SOLD`, owner-only** (§7.4); (3) the two-field model **`status` vs `moderation_status`** is introduced explicitly (§4.6, §5.2); (4) contact-reveal preconditions (auth required, ACTIVE-only, no self-reveal, seller-enabled-channels-only with empty-channels case, 429+`Retry-After`) added (§6.3, §7); (5) SLA threshold marked **TBD** with the escalate-stays-PENDING behavior made explicit (§5.3).
+> **WHY:** the prior text contradicted the canonical sources — `specs/statemachines/listing_state_machine.md` (3-valued decision, hard-REJECT→DEACTIVATED terminal, SOLD via owner-mark, P0 ACTIVE-requires-APPROVED), `database_schema.sql` (`status` enum has `SOLD`, not `COMPLETED`), and `specs/16-contact-exchange.md` (auth/ACTIVE/self/rate-limit gating). A UX doc that taught a non-existent `COMPLETED` status and a binary moderation model would mislead frontend and QA.
+> **WHY-BETTER-for-the-whole-project:** these are corrections *toward* the validated contract (truth tiers 3–5), not new decisions — they remove doc↔spec drift flagged by the audit without inventing rules. The numeric SLA threshold and the reversibility of a user/account `DEACTIVATED` state are deliberately **left out** (open owner/architect decisions — audit Q5 and a pending ADR); only schema-shaping GAP-BA items go to architect.
 
 ---
 *This is a living document and may be refined as mockups are developed and feedback is received from users and stakeholders.*

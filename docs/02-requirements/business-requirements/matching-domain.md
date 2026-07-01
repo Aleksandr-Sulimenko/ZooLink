@@ -38,8 +38,10 @@ Handles specialized logic for finding compatible mates for breeding purposes. Th
   - Of mating age (species-specific minimums apply)
   - Owned by different owners (where an owner is either a user or an organization; self-matching not allowed)
   - Have listings of type sale, breeding, show, adoption, or stud_service (or user has indicated breeding interest)
-- Animals must be of the same species and breed (cross-breed matching reserved for Фаза 2+ with explicit user consent).
+- Animals must be of the **same species**; **breed need not match** — a matching `breed_id` is a *ranking boost* in the MVP, not a hard filter, so **cross-breed matching is allowed in MVP** (canonical: [05-matching-domain.md](../../specs/05-matching-domain.md) §"Breeding eligibility (MVP — normative)", predicate 1 + the breed note). An optional advanced "same-breed-only" refinement is reserved for Фаза 2+.
 - Two animals can be matched if they belong to different owners (i.e., different users and/or different organizations). Matching logic may be configured to allow or disallow matches between animals owned by the same organization (via a feature flag or organization setting).
+
+> **Alignment note (GAP-BA-003, audit 2026-06-30).** **WHAT:** the breeding rule changed from "same species **and breed** (cross-breed reserved for Фаза 2+)" to "same species; breed is a ranking boost, **cross-breed allowed in MVP**." **WHY:** the prior BR contradicted the validated normative spec [05-matching-domain.md](../../specs/05-matching-domain.md) (breed is explicitly a *ranking boost, not a hard filter*; predicate 1 gates only species). **WHY-BETTER:** this is a correction *toward* the canonical spec (truth tier 5), removing a doc↔spec contradiction without inventing scope; a same-breed-only gate would needlessly suppress MVP matches and is not what the eligibility predicates enforce.
 
 ### 2. Matching Factors & Weighting *(Фаза 2+ — scoring engine; not in MVP eligible-set)*
 The matching algorithm considers these factors with configurable weights (weights may vary by species/breed):

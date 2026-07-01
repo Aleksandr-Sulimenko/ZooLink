@@ -13,9 +13,9 @@ Handles the modeling of legal entities (organizations) and their physical locati
 ### 1. Organization Creation
 - Only authenticated users can create an organization (the creator becomes the initial OWNER).
 - Required fields at creation:
+  - `name_localized` (localized names, e.g., {"en": "Name", "ru": "Название"}) — **at least one locale must be present; an organization cannot be created without a name** (GAP-BA-006: aligns the creation rule to the data-model table below, where `name_localized` is `Required: Yes`).
   - `address` (headquarters address)
 - Optional fields:
-  - `name_localized` (localized names, e.g., {"en": "Name", "ru": "Название"})
   - `description_localized` (localized description, e.g., {"en": "Description", "ru": "Описание"})
   - `inn` (Taxpayer Identification Number, optional but recommended for legal entities)
   - `kpp` (Tax Registration Reason Code, optional)
