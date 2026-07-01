@@ -63,6 +63,19 @@ describe('RecoveryService.requestEmail', () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'identity.recovery_requested' }));
   });
 
+  it('looks up by the case/whitespace-normalised email blind index (guards the fixed case-sensitivity recovery bug)', async () => {
+    const { svc, findFirst } = setup();
+    // The canonical bidx over the normalised lowercase email — a messy mixed-case/padded input must
+    // resolve to this SAME value, otherwise recovery would miss the account (ADR-0019 / the fixed bug).
+    const canonicalBidx = new CryptoService({
+      get: () => 'pepper',
+    } as unknown as AppConfigService).emailBlindIndex('ann@example.com');
+    await svc.requestEmail({ email: '  ANN@Example.COM  ' });
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ email_bidx: canonicalBidx }) }),
+    );
+  });
+
   it('returns 202 shape WITHOUT sending when no account matches (no enumeration)', async () => {
     const { svc, issue, sendEmail } = setup({ user: null });
     const res = await svc.requestEmail({ email: 'nobody@example.com' });

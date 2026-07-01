@@ -87,6 +87,7 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
 
   afterAll(async () => {
     await prisma.moderation_decisions.deleteMany({ where: { entity_id: { in: listings } } }).catch(() => undefined);
+    await prisma.outbox_events.deleteMany({ where: { aggregate_id: { in: listings } } }).catch(() => undefined);
     for (const id of listings) {
       await prisma.listing_photos.deleteMany({ where: { listing_id: id } }).catch(() => undefined);
       await prisma.listings.delete({ where: { id } }).catch(() => undefined);
@@ -188,6 +189,46 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
     const audit = await prisma.audit_log.findMany({ where: { entity_id: id, action: 'moderation.approved' } });
     expect(audit.length).toBe(1);
     expect(audit[0].actor_id).toBe(mod1Id);
+  });
+
+  it('event seam: APPROVE emits Moderation.Decided + Listing.Activated with the {schemaVersion,market,occurredAt} envelope', async () => {
+    // The audit-2026-06-30 CRITICAL fix (seller-notification + funnel analytics) — emitted in the same
+    // tx as the decision. Both rows must land, carry the envelope, and reference the seller.
+    const id = await newPending();
+    await claim(mod1Tok, id).expect(200);
+    await action(mod1Tok, { listingId: id, action: 'APPROVE' }).expect(200);
+
+    const decided = await prisma.outbox_events.findFirst({
+      where: { aggregate_id: id, event_type: 'Moderation.Decided' },
+    });
+    expect(decided).not.toBeNull();
+    const dp = decided!.payload as Record<string, unknown>;
+    expect(dp.schemaVersion).toBe(1);
+    expect(dp.market).toBe('pet');
+    expect(dp.occurredAt).toEqual(expect.any(String));
+    expect(dp.decision).toBe('APPROVED');
+    expect(dp.sellerId).toBe(sellerId);
+
+    const activated = await prisma.outbox_events.findFirst({
+      where: { aggregate_id: id, event_type: 'Listing.Activated' },
+    });
+    expect(activated).not.toBeNull();
+    expect((activated!.payload as Record<string, unknown>).sellerId).toBe(sellerId);
+  });
+
+  it('event seam: REJECT emits Moderation.Decided but NOT Listing.Activated (no ACTIVE transition)', async () => {
+    const id = await newPending();
+    await claim(mod1Tok, id).expect(200);
+    await action(mod1Tok, { listingId: id, action: 'REJECT', reason: 'poor_photos' }).expect(200);
+    const decided = await prisma.outbox_events.findFirst({
+      where: { aggregate_id: id, event_type: 'Moderation.Decided' },
+    });
+    expect(decided).not.toBeNull();
+    expect((decided!.payload as Record<string, unknown>).decision).toBe('REJECTED');
+    const activated = await prisma.outbox_events.count({
+      where: { aggregate_id: id, event_type: 'Listing.Activated' },
+    });
+    expect(activated).toBe(0);
   });
 
   it('M-P0 direct: a forced ACTIVE while not APPROVED is blocked by the trigger', async () => {
