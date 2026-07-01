@@ -691,7 +691,9 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 ('genetics_portal', 'Портал генетики и ДНК‑тестов', false, 0),
 ('regulatory_integration', 'Интеграция с Меркурий/ВетИС для отслеживания перемещения скота', false, 0),
 -- migration 0023 (ADR-0013 §1): gate form for the Phase-2 verified ownership-transfer flow. Off in MVP.
-('ownership_transfer_verification', 'Phase-2 verified transfer flow (IN_PROGRESS/payment/vet/legal/two-sided ack). Off in MVP (ADR-0013 §1).', false, 0)
+('ownership_transfer_verification', 'Phase-2 verified transfer flow (IN_PROGRESS/payment/vet/legal/two-sided ack). Off in MVP (ADR-0013 §1).', false, 0),
+-- migration 0027 (GAP-BA-011): gate FORM for the Phase-2 goods marketplace (аксессуары/корма/товары); behaviour deferred. Off in MVP.
+('goods_marketplace', 'Маркетплейс товаров (аксессуары, корма, ветпрепараты и т.п.) — форма гейта заведена, поведение отложено до Фазы 2+ (GAP-BA-011). Выключено в MVP.', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- ========== Application-level validations ==========

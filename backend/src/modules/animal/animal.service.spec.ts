@@ -245,6 +245,45 @@ describe('AnimalService', () => {
     });
   });
 
+  // ADR-0018: the public cross-aggregate ownership accessor used by ListingService/ModerationService.
+  describe('getOwnedAnimalForActor (ADR-0018)', () => {
+    it('returns the ownership summary for the owner', async () => {
+      const { svc } = setup();
+      // (The prisma mock ignores `select`; in production only id/owner_id/organization_id come back.)
+      await expect(svc.getOwnedAnimalForActor(user(), ANIMAL)).resolves.toMatchObject({
+        id: ANIMAL,
+        owner_id: OWNER,
+        organization_id: null,
+      });
+    });
+
+    it('lets an org-admin act for an org-owned animal', async () => {
+      const { svc } = setup({ animal: row({ owner_id: null, organization_id: ORG }), orgAdmin: true });
+      await expect(svc.getOwnedAnimalForActor(user(OTHER), ANIMAL)).resolves.toBeDefined();
+    });
+
+    it('lets an ADMIN operator act (agent or human, ADR-0006/0011)', async () => {
+      const { svc } = setup();
+      await expect(svc.getOwnedAnimalForActor(admin, ANIMAL)).resolves.toBeDefined();
+      await expect(svc.getOwnedAnimalForActor(agent, ANIMAL)).resolves.toBeDefined();
+    });
+
+    it('404s when the animal does not exist (no existence oracle)', async () => {
+      const { svc } = setup({ animal: null });
+      await expect(svc.getOwnedAnimalForActor(user(OTHER), ANIMAL)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('403s when the actor is neither owner nor org-admin (parity with the removed listing check)', async () => {
+      const { svc } = setup();
+      await expect(svc.getOwnedAnimalForActor(user(OTHER), ANIMAL)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('403s a MODERATOR (no Animal ownership grant)', async () => {
+      const { svc } = setup();
+      await expect(svc.getOwnedAnimalForActor(moderator, ANIMAL)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
   describe('update', () => {
     it('updates mutable fields when If-Match matches', async () => {
       const { svc, update } = setup();

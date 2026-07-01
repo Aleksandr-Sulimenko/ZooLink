@@ -10,6 +10,7 @@ import { ListingService } from './listing.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { ModerationService } from '../moderation/moderation.service';
+import type { AnimalService } from '../animal/animal.service';
 import type { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
@@ -124,8 +125,20 @@ function setup(opts: SetupOpts = {}) {
   const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
   const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
-  const svc = new ListingService(prisma, audit, moderation, orgMembership);
-  return { svc, listings, animals, listing_photos, record, isOrgAdmin, orgAdminIds, queryRaw, latestEffectiveResult };
+  // ADR-0018: ListingService now obtains the animal + ownership decision from AnimalService.
+  // The mock replays the real owner/org-admin/ADMIN predicate (parity with the removed
+  // loadAnimal/assertOwnsAnimal) so the L-2 behaviour tests exercise the delegation end-to-end.
+  const getOwnedAnimalForActor = jest.fn().mockImplementation(async (actor: AuthPrincipal) => {
+    const animal = 'animal' in opts ? opts.animal : animalRow();
+    if (!animal) throw new NotFoundException({ message: 'Animal not found', code: 'NOT_FOUND' });
+    if (actor.role === 'ADMIN') return animal;
+    if (animal.owner_id && animal.owner_id === actor.userId) return animal;
+    if (animal.organization_id && (await isOrgAdmin(actor.userId, animal.organization_id))) return animal;
+    throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
+  });
+  const animalService = { getOwnedAnimalForActor } as unknown as AnimalService;
+  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService);
+  return { svc, listings, animals, listing_photos, record, isOrgAdmin, orgAdminIds, getOwnedAnimalForActor, queryRaw, latestEffectiveResult };
 }
 
 const validCreate = (over: Partial<ListingCreateDto> = {}): ListingCreateDto => ({

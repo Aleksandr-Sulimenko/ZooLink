@@ -15,6 +15,7 @@ import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import { ModerationService } from '../moderation/moderation.service';
+import { AnimalService } from '../animal/animal.service';
 import {
   type ListingCreateDto,
   type ListingListQueryDto,
@@ -84,12 +85,6 @@ interface ParsedSort {
   dir: 'asc' | 'desc';
 }
 
-interface AnimalOwnerRow {
-  id: string;
-  owner_id: string | null;
-  organization_id: string | null;
-}
-
 /**
  * Listing aggregate CRUD + owner-side lifecycle to PENDING_MODERATION (listings-api.yaml Slice 1;
  * invariants L-P0..L-15 in listing_state_machine.md). Reuses the platform foundation (RFC7807,
@@ -109,6 +104,7 @@ export class ListingService {
     private readonly audit: AuditLogService,
     private readonly moderation: ModerationService,
     private readonly orgMembership: OrgMembershipService,
+    private readonly animals: AnimalService, // ADR-0018: cross-aggregate animal access via AnimalService
   ) {}
 
   // ── Create (→ DRAFT) ─────────────────────────────────────────────────────────────────────────
@@ -125,9 +121,10 @@ export class ListingService {
       throw new UnprocessableEntityException({ message: 'titleLocalized must have at least one non-empty locale', code: 'VALIDATION_ERROR' });
     }
 
-    const animal = await this.loadAnimal(dto.animalId);
-    // L-2: actor must own the animal (or be org-admin of its owning org).
-    await this.assertOwnsAnimal(actor, animal);
+    // L-2 / ADR-0018: obtain the animal + assert ownership through AnimalService — no direct
+    // cross-aggregate read of the `animals` table. Parity: 404 if it doesn't exist, 403 if the
+    // actor isn't its owner / an org-admin of its owning org.
+    await this.animals.getOwnedAnimalForActor(actor, dto.animalId);
 
     // L-2/L-4: an organizational listing's org must be one the actor org-admins.
     if (dto.organizationId) {
@@ -741,23 +738,6 @@ export class ListingService {
     const row = (await this.prisma.listings.findUnique({ where: { id } })) as unknown as ListingRow | null;
     if (!row) throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
     return row;
-  }
-
-  private async loadAnimal(animalId: string): Promise<AnimalOwnerRow> {
-    const animal = await this.prisma.animals.findUnique({
-      where: { id: animalId },
-      select: { id: true, owner_id: true, organization_id: true },
-    });
-    if (!animal) throw new NotFoundException({ message: 'Animal not found', code: 'NOT_FOUND' });
-    return animal;
-  }
-
-  /** L-2: the actor owns the animal (owner_id==actor) or is org-admin of its owning org. */
-  private async assertOwnsAnimal(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
-    if (actor.role === 'ADMIN') return;
-    if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
-    throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   }
 
   /** L-3: mutate only by the listing's seller or an org-admin of its org. ADMIN = operator scope. */

@@ -51,6 +51,17 @@ interface AnimalRow {
   deactivated_at: Date | null;
 }
 
+/**
+ * Minimal, ownership-relevant projection of an animal, returned by the ADR-0018 cross-aggregate
+ * accessor. Sibling aggregates (ListingService, ModerationService) consume this instead of reading
+ * the `animals` table directly.
+ */
+export interface AnimalOwnershipSummary {
+  id: string;
+  owner_id: string | null;
+  organization_id: string | null;
+}
+
 /** ISO-11784/85 microchip = exactly 15 digits (spec line 109, service-validated). */
 const MICROCHIP_RE = /^\d{15}$/;
 /** Allowed item keys per JSONB array contract (spec lines 103–104), used to reject unknown keys. */
@@ -334,6 +345,37 @@ export class AnimalService {
 
     this.logger.log(`Animal ${target ? 'reactivated' : 'deactivated'} ${id} by ${actor.userId}`);
     return this.toView(row);
+  }
+
+  /**
+   * ADR-0018 (reaffirms ADR-0004) — the public cross-aggregate ownership accessor. Sibling
+   * aggregates (ListingService, ModerationService) MUST obtain an animal and its ownership
+   * decision through this method rather than reading the `animals` table + re-implementing the
+   * check. Returns the minimal ownership summary and asserts the actor may act as the animal's
+   * owner: owner_id == actor OR org-admin of the owning org OR ADMIN operator scope.
+   *
+   * Behaviour parity with the removed ListingService.loadAnimal/assertOwnsAnimal:
+   *   - 404 NOT_FOUND when the animal does not exist;
+   *   - 403 FORBIDDEN when it exists but the actor is not an owner / org-admin.
+   * Agent/human principals are treated uniformly (the ADMIN operator scope applies to an AGENT
+   * ADMIN too — ADR-0006/0011), keeping animal authz in one place.
+   */
+  async getOwnedAnimalForActor(actor: AuthPrincipal, animalId: string): Promise<AnimalOwnershipSummary> {
+    const animal = await this.prisma.animals.findUnique({
+      where: { id: animalId },
+      select: { id: true, owner_id: true, organization_id: true },
+    });
+    if (!animal) throw new NotFoundException({ message: 'Animal not found', code: 'NOT_FOUND' });
+    await this.assertActsAsOwner(actor, animal);
+    return animal;
+  }
+
+  /** The owner/org-admin/ADMIN ownership predicate behind getOwnedAnimalForActor (single source of truth). */
+  private async assertActsAsOwner(actor: AuthPrincipal, animal: AnimalOwnershipSummary): Promise<void> {
+    if (actor.role === 'ADMIN') return;
+    if (animal.owner_id && animal.owner_id === actor.userId) return;
+    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   }
 
   private async findOrThrow(id: string): Promise<AnimalRow> {
