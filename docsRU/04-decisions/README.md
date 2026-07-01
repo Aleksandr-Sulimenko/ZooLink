@@ -15,6 +15,16 @@
 - [ADR-0009: Архитектура MVP — модульный монолит; микросервисы/K8s — Фаза 2+](0009-mvp-vs-target-architecture.md)
 - [ADR-0010: Готовность к цифровым активам (NFT) — хуки в схеме сейчас, on-chain в Фазе 2+](0010-nft-digital-assets-hooks.md)
 - [ADR-0011: Модель актёра-агента — снапшот актёра, human-override, forward-совместимый service-auth](0011-agent-principal-actor-model.md)
+- [ADR-0012: Шифрование ПДн в покое (ФЗ-152)](0012-pii-at-rest-encryption.md)
+- [ADR-0013: Передача владения в MVP — упрощённая прямая передача, контролируемый owner-lock, отложенные верификационные гейты](0013-mvp-ownership-transfer.md)
+- [ADR-0014: Супертип Offering — полиморфный шов discovery + moderation (анти-god-table)](0014-offering-supertype-polymorphic-seam.md) *(Accepted — ратифицировано 2026-07-01, совместно с 0015)*
+- [ADR-0015: `market_scope` — уточнение жёсткого сплита ADR-0002 для предложений без вида животного](0015-market-scope-refines-0002.md) *(Accepted — ратифицировано 2026-07-01, совместно с 0014)*
+- [ADR-0016: Модель провайдера — организация | физлицо | агент-провайдер](0016-provider-model.md) *(Proposed — ожидает матрицу верификации от security+legal)*
+- [ADR-0017: Локализация данных в РФ — ПДн граждан РФ остаются в Российской Федерации](0017-rf-data-residency.md) *(Proposed — P0 go-live; ожидает go владельца по топологии/стоимости РФ)*
+- [ADR-0018: Правило межагрегатного доступа — чтение животного через AnimalService (подтверждает ADR-0004)](0018-cross-aggregate-access-rule.md) *(Proposed — готов; ожидает кивок владельца)*
+- [ADR-0019: ПДн в покое — реализовать форму ADR-0012 сейчас (blind-index + crypto-шов), раскатку отложить](0019-pii-at-rest-form-enforcement.md) *(Proposed — ожидает at-rest sign-off от security+legal)*
+
+> **Памятка по решениям:** [Ecosystem ADR Plan & Open-Decision Memo (Q1–Q6)](ECOSYSTEM_ADR_PLAN.md) — бриф архитектора; **Q1–Q6 ратифицированы владельцем 2026-07-01** (0014+0015 Accepted совместно; 0016–0019 остаются Proposed с явными условиями-ожидания).
 
 ## Шаблон
 

@@ -17,6 +17,14 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0011: Agent-Principal Actor Model — actor snapshot, human-override, forward-compatible service-auth](0011-agent-principal-actor-model.md)
 - [ADR-0012: PII-at-rest encryption](0012-pii-at-rest-encryption.md)
 - [ADR-0013: MVP Ownership Transfer — simplified direct transfer, controlled owner-lock path, deferred verification gates](0013-mvp-ownership-transfer.md)
+- [ADR-0014: Offering supertype — polymorphic discovery + moderation seam (anti-god-table)](0014-offering-supertype-polymorphic-seam.md) *(Accepted — ratified 2026-07-01, jointly w/ 0015)*
+- [ADR-0015: `market_scope` — refine the ADR-0002 hard split for species-less offerings](0015-market-scope-refines-0002.md) *(Accepted — ratified 2026-07-01, jointly w/ 0014)*
+- [ADR-0016: Provider model — org-backed | individual | agent-provider](0016-provider-model.md) *(Proposed — awaiting security+legal verification matrix)*
+- [ADR-0017: RF data residency — РФ-citizen PII stays in the Russian Federation](0017-rf-data-residency.md) *(Proposed — P0 go-live; awaiting owner go on RF topology/cost)*
+- [ADR-0018: Cross-aggregate access rule — route animal reads through AnimalService (reaffirm ADR-0004)](0018-cross-aggregate-access-rule.md) *(Proposed — ready; awaiting owner nod)*
+- [ADR-0019: PII-at-rest — enforce the ADR-0012 form now (blind-index + crypto seam), stage rollout](0019-pii-at-rest-form-enforcement.md) *(Proposed — awaiting security+legal at-rest sign-off)*
+
+> **Decision memo:** [Ecosystem ADR Plan & Open-Decision Memo (Q1–Q6)](ECOSYSTEM_ADR_PLAN.md) — architect's brief; **Q1–Q6 owner-ratified 2026-07-01** (0014+0015 Accepted jointly; 0016–0019 stay Proposed with explicit awaiting-conditions).
 
 ## Template
 
