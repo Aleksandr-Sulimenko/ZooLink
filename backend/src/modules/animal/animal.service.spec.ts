@@ -243,6 +243,18 @@ describe('AnimalService', () => {
       const { svc } = setup();
       await expect(svc.getById(ANIMAL, moderator)).resolves.toBeDefined();
     });
+
+    it('lets an ADMIN read any animal', async () => {
+      const { svc } = setup();
+      await expect(svc.getById(ANIMAL, admin)).resolves.toBeDefined();
+    });
+
+    // 404-NO-LEAK (AUDIT3 security.md): a non-owner reading an EXISTING animal must get 404 (not 403),
+    // identical to a missing id — no existence oracle over animal ids.
+    it('404s (not 403) when a non-owner USER reads an existing animal (no existence oracle)', async () => {
+      const { svc } = setup(); // animal is owned by OWNER
+      await expect(svc.getById(ANIMAL, user(OTHER))).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   // ADR-0018: the public cross-aggregate ownership accessor used by ListingService/ModerationService.

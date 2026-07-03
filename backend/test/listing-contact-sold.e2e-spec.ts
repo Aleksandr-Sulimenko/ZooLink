@@ -20,14 +20,12 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
-import { CryptoService } from '../src/lib/crypto/crypto.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
 
 describe('Contact reveal + mark-sold + analytics (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  let crypto: CryptoService;
   let redis: RedisService;
   const listings: string[] = [];
   const animalsCreated: string[] = [];
@@ -100,6 +98,19 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     return r.headers['etag'];
   };
 
+  /**
+   * ADR-0020 honest opt-in path (kills the masking fixture): a seller sets their contact channels + visibility
+   * through the REAL PATCH /v1/me writer, which encrypts the phone (ADR-0019) and records the
+   * CONTACT_DISTRIBUTION consent in the same transaction. No direct DB seeding of contact_phone/prefs.
+   */
+  const setContact = async (
+    tok: string,
+    body: { contactPhone?: string; contactTelegram?: string; showPhone?: boolean; showTelegram?: boolean },
+  ): Promise<void> => {
+    const me = await request(server()).get('/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
+    await request(server()).patch('/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body).expect(200);
+  };
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
@@ -109,18 +120,15 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     await app.init();
     await resetThrottle(app);
     prisma = app.get(PrismaService);
-    crypto = app.get(CryptoService);
     redis = app.get(RedisService);
 
-    // Seller's contact_phone is stored field-encrypted (ADR-0019); telegram is plaintext; both channels on.
-    sellerId = await mkUser('CSeller', 'USER', {
-      contact_phone: crypto.encrypt(SELLER_PHONE),
-      contact_telegram: SELLER_TG,
-      contact_prefs: { show_phone: true, show_telegram: true },
-    });
+    // Seller opts in through the REAL writer (PATCH /me): phone field-encrypted (ADR-0019), telegram plaintext,
+    // both channels on → records a CONTACT_DISTRIBUTION consent. No masking fixture.
+    sellerId = await mkUser('CSeller', 'USER');
     buyerId = await mkUser('CBuyer', 'USER');
     modId = await mkUser('CMod', 'MODERATOR');
     [sellerTok, buyerTok, modTok] = await Promise.all([devToken(sellerId), devToken(buyerId), devToken(modId)]);
+    await setContact(sellerTok, { contactPhone: SELLER_PHONE, contactTelegram: SELLER_TG, showPhone: true, showTelegram: true });
 
     const sp = await prisma.species.create({ data: { code: `cs_sp_${suffix}`, name_localized: { en: 'S', ru: 'С' }, market: 'pet' } });
     speciesId = sp.id;
@@ -141,6 +149,11 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     }
     if (breedId) await prisma.breeds.delete({ where: { id: breedId } }).catch(() => undefined);
     if (speciesId) await prisma.species.delete({ where: { id: speciesId } }).catch(() => undefined);
+    // consents is append-only (trg_consents_immutable) + ON DELETE CASCADE on user_id → a user hard-delete
+    // would fire the DELETE trigger. Bypass the trigger for test cleanup only (prod anonymises, never deletes).
+    await prisma.$executeRaw`ALTER TABLE consents DISABLE TRIGGER trg_consents_immutable`.catch(() => undefined);
+    for (const id of users) await prisma.consents.deleteMany({ where: { user_id: id } }).catch(() => undefined);
+    await prisma.$executeRaw`ALTER TABLE consents ENABLE TRIGGER trg_consents_immutable`.catch(() => undefined);
     for (const id of users) await prisma.users.delete({ where: { id } }).catch(() => undefined);
     await app.close();
   });
@@ -187,11 +200,10 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     });
 
     it('returns only the seller-enabled channels (a seller with telegram off → phone only)', async () => {
-      const phoneOnlySeller = await mkUser('PhoneOnly', 'USER', {
-        contact_phone: crypto.encrypt('+70001112233'),
-        contact_telegram: 'hidden',
-        contact_prefs: { show_phone: true, show_telegram: false },
-      });
+      // Honest opt-in via PATCH /me: phone on, telegram off → the consent grant covers the phone channel only.
+      const phoneOnlySeller = await mkUser('PhoneOnly', 'USER');
+      const poTok = await devToken(phoneOnlySeller);
+      await setContact(poTok, { contactPhone: '+70001112233', showPhone: true, showTelegram: false });
       const animalId = await prisma.animals
         .create({ data: { owner_id: phoneOnlySeller, species_id: speciesId, breed_id: breedId, nickname_localized: { en: 'P', ru: 'П' }, sex: 'Male', date_of_birth: new Date('2021-01-01T00:00:00Z') } })
         .then((a) => {
@@ -204,22 +216,57 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       listings.push(l.id);
       const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(res.body.channels).toEqual({ phone: '+70001112233' });
+      expect(res.body.status).toBe('REVEALED');
+    });
+
+    it('a seller who has NOT opted in → NO_CHANNELS, nothing charged (ADR-0020 default-deny)', async () => {
+      const silentSeller = await mkUser('Silent', 'USER'); // no PATCH /me → no consent, all channels off
+      const noOptBuyer = await mkUser('NoOptBuyer', 'USER');
+      const noOptTok = await devToken(noOptBuyer);
+      await redis.client.del(`contact-reveal:pet:${noOptBuyer}`);
+      const animalId = await newAnimal(silentSeller);
+      const l = await prisma.listings.create({
+        data: { animal_id: animalId, seller_id: silentSeller, listing_type: 'sale', title_localized: { en: 'S', ru: 'С' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
+      });
+      listings.push(l.id);
+      const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${noOptTok}`).expect(200);
+      expect(res.body.channels).toEqual({});
+      expect(res.body.status).toBe('NO_CHANNELS');
+      expect(res.body.revealedAt).toBeNull();
+      // Billing-unit fix: no quota burned, no reveal row written.
+      expect(await redis.client.get(`contact-reveal:pet:${noOptBuyer}`)).toBeNull();
+      expect(await prisma.contact_reveals.count({ where: { listing_id: l.id } })).toBe(0);
+    });
+
+    it('dedup: re-revealing the SAME listing returns the existing row without burning more quota', async () => {
+      const dedupBuyer = await mkUser('DedupBuyer', 'USER');
+      const dedupTok = await devToken(dedupBuyer);
+      await redis.client.del(`contact-reveal:pet:${dedupBuyer}`);
+      const id = await activeListing();
+      const first = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
+      const second = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
+      expect(second.body.channels).toEqual(first.body.channels);
+      expect(second.body.revealedAt).toBe(first.body.revealedAt); // same row
+      expect(Number(await redis.client.get(`contact-reveal:pet:${dedupBuyer}`))).toBe(1); // charged once
+      expect(await prisma.contact_reveals.count({ where: { listing_id: id, viewer_id: dedupBuyer } })).toBe(1);
     });
 
     it('pet market: the 11th reveal within the hour → 429 with Retry-After (spec 16)', async () => {
-      // A dedicated fresh buyer so this test owns the whole hourly budget.
+      // A dedicated fresh buyer so this test owns the whole hourly budget. Distinct listings each time —
+      // the rate limit is about revealing MANY listings (re-revealing the same one is free dedup, ADR-0020).
       const limitBuyer = await mkUser('LimitBuyer', 'USER');
       const limitTok = await devToken(limitBuyer);
       await redis.client.del(`contact-reveal:pet:${limitBuyer}`);
-      const id = await activeListing();
       for (let i = 0; i < 10; i++) {
+        const id = await activeListing();
         await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(200);
       }
-      const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(429);
+      const capped = await activeListing();
+      const res = await request(server()).post(`/v1/listings/${capped}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(429);
       expect(res.body.code).toBe('RATE_LIMITED');
       expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
       // Exactly the 10 successful reveals are logged; the 11th (over-limit) logged nothing.
-      const count = await prisma.contact_reveals.count({ where: { listing_id: id, viewer_id: limitBuyer } });
+      const count = await prisma.contact_reveals.count({ where: { viewer_id: limitBuyer } });
       expect(count).toBe(10);
     });
 

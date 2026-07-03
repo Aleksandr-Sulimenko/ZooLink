@@ -24,15 +24,24 @@ const baseUser = {
   deactivated_at: null,
 };
 
-function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jest.Mock) {
+function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jest.Mock, consentGranted = false) {
   const findUnique = jest.fn().mockResolvedValue(user);
   const update = updateImpl ?? jest.fn().mockResolvedValue({ ...baseUser, updated_at: new Date('2026-06-20T00:00:00Z') });
-  const prisma = { users: { findUnique, update } } as unknown as PrismaService;
+  const consents = { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({}) };
+  const tx = { users: { update }, consents };
+  const prisma = {
+    users: { findUnique, update },
+    $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
+  } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
   const logout = jest.fn().mockResolvedValue(undefined);
   const auth = { logout } as unknown as AuthService;
-  return { svc: new ProfileService(prisma, audit, auth, testCrypto), findUnique, update, record, logout };
+  // ADR-0020: ConsentService stub — currentlyGranted returns the seeded state; record captures the write.
+  const consentRecord = jest.fn().mockResolvedValue(undefined);
+  const currentlyGranted = jest.fn().mockResolvedValue(consentGranted);
+  const consent = { record: consentRecord, currentlyGranted } as unknown as import('./consent.service').ConsentService;
+  return { svc: new ProfileService(prisma, audit, auth, testCrypto, consent), findUnique, update, record, logout, consentRecord, currentlyGranted };
 }
 
 const currentEtag = weakEtag(baseUser.id, baseUser.updated_at);
@@ -69,6 +78,41 @@ describe('ProfileService.updateMe', () => {
     );
     expect(profile.id).toBe('u1');
     expect(etag).not.toBe(currentEtag); // updated_at changed
+  });
+
+  // ── ADR-0020: contact-channel opt-in records a CONTACT_DISTRIBUTION consent in the same tx ──
+  it('opt-in (showPhone true, not yet granted) records a CONTACT_DISTRIBUTION grant + encrypts the phone', async () => {
+    const { svc, update, consentRecord } = setup(baseUser, undefined, false);
+    await svc.updateMe('u1', { contactPhone: '+79990001122', showPhone: true }, currentEtag);
+    const data = update.mock.calls[0][0].data as Record<string, unknown>;
+    expect(typeof data.contact_phone).toBe('string');
+    expect(String(data.contact_phone).startsWith('enc:v1:')).toBe(true); // ADR-0019 field-encrypted
+    expect(data.contact_prefs).toEqual({ show_phone: true, show_telegram: false });
+    expect(consentRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'CONTACT_DISTRIBUTION', granted: true, source: 'PROFILE_SETTINGS', actorId: 'u1', actorPrincipalType: 'HUMAN' }),
+      expect.anything(),
+    );
+  });
+
+  it('turning all channels off while granted records a withdrawal (granted=false)', async () => {
+    const { svc, consentRecord } = setup({ ...baseUser, contact_prefs: { show_phone: true, show_telegram: false } }, undefined, true);
+    await svc.updateMe('u1', { showPhone: false }, currentEtag);
+    expect(consentRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'CONTACT_DISTRIBUTION', granted: false }),
+      expect.anything(),
+    );
+  });
+
+  it('an unrelated edit (no show_* toggles) records NO consent row', async () => {
+    const { svc, consentRecord } = setup();
+    await svc.updateMe('u1', { fullName: 'Bob' }, currentEtag);
+    expect(consentRecord).not.toHaveBeenCalled();
+  });
+
+  it('re-affirming an already-granted channel does not append a duplicate consent row', async () => {
+    const { svc, consentRecord } = setup({ ...baseUser, contact_prefs: { show_phone: true, show_telegram: false } }, undefined, true);
+    await svc.updateMe('u1', { showPhone: true }, currentEtag);
+    expect(consentRecord).not.toHaveBeenCalled();
   });
 
   it('maps unknown cityId (P2003) to 400', async () => {

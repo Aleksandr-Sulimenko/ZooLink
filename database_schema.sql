@@ -970,7 +970,7 @@ ALTER TABLE animals ADD  CONSTRAINT chk_animals_nickname_lang CHECK (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_phone    TEXT; -- ADR-0019 OD-1: AES-256-GCM ciphertext (enc:v1: prefix), field-encrypted before launch; widened from VARCHAR(30) for ciphertext
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_telegram VARCHAR(64);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_prefs    JSONB NOT NULL
-    DEFAULT '{"show_phone": true, "show_telegram": false}'::jsonb;
+    DEFAULT '{"show_phone": false, "show_telegram": false}'::jsonb; -- ADR-0020 (mig 0029): default all-OFF (ст.10.1); lawful basis lives in `consents`, not here
 
 CREATE TABLE IF NOT EXISTS contact_reveals (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -981,9 +981,39 @@ CREATE TABLE IF NOT EXISTS contact_reveals (
 );
 CREATE INDEX IF NOT EXISTS idx_contact_reveals_viewer_time ON contact_reveals(viewer_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_contact_reveals_listing ON contact_reveals(listing_id);
+-- ADR-0020 (mig 0029): one reveal row per (viewer, listing) — repeat reveal returns the existing row
+-- without burning quota / re-writing a lead (billing-unit fix). DB backstop; the app checks first.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_reveals_viewer_listing ON contact_reveals(viewer_id, listing_id);
 COMMENT ON TABLE contact_reveals IS 'Audit + rate-limit source for seller-contact reveals (ADR-0005, no-chat MVP).';
 COMMENT ON TABLE conversations IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
 COMMENT ON TABLE messages IS 'Фаза 2+ only — chat is out of MVP (ADR-0005). Reserved schema; unused by MVP backend.';
+
+-- ========== Consent log (ADR-0020; mirrored in migration 0029) ==========
+-- Append-only, versioned consent record (ADR-0011 supersede shape): a new row supersedes the previous;
+-- current consent = latest row by (user_id, consent_type). Immutable (trg_consents_immutable). The
+-- statutory proof (ст.9 ч.1 ФЗ-152): text version + timestamp + the affirmative action. CONTACT_DISTRIBUTION
+-- is live (ст.10.1); MARKETING/ANALYTICS_PROFILING/NONESSENTIAL_COOKIES are reserved form-now (behaviour deferred).
+CREATE TABLE IF NOT EXISTS consents (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, -- the DATA SUBJECT
+    consent_type  VARCHAR(40) NOT NULL CHECK (consent_type IN
+                     ('CONTACT_DISTRIBUTION','MARKETING','ANALYTICS_PROFILING','NONESSENTIAL_COOKIES')),
+    granted       BOOLEAN NOT NULL, -- true=grant, false=withdrawal (a NEW superseding row; ст.9 ч.2)
+    policy_version VARCHAR(20) NOT NULL, -- version of the consent text agreed to (ст.9 ч.1 proof)
+    source        VARCHAR(30) NOT NULL, -- origin of the UI action ('PROFILE_SETTINGS','REGISTRATION','ADMIN','AGENT')
+    -- ADR-0011/0006 actor snapshot: WHO recorded it (normally == user_id; differs for operator/AGENT on-behalf).
+    actor_id             UUID REFERENCES users(id) ON DELETE SET NULL,
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'
+                            CHECK (actor_principal_type IN ('HUMAN','AGENT')),
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() -- append-only; no updated_at
+);
+CREATE INDEX IF NOT EXISTS idx_consents_current ON consents(user_id, consent_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_consents_agent_actor ON consents(actor_principal_type) WHERE actor_principal_type = 'AGENT';
+DROP TRIGGER IF EXISTS trg_consents_immutable ON consents;
+CREATE TRIGGER trg_consents_immutable
+BEFORE UPDATE OR DELETE ON consents
+FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
+COMMENT ON TABLE consents IS 'ADR-0020: append-only, versioned consent log (ст.9 ч.1 proof). Current = latest row by (user_id, consent_type).';
 
 -- ========== Integrity & cascades (audit round 3, P1; mirrored in migration 0006) ==========
 -- Reproductive status for breeding eligibility (matching domain)

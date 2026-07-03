@@ -470,6 +470,10 @@ paths:
       description: >
         Adds a photo to a listing the actor owns (seller or org-admin → else 403). MODERATOR is
         R-only on listings → excluded. `MAX_MEDIA_ITEMS=10` per listing → 422 on overflow.
+        (normative, AUDIT3 security.md) The photo `url` MUST reference our OWN object storage
+        (S3/MinIO, ADR-0008) — its host is validated against the env-driven storage-host allowlist;
+        an arbitrary external/internal host is rejected 422. This prevents post-approval content-swap
+        (moderation bypass — the DB stores the URL, not the bytes) and latent SSRF.
       x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
@@ -950,7 +954,7 @@ components:
         url:
           type: string
           format: uri
-          description: Photo URL
+          description: Photo URL — on our own object-storage host (S3/MinIO); external/internal hosts rejected 422 on write (AUDIT3)
         orderIndex:
           type: integer
           default: 0
@@ -972,7 +976,7 @@ components:
         url:
           type: string
           format: uri
-          description: Photo URL
+          description: Photo URL — on our own object-storage host (S3/MinIO); external/internal hosts rejected 422 on write (AUDIT3)
         orderIndex:
           type: integer
           default: 0
@@ -998,7 +1002,16 @@ components:
         Result of a contact reveal (spec 16, no-chat MVP). Carries only the seller-enabled channels —
         `phone` when the seller has `show_phone`, `telegram` when `show_telegram`; a disabled or unset
         channel is absent. Never includes email. `sellerName` is the seller's public display name.
-      required: [listingId, sellerId, channels, revealedAt]
+        (ADR-0020, normative — WHAT/WHY/WHY-BETTER) `status` discriminator added:
+        WHAT — `REVEALED` = at least one channel returned; `NO_CHANNELS` = the seller has NOT granted the
+        CONTACT_DISTRIBUTION consent (ст.10.1) or has all channels off, so nothing was distributed and — the
+        billing-unit fix — nothing was charged (no quota burned, no `contact_reveals` row, no lead event);
+        `revealedAt` is then null. A repeat reveal of the same (viewer, listing) returns the existing row's
+        `revealedAt` without re-charging (dedup). WHY — the previous shape could not tell a real reveal from
+        an empty one, and it burned quota + wrote a lead row on empty reveals (AUDIT2 HIDDEN-COST). WHY-BETTER —
+        the client can show "seller has not shared contacts" distinctly, and the operator never bills an
+        empty reveal.
+      required: [listingId, sellerId, channels, status]
       properties:
         listingId:
           type: string
@@ -1027,7 +1040,14 @@ components:
         revealedAt:
           type: string
           format: date-time
-          description: When this reveal was logged
+          nullable: true
+          description: When this reveal was logged; null when status is NO_CHANNELS (nothing was revealed)
+        status:
+          type: string
+          enum: [REVEALED, NO_CHANNELS]
+          description: >
+            REVEALED = at least one channel returned; NO_CHANNELS = no consent / all channels off — nothing
+            distributed, nothing charged (ADR-0020).
     ListingAnalytics:
       type: object
       description: >

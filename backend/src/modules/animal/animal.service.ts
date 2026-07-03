@@ -164,11 +164,20 @@ export class AnimalService {
     return this.toView(row);
   }
 
-  /** GET /animals/{id} — read one + its weak ETag. 404 if absent. Read authz is open to all roles (matrix). */
+  /**
+   * GET /animals/{id} — read one + its weak ETag. Read is scoped to the owner (+ org-admin) and
+   * operators (MODERATOR/ADMIN) per rbac-matrix; there is no unconditional public read of an animal.
+   * 404-NO-LEAK (AUDIT3 security.md): a non-owner reading an EXISTING animal gets the SAME 404 as a
+   * missing id — never a 403 — so the endpoint cannot be used as an existence oracle over animal ids
+   * (the invariant listing/saved-search/content-report already honour). Absent ⇒ 404 (findOrThrow),
+   * present-but-unauthorized ⇒ collapse to 404 here rather than assertCan's 403.
+   */
   async getById(id: string, actor: AuthPrincipal): Promise<{ animal: AnimalView; etag: string }> {
     const row = await this.findOrThrow(id);
     const ability = this.abilities.createForPrincipal(actor);
-    assertCan(ability, 'read', subject('Animal', this.aclSubject(row)));
+    if (!ability.can('read', subject('Animal', this.aclSubject(row)))) {
+      throw new NotFoundException({ message: 'Animal not found', code: 'NOT_FOUND' });
+    }
     return { animal: this.toView(row), etag: this.etag(row) };
   }
 

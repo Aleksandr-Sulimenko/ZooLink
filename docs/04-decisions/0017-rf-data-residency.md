@@ -1,7 +1,7 @@
 # ADR-0017: RF data residency — РФ-citizen PII primary, replicas, backups and DR stay in the Russian Federation
 
-**Status**: Proposed — P0 go-live; awaiting owner go on RF topology/cost (owner reviewed Q1–Q6 2026-07-01)
-**Date**: 2026-07-01
+**Status**: Accepted — owner gave the go on RF-only topology (Option 3) 2026-07-02; RF-confined DR/HA and its cost accepted. Legal A3 P0 residency blocker closed **at the decision level**; **devops** now implements the region-pin + fail-on-non-RF guardrail (see *Guardrail specification*). Lineage: Proposed 2026-07-01 → **Accepted 2026-07-02**.
+**Date**: 2026-07-01 (accepted 2026-07-02)
 **Relates to**: [ADR-0008](0008-rf-provider-matrix.md) (RF-appropriate providers), [ADR-0009](0009-mvp-vs-target-architecture.md) (modular monolith), [ADR-0012](0012-pii-at-rest-encryption.md) (PII-at-rest), the Legal launch-compliance checklist **A3** (`docs/legal/launch-compliance-checklist.md`).
 **Owner-actionable**: this is a **P0 go-live blocker** (legal A3). Legal set the *requirement*; this ADR fixes the *topology*; **devops** implements the deploy constraint + guardrail.
 
@@ -93,6 +93,24 @@ Adopt **Option 3**. Normative topology constraints (P0 go-live):
 - Update `docs/specs/deployment/deployment_specification.md` (+ EN↔RU) to state the RF-residency constraint and remove/replace the unconstrained cross-region replication/DR language (the audit BLOCKER source at `:70,105`).
 - Extend the PII-redaction boundary to cover log/observability destinations.
 - Coordinate with **legal** before enabling any cross-border de-identified flow (ст.12 review, checklist C5).
+
+## Guardrail specification (devops handoff — normative)
+Three complementary guards enforce clause 8. All three read **one canonical RF-region allowlist** (a single source of truth, e.g. a `RF_ALLOWED_REGIONS` constant) — never two divergent lists.
+
+**(a) Runtime config validation (fail-at-boot).**
+- Validate **every region-bearing env var**, at minimum `S3_REGION`, and any `*_REGION` / provider-region variable introduced for managed-PG, the backup target, the DR/failover target, and any log/observability sink.
+- Enforce in the config schema with **zod `.refine()`** against `RF_ALLOWED_REGIONS` (an allowlist of approved RF region identifiers). A value not in the allowlist **throws at application boot** — the service must refuse to start rather than run against a non-RF store.
+- **MinIO `us-east-1` trap (must-handle):** self-hosted S3/MinIO defaults its region string to `us-east-1` even when physically in the RF. The deployment MUST set `S3_REGION` to an **approved RF identifier**; the `us-east-1` default is therefore rejected by the refine — this is intended, and forces a deliberate, reviewed region-pin instead of a silent default.
+- The exact allowlist identifiers derive from the **ADR-0008** chosen provider (e.g. Yandex Cloud `ru-central1*`); devops + legal confirm the identifier set. Because a region *string* is not proof of physical location, the allowlist is a config-hygiene guard layered on top of provider choice (ADR-0008) — not a substitute for it.
+
+**(b) CI step (fail-on-non-RF, blocking).**
+- A CI job parses the deploy config/IaC/env for the **prod** environment (and any staging that carries real PII) and **fails the pipeline** if any region-bearing value — for PG, replica, backup, object store, DR target, or PII-bearing log sink — is outside `RF_ALLOWED_REGIONS`.
+- Same allowlist source as (a); **blocking**, not advisory (promote from advisory only once green, consistent with the migration-drift gate precedent).
+
+**(c) Documented region-pin (deploy-runbook).**
+- Record the region-pin as an **explicit, reviewed value** in `docs/specs/deployment/deployment_specification.md` (+ EN↔RU): state the RF-residency constraint, name the approved RF region identifier, and **remove/replace** the unconstrained cross-region replication/DR language at `:70,105` (the audit BLOCKER source). This runbook entry is the canonical documented pin that (a) and (b) enforce.
+
+Guard chain: **runbook (documented) → CI (pre-deploy) → boot refine (runtime)** — defense in depth, single allowlist.
 
 ## Related Decisions
 - **ADR-0008** — RF-appropriate provider matrix (this ADR adds residency).

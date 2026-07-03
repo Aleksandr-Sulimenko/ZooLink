@@ -6,6 +6,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MaxLength,
   MinLength,
@@ -16,6 +17,16 @@ const ROLES = ['USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN'
 const OAUTH_PROVIDERS = ['google', 'apple', 'telegram', 'vk'] as const;
 
 const E164 = /^\+?[1-9]\d{7,14}$/;
+
+/**
+ * Avatar URL validation (AUDIT3 security.md #2 / frontend-engineer): a stored `javascript:`/`data:`
+ * URL renders as stored-XSS in any operator/admin/SPA surface that shows the avatar (ADR-0006 makes
+ * operators agents/humans — a poisoned avatar is a cross-tenant seam). `@IsUrl` with an https-only
+ * protocol allowlist + require_protocol rejects `javascript:alert(1)`, `data:text/html,…`, protocol-
+ * relative and http URLs (400 VALIDATION_ERROR). Enforces the `format: uri` the contract declares
+ * (OpenAPI `format` is documentation-only — class-validator is the runtime gate).
+ */
+const AVATAR_URL_OPTS = { protocols: ['https'], require_protocol: true };
 
 export class RegisterPhoneDto {
   @ApiProperty({ description: 'Phone number in E.164 format', example: '+79991234567' })
@@ -40,9 +51,9 @@ export class RegisterPhoneDto {
   @MaxLength(255)
   email?: string;
 
-  @ApiPropertyOptional({ description: 'Avatar URL in object storage' })
+  @ApiPropertyOptional({ description: 'Avatar URL in object storage (https only)', format: 'uri' })
   @IsOptional()
-  @IsString()
+  @IsUrl(AVATAR_URL_OPTS)
   @MaxLength(500)
   avatarUrl?: string;
 
@@ -87,9 +98,9 @@ export class OAuthDto {
   @MaxLength(255)
   email?: string;
 
-  @ApiPropertyOptional({ description: 'Avatar URL' })
+  @ApiPropertyOptional({ description: 'Avatar URL (https only)', format: 'uri' })
   @IsOptional()
-  @IsString()
+  @IsUrl(AVATAR_URL_OPTS)
   @MaxLength(500)
   avatarUrl?: string;
 
@@ -118,9 +129,9 @@ export class UpdateProfileDto {
   @MaxLength(255)
   email?: string | null;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({ nullable: true, format: 'uri' })
   @IsOptional()
-  @IsString()
+  @IsUrl(AVATAR_URL_OPTS)
   @MaxLength(500)
   avatarUrl?: string | null;
 
@@ -128,6 +139,41 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsIn(['ru', 'en'])
   preferredLanguage?: 'ru' | 'en';
+
+  // ── Contact-exchange channels (ADR-0020 / ADR-0005). Setting a channel + turning it on is the opt-in
+  //    that records a CONTACT_DISTRIBUTION consent (see ProfileService.updateMe). `null` clears a channel. ──
+  @ApiPropertyOptional({
+    description: 'Marketplace contact phone (E.164). Stored AES-256-GCM at rest (ADR-0019). null clears it.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(E164, { message: 'contactPhone must be a valid E.164 number' })
+  contactPhone?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Marketplace contact Telegram handle (5–32 chars, optional leading @). null clears it.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^@?[A-Za-z0-9_]{5,32}$/, { message: 'contactTelegram must be a valid Telegram handle' })
+  @MaxLength(64)
+  contactTelegram?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Show the phone to buyers on contact-reveal. Turning any channel on records CONTACT_DISTRIBUTION consent (ADR-0020).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  showPhone?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Show the Telegram handle to buyers on contact-reveal. Turning any channel on records CONTACT_DISTRIBUTION consent (ADR-0020).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  showTelegram?: boolean;
 }
 
 export class RegisterPhoneResponseDto {

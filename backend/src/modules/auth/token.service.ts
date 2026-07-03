@@ -20,7 +20,9 @@ export class TokenService {
 
   /** Verifies signature + expiry. Throws if invalid/expired (caller maps to 401). */
   verifyAccess(token: string): AuthPrincipal {
-    const claims = this.jwt.verify<AccessTokenClaims>(token);
+    // Pin HS256 explicitly at the call site too (defence-in-depth over the module verifyOptions) so
+    // alg-confusion / "alg":"none" tokens are rejected regardless of module wiring — AUDIT3 #3.
+    const claims = this.jwt.verify<AccessTokenClaims>(token, { algorithms: ['HS256'] });
     return {
       userId: claims.sub,
       role: claims.role,

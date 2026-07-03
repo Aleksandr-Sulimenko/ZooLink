@@ -1,7 +1,7 @@
 # Ecosystem ADR Plan & Open-Decision Memo (architect) — for owner ratification
 
 **Status**: decision-memo (architect, 2026-07-01). Not an ADR — a fast-ratification brief.
-**✅ Q1–Q6 owner-ratified 2026-07-01.** ADRs 0014 + 0015 accepted jointly (Q1); 0016/0017/0018/0019 remain Proposed with explicit awaiting-conditions (see the table and §Ratification outcome). doc-keeper recorded the statuses; nothing committed.
+**✅ Q1–Q6 owner-ratified 2026-07-01.** ADRs 0014 + 0015 accepted jointly (Q1). **Status update (aligned to ADR files 2026-07-02):** 0016 & 0019 **Accepted** 2026-07-01 (on security+legal sign-offs); **0017 Accepted 2026-07-02** (owner go on RF-only topology); **0018 remains Proposed** with an explicit awaiting-condition (see the table and §Ratification outcome). doc-keeper recorded the statuses; nothing committed.
 **Inputs**: `AUDIT_2026-06-30.md` (§Open owner/architect decisions Q1–Q6), `docsRU/01-discovery/future-features.md` §145-227 (Ecosystem Expansion vision).
 **Companion ADRs** (status as ratified 2026-07-01):
 
@@ -9,10 +9,10 @@
 |---|---|---|---|
 | **0014** | Offering supertype — polymorphic discovery+moderation seam | **Accepted** (2026-07-01, jointly w/ 0015) | Logical Offering supertype via polymorphic `(offering_type, offering_id)` over per-subtype tables; anti-god-table/anti-EAV; subtypes built only when their side ships. |
 | **0015** | `market_scope` refines ADR-0002 | **Accepted** (2026-07-01, jointly w/ 0014) | Hard split stays for animal listings (market derived from species); species-less offerings carry `market_scope ∈ {pet,livestock,both}`; discovery enforces it. **Amends 0002, not supersedes.** |
-| **0016** | Provider model | Proposed — awaiting security+legal provider-verification matrix | One Provider abstraction `provider_kind ∈ {ORG,INDIVIDUAL,AGENT}` over existing principals; risk-tiered verification = condition of intermediary immunity (legal). |
-| **0017** | RF data residency | Proposed — P0 go-live; awaiting owner go on RF topology/cost | РФ-citizen PII primary+replicas+backups+DR+object-store stay in RF; cross-border only for de-identified data. **P0 go-live blocker** (legal A3). |
+| **0016** | Provider model | **Accepted** (2026-07-01) — security+legal T0–T3 verification matrix + three-regime immunity; residual product-confirms OD-3/4/5 open | One Provider abstraction `provider_kind ∈ {ORG,INDIVIDUAL,AGENT}` over existing principals; risk-tiered verification = condition of intermediary immunity (legal). |
+| **0017** | RF data residency | **Accepted** (2026-07-02) — owner go on RF-only topology; devops implements region-pin + fail-on-non-RF guardrail | РФ-citizen PII primary+replicas+backups+DR+object-store stay in RF; cross-border only for de-identified data. **P0 go-live blocker** (legal A3) — closed at decision level. |
 | **0018** | Cross-aggregate access rule | Proposed — ready (low-risk); awaiting owner nod | Route animal reads through `AnimalService`; no raw cross-aggregate table reads. **Reaffirms 0004**, prerequisite for 0014. |
-| **0019** | PII-at-rest form enforcement | Proposed — awaiting security+legal at-rest launch-floor sign-off | Build ADR-0012's blind-index+crypto seam now (irreversible piece); storage-level baseline at launch; stage field-encryption rollout. **Amends 0012, not supersedes.** |
+| **0019** | PII-at-rest form enforcement | **Accepted** (2026-07-01) — owner OD-1/OD-2 + security+legal at-rest sign-off; residual certified-СКЗИ investigation | Build ADR-0012's blind-index+crypto seam now (irreversible piece); storage-level baseline at launch; stage field-encryption rollout. **Amends 0012, not supersedes.** |
 
 > **WHY this memo** — Six ADRs above answer the *structural* questions. The six open decisions (Q1–Q6) mix structural, product, money, legal and roadmap calls. This memo gives architect's position on each; the owner ratified all six on 2026-07-01 (see §Ratification outcome), with each non-structural call flagged **«owner decides»** preserved as the recorded decision.
 
@@ -29,7 +29,7 @@ The owner reviewed Q1–Q6 and ratified as follows. This stamp is the authoritat
 - **Q5 — ratified.** Per-market SLA / listing-duration values, defined in **one canonical source** (de-duplicate the constant); `premium_profiles` **split into two** distinct concepts (B2C consumer boost vs B2B subscription) with distinct `monetization_type`. Actual thresholds and launch timing remain **owner-decides** (product/finance/legal).
 - **Q6 — ratified.** Livestock B2B is a **separate roadmap track**, same codebase / same seams (ADR-0014/0015/0016, `market_scope=livestock`), **sequenced last**. Dedicated team/sprint = owner resourcing call.
 
-**Open follow-ups gating the still-Proposed ADRs** (surfaced, not silently parked): 0016 → security+legal author the provider-verification risk-matrix; 0017 → owner go on RF topology/cost + devops region-pin & CI guardrail; 0018 → owner nod (low-risk, reaffirms 0004) then backend bounded refactor; 0019 → security+legal sign off the at-rest launch-floor.
+**Open follow-ups** (surfaced, not silently parked; updated 2026-07-02): 0016 → **sign-off received/Accepted**; residual product-confirms OD-3/4/5 tracked in the ADR. 0017 → **Accepted**; now a **devops build task** (region-pin + fail-on-non-RF CI guardrail + deployment-spec fix — spec in ADR-0017 §Guardrail specification); legal ст.12 carve-out review remains. 0018 → still **Proposed**: owner nod (low-risk, reaffirms 0004) then backend bounded refactor (its fate is decided at the D8 `marketOf` refactor slice). 0019 → **sign-off received/Accepted**; residual certified-СКЗИ investigation tracked in the ADR.
 
 ---
 

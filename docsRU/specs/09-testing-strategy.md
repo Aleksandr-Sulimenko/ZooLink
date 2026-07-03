@@ -216,9 +216,12 @@ status: "Approved"
 - **Contract testing:** OpenAPI-контракты против реализации (schemathesis или dredd); опц. consumer-driven (Pact) фронт↔бэк.
 - **Покрытие:** backend unit/integration ≥90%; критические E2E (register→verify→animal→listing→moderate→publish→
   search→contact-reveal) зелёные; enforce через `coverageThreshold` в CI.
-- **CI-гейты (`.github/workflows`):** `ci.yml` (draft-шаблон) = lint + typecheck + проверка `prisma migrate deploy` +
-  unit/integration на PG-service + **security-гейты** (`npm audit`, Trivy, Semgrep SAST, OWASP ZAP baseline на staging).
-  `performance-tests.yml` — **draft** (k6), активируется после появления репо `./backend`; до этого не является рабочим гейтом.
+- **CI-гейты (`.github/workflows`):** `ci.yml` = install + `db:generate` + lint + typecheck + build + unit (coverage) +
+  применение `database_schema.sql` + **drift-check schema.prisma** + seed×2 + e2e + джоб **migration-drift** (реплей ×2 +
+  блокирующий DDL-diff) + гейт **резидентности данных РФ** (ADR-0017, fail-on-non-RF-region) + **security-гейты**
+  (`npm audit`, Trivy fs, Semgrep SAST; OWASP ZAP baseline на staging). Схема — SQL-canonical + Prisma introspect
+  (ADR-0007), шага `prisma migrate deploy` **нет**. `performance-tests.yml` — **draft** (k6), активируется после
+  появления perf-тестов; до этого не является рабочим гейтом.
 
 ## Связанные документы
 

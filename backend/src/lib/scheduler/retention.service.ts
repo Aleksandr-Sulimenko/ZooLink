@@ -10,8 +10,8 @@ import { AuditLogService } from '../audit/audit-log.service';
  * `erase_user` field actions (data-governance.md §1 / spec 01 Slice-4). If one changes, change both.
  */
 const DEFAULT_NOTIFICATION_PREFS = { email: true, sms: true, promo: false };
-/** Default contact-visibility prefs (mirror of the DB column default — used on erase reset; ADR-0005). */
-const DEFAULT_CONTACT_PREFS = { show_phone: true, show_telegram: false };
+/** Default contact-visibility prefs (mirror of the DB column default — used on erase reset; ADR-0005/ADR-0020: all-OFF, ст.10.1). */
+const DEFAULT_CONTACT_PREFS = { show_phone: false, show_telegram: false };
 
 /**
  * D2 retention behaviour (ADMIN_PHASE_ACTION_PLAN.md), executed by RetentionExpireJob under the B7

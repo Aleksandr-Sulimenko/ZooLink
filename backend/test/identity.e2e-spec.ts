@@ -20,6 +20,20 @@ import { PrismaService } from '../src/lib/db/prisma.service';
 import { CryptoService } from '../src/lib/crypto/crypto.service';
 import { resetThrottle } from './throttle-reset.util';
 
+/**
+ * The refresh token is delivered ONLY as the HttpOnly `refresh_token` cookie (API_CONVENTIONS §2 /
+ * AUDIT3 security.md #2), never in the JSON body. This asserts the cookie is set and carries the
+ * hardening attributes.
+ */
+const assertRefreshCookie = (res: request.Response): void => {
+  const raw = res.headers['set-cookie'] as unknown as string[] | undefined;
+  const found = (raw ?? []).find((c) => c.startsWith('refresh_token='));
+  expect(found).toBeDefined();
+  expect(found).toMatch(/HttpOnly/i);
+  expect(found).toMatch(/SameSite=Strict/i);
+  expect(found?.split(';')[0].slice('refresh_token='.length).length).toBeGreaterThan(0);
+};
+
 describe('Identity phone OTP (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -115,7 +129,8 @@ describe('Identity phone OTP (e2e)', () => {
       .expect(200);
 
     expect(res.body.accessToken).toEqual(expect.any(String));
-    expect(res.body.refreshToken).toEqual(expect.any(String));
+    expect(res.body.refreshToken).toBeUndefined(); // never in the body — HttpOnly cookie only
+    assertRefreshCookie(res);
     expect(res.body.user).toMatchObject({ fullName: 'Ann Tester', role: 'USER', status: 'ACTIVE' });
     expect(res.body.user.phoneHash).toBeUndefined(); // never leak the credential hash
     createdUserId = res.body.user.id as string;
@@ -142,6 +157,8 @@ describe('Identity phone OTP (e2e)', () => {
       .send({ code: oauthCode, fullName: 'Oauth User' })
       .expect(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
+    expect(res.body.refreshToken).toBeUndefined(); // HttpOnly cookie only
+    assertRefreshCookie(res);
     expect(res.body.user).toMatchObject({ fullName: 'Oauth User', role: 'USER', status: 'ACTIVE' });
     createdOauthUserId = res.body.user.id as string;
   });
@@ -242,6 +259,8 @@ describe('Identity phone OTP (e2e)', () => {
       .send({ email: recoverEmail, code: sentEmailCodes[0] })
       .expect(200);
     expect(ver.body.accessToken).toEqual(expect.any(String));
+    expect(ver.body.refreshToken).toBeUndefined(); // HttpOnly cookie only
+    assertRefreshCookie(ver);
     expect(ver.body.user.status).toBe('ACTIVE'); // reactivated within grace
   });
 
@@ -333,7 +352,7 @@ describe('Identity phone OTP (e2e)', () => {
     expect(erased?.phone_hash).toBeNull();
     expect(erased?.contact_phone).toBeNull();
     expect(erased?.contact_telegram).toBeNull();
-    expect(erased?.contact_prefs).toEqual({ show_phone: true, show_telegram: false });
+    expect(erased?.contact_prefs).toEqual({ show_phone: false, show_telegram: false }); // ADR-0020: erase-reset leaves distribution OFF (ст.10.1)
     expect(erased?.erased_at).not.toBeNull();
     expect(erased?.status).toBe('DEACTIVATED');
 

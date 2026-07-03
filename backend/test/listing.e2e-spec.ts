@@ -68,7 +68,7 @@ describe('Listings Slice 1 (e2e)', () => {
     return r.headers['etag'];
   };
   const addPhoto = (tok: string, id: string) =>
-    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://x/${randomUUID()}.jpg` });
+    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
   const baseBody = (over: Record<string, unknown> = {}) => ({
     animalId: '', // filled per-test
     listingType: 'sale',

@@ -471,6 +471,10 @@ paths:
       description: >
         Добавляет фото к объявлению, которым актор владеет (продавец или org-admin → иначе 403). MODERATOR —
         R-only на объявлениях → исключён. `MAX_MEDIA_ITEMS=10` на объявление → 422 при переполнении.
+        (нормативно, AUDIT3 security.md) `url` фото ДОЛЖЕН ссылаться на НАШЕ объектное хранилище
+        (S3/MinIO, ADR-0008) — его host проверяется по env-driven allowlist хостов хранилища;
+        произвольный внешний/внутренний host отклоняется 422. Это предотвращает подмену контента после
+        одобрения (обход модерации — в БД хранится URL, а не байты) и латентный SSRF.
       x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: path
@@ -951,7 +955,7 @@ components:
         url:
           type: string
           format: uri
-          description: URL фото
+          description: URL фото — на нашем хосте объектного хранилища (S3/MinIO); внешние/внутренние хосты отклоняются 422 при записи (AUDIT3)
         orderIndex:
           type: integer
           default: 0
@@ -973,7 +977,7 @@ components:
         url:
           type: string
           format: uri
-          description: URL фото
+          description: URL фото — на нашем хосте объектного хранилища (S3/MinIO); внешние/внутренние хосты отклоняются 422 при записи (AUDIT3)
         orderIndex:
           type: integer
           default: 0
@@ -999,7 +1003,15 @@ components:
         Результат reveal контакта (спека 16, MVP без чата). Содержит только каналы, включённые
         продавцом — `phone` при `show_phone`, `telegram` при `show_telegram`; выключенный или незаданный
         канал отсутствует. Никогда не включает email. `sellerName` это публичное отображаемое имя.
-      required: [listingId, sellerId, channels, revealedAt]
+        (ADR-0020, нормативно — ЧТО/ЗАЧЕМ/ЧЕМ-ЛУЧШЕ) добавлен дискриминатор `status`:
+        ЧТО — `REVEALED` = вернулся хотя бы один канал; `NO_CHANNELS` = продавец НЕ дал согласие
+        CONTACT_DISTRIBUTION (ст.10.1) или выключил все каналы, поэтому ничего не распространено и — фикс
+        billing-unit — ничего не списано (квота не потрачена, строка `contact_reveals` не создана, lead-событие
+        не отправлено); тогда `revealedAt` = null. Повтор reveal того же (viewer, listing) возвращает
+        `revealedAt` существующей строки без повторного списания (дедуп). ЗАЧЕМ — прежняя форма не отличала
+        реальный reveal от пустого и списывала квоту + писала lead на пустых reveal'ах (AUDIT2 HIDDEN-COST).
+        ЧЕМ-ЛУЧШЕ — клиент может показать «продавец не поделился контактами» отдельно, а оператор не тарифицирует пустой reveal.
+      required: [listingId, sellerId, channels, status]
       properties:
         listingId:
           type: string
@@ -1028,7 +1040,14 @@ components:
         revealedAt:
           type: string
           format: date-time
-          description: Когда reveal был залогирован
+          nullable: true
+          description: Когда reveal был залогирован; null при status NO_CHANNELS (ничего не раскрыто)
+        status:
+          type: string
+          enum: [REVEALED, NO_CHANNELS]
+          description: >
+            REVEALED = вернулся хотя бы один канал; NO_CHANNELS = нет согласия / все каналы выключены —
+            ничего не распространено, ничего не списано (ADR-0020).
     ListingAnalytics:
       type: object
       description: >

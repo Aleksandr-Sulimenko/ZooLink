@@ -56,12 +56,20 @@ paths:
             schema: { $ref: '#/components/schemas/OAuthRequest' }
       responses:
         '200':
-          description: User logged in successfully (existing user)
+          description: User logged in successfully (existing user); a refresh_token cookie is set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
         '201':
-          description: User registered successfully (new user)
+          description: User registered successfully (new user); a refresh_token cookie is set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -76,7 +84,8 @@ paths:
       security: []
       description: >-
         Public (security opt-out). (round-4/Phase-2, normative) Validates the OTP, transitions the user
-        to ACTIVE and returns the session (access + refresh) plus the profile. 5 failed attempts →
+        to ACTIVE and returns the session — access token + profile in the body, refresh token as the
+        HttpOnly refresh_token cookie (AUDIT3 #2). 5 failed attempts →
         15-min lockout.
       requestBody:
         required: true
@@ -85,7 +94,11 @@ paths:
             schema: { $ref: '#/components/schemas/VerifyPhoneRequest' }
       responses:
         '200':
-          description: Phone verified; session issued
+          description: Phone verified; session issued (a refresh_token cookie is set)
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -125,7 +138,8 @@ paths:
       security: []
       description: >-
         Public (security opt-out). (Slice-4, normative) Validates the recovery OTP sent to the verified
-        email and returns a fresh session (access + refresh) plus the profile. 5 failed attempts →
+        email and returns a fresh session — access token + profile in the body, refresh token as the
+        HttpOnly refresh_token cookie (AUDIT3 #2). 5 failed attempts →
         15-min lockout. SUSPENDED accounts cannot be recovered (operator action required). A DEACTIVATED
         account within grace is reactivated; past grace it cannot be recovered.
       requestBody:
@@ -135,7 +149,11 @@ paths:
             schema: { $ref: '#/components/schemas/RecoverEmailVerifyRequest' }
       responses:
         '200':
-          description: Recovery verified; session issued
+          description: Recovery verified; session issued (a refresh_token cookie is set)
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -237,37 +255,57 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /auth/refresh:
     post:
-      summary: Refresh access token using refresh token
+      summary: Rotate the refresh cookie and obtain a new access token
       operationId: refreshToken
       security: []
-      description: Public (security opt-out).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
+      description: >-
+        Public (bearer opt-out). (normative) The refresh token is transported ONLY as the HttpOnly
+        `refresh_token` cookie (API_CONVENTIONS §2 — never in the body, XSS-exfil defence). Rotation:
+        the presented cookie is revoked and a fresh `refresh_token` cookie is set (Set-Cookie);
+        replaying a rotated cookie burns the whole family (theft detection). No refresh token appears
+        in the request or response body — the body carries only the new short-lived access token.
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: true
+          schema: { type: string }
+          description: The HttpOnly refresh cookie from a prior session (dev-token / verify-phone / oauth / recover)
       responses:
         '200':
-          description: Token refreshed successfully
+          description: Token refreshed; a new refresh_token cookie is set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: New HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuthResponse' }
+              schema: { $ref: '#/components/schemas/AccessTokenResponse' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /auth/logout:
     post:
-      summary: Logout user (invalidate tokens)
+      summary: Logout user (revoke session server-side + clear the refresh cookie)
       operationId: logout
       x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      description: >-
+        (normative) Revokes the session server-side and clears the refresh cookie. When the
+        `refresh_token` cookie is present, only that device's family is revoked (targeted logout);
+        when it is absent, ALL of the caller's sessions are revoked (logout-everywhere). No request
+        body — the refresh token is read from the cookie, never the body.
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: false
+          schema: { type: string }
+          description: The refresh cookie for the device to log out (omit to revoke all sessions)
       responses:
-        '200': { description: Logged out successfully }
+        '204':
+          description: Logged out; refresh_token cookie cleared
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Cleared refresh_token cookie (Max-Age=0)
         '401': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /me:
@@ -393,9 +431,10 @@ paths:
       security: []
       description: >-
         DEV-ONLY session minting. Bridges auth end-to-end testing against a seeded user until the
-        full login surface (phone OTP + OAuth) is live. **Disabled in production**: when
-        `NODE_ENV=production` the endpoint responds `404 Not Found` (RFC7807) — it is not part of
-        the production product surface. Not for any client/UI; do not depend on it.
+        full login surface (phone OTP + OAuth) is live. **Fail-closed**: reachable ONLY when the
+        explicit `ENABLE_DEV_TOKEN` flag is true AND `NODE_ENV!=='production'`; otherwise (including
+        any production deploy, or any deploy that forgets to opt in) the endpoint responds
+        `404 Not Found` (RFC7807). Not for any client/UI; do not depend on it.
       x-internal: true
       requestBody:
         required: true
@@ -403,14 +442,20 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/DevTokenRequest' }
       responses:
-        '200':
-          description: Session minted (dev/test environments only)
+        '201':
+          description: Session minted (dev/test only); refresh_token cookie set, access token in body
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+              schema: { $ref: '#/components/schemas/AccessTokenResponse' }
         '400': { $ref: '#/components/responses/Problem' }
         '404':
-          description: Not found — also returned for the endpoint itself in production
+          description: >-
+            Not found — returned for the endpoint itself whenever it is not explicitly enabled
+            (ENABLE_DEV_TOKEN not true) or in production (fail-closed).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -421,6 +466,12 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    cookieAuth:
+      # Refresh-token transport (API_CONVENTIONS §2): HttpOnly+Secure+SameSite=Strict cookie,
+      # scoped to /v1/auth. Used by /auth/refresh and /auth/logout — never carried in a body.
+      type: apiKey
+      in: cookie
+      name: refresh_token
   parameters:
     UserIdParam:
       in: path
@@ -562,6 +613,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: https URL only; javascript:/data:/http rejected at validation (stored-XSS defence, AUDIT3 #2)
           maxLength: 500
           description: URL to avatar image in object storage (optional)
         preferredLanguage:
@@ -593,6 +645,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: https URL only; javascript:/data:/http rejected at validation (stored-XSS defence, AUDIT3 #2)
           maxLength: 500
           description: URL to avatar image from provider (optional)
     VerifyPhoneRequest:
@@ -622,14 +675,6 @@ components:
         expiresInSeconds:
           type: integer
           description: OTP validity window in seconds (e.g. 300)
-    RefreshTokenRequest:
-      type: object
-      required:
-        - refreshToken
-      properties:
-        refreshToken:
-          type: string
-          description: Refresh token obtained during login/registration
     DevTokenRequest:
       type: object
       required:
@@ -639,37 +684,30 @@ components:
           type: string
           format: uuid
           description: Existing user id to mint a session for (dev/test only)
-    TokenPairResponse:
+    AccessTokenResponse:
       type: object
+      # (normative) Session response body = access token ONLY. The refresh token is delivered as the
+      # HttpOnly refresh_token cookie (Set-Cookie), never in the body (API_CONVENTIONS §2 / XSS-exfil
+      # defence). Returned by /auth/refresh and /auth/dev-token.
       required:
         - accessToken
-        - refreshToken
       properties:
         accessToken:
           type: string
           description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
-        refreshToken:
-          type: string
-          description: Refresh token for obtaining new access tokens
-    LogoutRequest:
-      type: object
-      properties:
-        refreshToken:
-          type: string
-          description: Refresh token to invalidate (optional, if not provided all tokens for user are invalidated)
     AuthResponse:
       type: object
+      # (normative) Session response body = access token + profile ONLY. The long-lived refresh token is
+      # delivered as the HttpOnly+Secure+SameSite=Strict `refresh_token` cookie (Set-Cookie), NEVER in the
+      # body (API_CONVENTIONS §2 / AUDIT3 security.md #2 — XSS-exfil defence). Returned by
+      # /auth/verify-phone, /auth/register/oauth/{provider}, /auth/recover/email/verify.
       required:
         - accessToken
-        - refreshToken
         - user
       properties:
         accessToken:
           type: string
-          description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
-        refreshToken:
-          type: string
-          description: Refresh token for obtaining new access tokens
+          description: JWT access token (expires in 15 min; refresh token is the HttpOnly cookie — spec 01 round-4)
         user:
           $ref: '#/components/schemas/UserProfile'
     UserProfile:
@@ -714,6 +752,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: https URL only; javascript:/data:/http rejected at validation (stored-XSS defence, AUDIT3 #2); null clears it
           nullable: true
           maxLength: 500
           description: URL to avatar in object storage
@@ -764,6 +803,18 @@ components:
       type: object
       # (Phase-2/round-7, normative) passwordless — `password` removed; cityId is INTEGER (lookup).
       # All fields optional (partial update); at least one should be present.
+      #
+      # (ADR-0020, normative — WHAT/WHY/WHY-BETTER) contact-exchange channels added:
+      #   WHAT — contactPhone / contactTelegram (the channels) + showPhone / showTelegram (per-channel
+      #     visibility). Turning ANY channel on is the affirmative opt-in that records a CONTACT_DISTRIBUTION
+      #     consent (append-only `consents` log) in the SAME transaction as the profile write; turning all
+      #     channels off records a withdrawal (granted=false). contactPhone is AES-256-GCM at rest (ADR-0019).
+      #   WHY — contact-reveal is LIVE but there was no writer for the seller's contact channels (the "dead
+      #     marketplace", AUDIT2 BLOCKER); and ст.10.1 ФЗ-152 requires a separate, default-OFF, provable
+      #     consent before распространение — this endpoint is that opt-in point.
+      #   WHY-BETTER — one writer, one transaction: the channel data, the visibility, and the lawful-basis
+      #     proof are set together and never drift; the default is all-OFF (ст.10.1), so nothing is
+      #     distributed until the seller affirmatively opts in.
       properties:
         fullName:
           type: string
@@ -777,6 +828,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: https URL only; javascript:/data:/http rejected at validation (stored-XSS defence, AUDIT3 #2)
           maxLength: 500
           nullable: true
           description: URL to avatar image in object storage
@@ -790,6 +842,26 @@ components:
           type: string
           enum: [ru, en]
           description: Preferred language (supported_languages.code)
+        contactPhone:
+          type: string
+          nullable: true
+          description: >-
+            Marketplace contact phone (E.164). Stored AES-256-GCM at rest (ADR-0019); returned to buyers only
+            on contact-reveal when showPhone is on AND distribution consent is granted. null clears it.
+          example: '+79991234567'
+        contactTelegram:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: Marketplace contact Telegram handle (5–32 chars, optional leading @). null clears it.
+        showPhone:
+          type: boolean
+          description: >-
+            Show the phone to buyers on contact-reveal. Turning any channel on records CONTACT_DISTRIBUTION
+            consent (ADR-0020, ст.10.1); turning all channels off withdraws it. Default all-OFF.
+        showTelegram:
+          type: boolean
+          description: Show the Telegram handle to buyers on contact-reveal (same consent semantics as showPhone).
   responses:
     Problem:
       description: RFC7807 problem (application/problem+json)

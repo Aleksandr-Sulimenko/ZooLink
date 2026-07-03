@@ -21,4 +21,13 @@ export class AppConfigService {
   get isTest(): boolean {
     return this.get('NODE_ENV') === 'test';
   }
+
+  /**
+   * The DEV-ONLY /auth/dev-token master-key route is reachable ONLY when it is explicitly enabled
+   * AND we are not in production. Two independent conditions (fail-closed): the flag defaults false
+   * (env.validation), and production hard-disables it regardless of the flag. AUDIT3 security.md #1.
+   */
+  get isDevTokenEnabled(): boolean {
+    return this.get('ENABLE_DEV_TOKEN') === true && !this.isProduction;
+  }
 }

@@ -64,12 +64,15 @@ This document specifies the deployment strategies, environment configurations, r
 | **Network Security** | Network policies restricting inter-service communication | Service mesh (Istio/Linkerd) considered for phase 2 |
 | **Secrets Protection** | Secrets mounted as volumes or injected via env; no secrets visible to ps | Regular rotation of long-lived credentials |
 
+### Data Residency (RF) — ADR-0017 (ФЗ-152 ст.18 ч.5)
+> **WHAT** — All stores holding RF-citizens' personal data — primary PostgreSQL, every replica/HA standby, all backups/snapshots, PII-bearing object storage (S3/MinIO), any DR/failover target, and any PII-bearing log/observability sink — MUST be physically located in the **Russian Federation**. **Approved region-pin: `ru-central1`** (Yandex Cloud, ADR-0008; approved-zone set `ru-central1-a/b/c/d`). Cross-region / cross-border processing is permitted **only** for de-identified/aggregate data, and only after a separate ст.12 ФЗ-152 transfer review with legal (checklist C5). **WHY** — ФЗ-152 ст.18 ч.5 mandates RF-resident databases for RF-citizen PII; a non-RF replica/backup/DR is a launch BLOCKER (РКН block/fine risk). **WHY-BETTER** — fixed before data exists (zero-cost vs a costly post-launch migration) and enforced defense-in-depth so a config change can't silently ship PII abroad: **this documented pin → the CI residency gate (`scripts/check-rf-residency.sh`, fail-on-non-RF) → the boot-time refine (`env.validation.ts` `RF_ALLOWED_REGIONS`)** — one allowlist, three layers.
+
 ### Disaster Recovery
 | Aspect | Target | Condition |
 |--------|--------|-----------|
-| **Backup Strategy** | Database: daily logical backups, hourly WAL archiving; Object storage: versioning, cross-region replication | Configuration: Git repo as source of truth |
+| **Backup Strategy** | Database: daily logical backups, hourly WAL archiving; Object storage: versioning, **in-region (RF) redundancy only — NO cross-region/cross-border replication** (ADR-0017, ФЗ-152 ст.18 ч.5) | Configuration: Git repo as source of truth |
 | **Recovery Time Objective (RTO)** | Critical services: < 30 minutes; Full platform: < 2 hours | Dependent on backup frequency and restoration |
-| **Recovery Point Objective (RPO)** | Database: < 1 hour (point-in-time possible); Object storage: < 15 minutes (replication lag) | User-generated content: mirrors with delayed deletion |
+| **Recovery Point Objective (RPO)** | Database: < 1 hour (point-in-time possible); Object storage: < 15 minutes (in-RF replication lag) | User-generated content: RF-resident mirrors with delayed deletion |
 
 ## Deployment Acceptance Criteria
 - All environments (dev, test, staging, prod) are consistently provisioned via IaC
@@ -102,7 +105,7 @@ This document specifies the deployment strategies, environment configurations, r
 - Advanced secret management with automatic rotation and cloud provider integrations
 - Enhanced monitoring with distributed tracing and service-level objectives (SLOs)
 - Chaos engineering experiments for deployment resilience testing
-- Cross-region disaster recovery failover testing
+- In-RF disaster recovery failover testing (multi-AZ or a second RF region — residency-constrained per ADR-0017; **no cross-border DR** for PII-bearing stores)
 
 ### Фаза 3 (Maturity)
 - GitOps-driven deployments with Argo CD or Flux

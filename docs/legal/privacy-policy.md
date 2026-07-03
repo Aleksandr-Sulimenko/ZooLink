@@ -1,4 +1,4 @@
-# Privacy Policy — Personal Data Processing (ФЗ-152) — ZooLink   (STATUS: DRAFT)
+# Privacy Policy — Personal Data Processing (ФЗ-152) — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
 > **DRAFT for owner review — not published.** This is the policy required by **ст.18.1 ч.2 п.2 ФЗ-152**
 > (publicly available document on the operator's processing policy). RU version in `docsRU/legal/` is

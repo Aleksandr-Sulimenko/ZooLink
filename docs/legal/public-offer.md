@@ -1,4 +1,4 @@
-# Public Offer (Service Agreement) — ZooLink   (STATUS: DRAFT)
+# Public Offer (Service Agreement) — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
 > **DRAFT for owner review — not executed, not published.** Fill every `[…]` placeholder with the
 > finalised operator identity and have RF counsel review before publication. RU version in

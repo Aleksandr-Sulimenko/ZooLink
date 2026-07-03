@@ -32,8 +32,8 @@ type OAuthProvider = keyof typeof OAUTH_COLUMN;
 
 /** Default notification prefs (mirror of the DB column default — used on erase reset). */
 const DEFAULT_NOTIFICATION_PREFS = { email: true, sms: true, promo: false };
-/** Default contact-visibility prefs (mirror of the DB column default — used on erase reset; ADR-0005). */
-const DEFAULT_CONTACT_PREFS = { show_phone: true, show_telegram: false };
+/** Default contact-visibility prefs (mirror of the DB column default — used on erase reset; ADR-0005/ADR-0020: all-OFF, ст.10.1). */
+const DEFAULT_CONTACT_PREFS = { show_phone: false, show_telegram: false };
 
 /**
  * ADMIN-only identity operations (spec 01 Slice-4): role-elevation, assisted identifier re-binding,

@@ -147,6 +147,59 @@ flowchart TD
 
 **ПОЧЕМУ ТАК ЛУЧШЕ (WHY-BETTER for the whole project):** One canonical truth across BR↔ADR↔schema↔spec; the heavy verified flow is preserved as labelled, forward-compatible **form** (no throwaway, turns on additively via the feature toggle and the existing table columns); `CANCELLED` vs `FAILED` gives the backend an unambiguous terminal to implement; immutability and the controlled owner-lock path (GUC) are documented in one place. See [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) and [Animal Domain spec](../02-animal-domain.md).
 
+## Safe counterparty resolution — transfer claim code (C5, normative)
+
+**ЧТО (WHAT):** Added a MVP-safe way for the initiator to *name* a recipient. Before C5,
+`initiateTransfer` required a `toUserId`/`toOrganizationId` UUID with **no product surface that
+resolves a real person to a userId** (no non-ADMIN user-search exists) — so direct transfer was
+**unusable** for a normal user (BLOCKER, AUDIT3/senior-business-analyst (c)). C5 adds a
+**recipient-minted, single-use transfer claim code** (`POST /transfers/claim-codes`) that the
+recipient shares out-of-band; the initiator enters it as `claimCode` on `initiateTransfer`
+(now exactly-one-of `claimCode` / `toUserId` / `toOrganizationId`). The raw-recipient
+`RECIPIENT_NOT_FOUND` is made **generic** and initiate is **rate-limited**.
+
+**ПОЧЕМУ (WHY):** A naive user-lookup (by phone/email/name) is a **PII enumeration oracle**
+(security round-1 §enumeration; the existing MINOR at `transfer.service.ts:109-113`). The apex BR
+(`business-requirements/animal-domain.md`, GAP-TRACE-007) requires transfer to *work* in MVP, but
+not at the cost of a searchable directory of who-exists / whose-phone-is-X. A claim code is
+high-entropy and **per-issuance, never per-identity**, so it leaks nothing about existence, and
+minting it **is** the recipient's opt-in — the initiator obtains a resolvable recipient **only**
+with the recipient's cooperation. This also avoids touching `auth-api.yaml`/profile (a persistent
+`handle` would be C1/C2 territory + a larger standing PII surface).
+
+**ПОЧЕМУ ТАК ЛУЧШЕ (WHY-BETTER for the whole project):** Self-contained in the transfers domain
+(no schema change, no user-search, no profile coupling); **reuses** the proven
+namespace-parameterised `OtpService` lifecycle (ns=`transfer:claim`) and the **no-enumeration
+recovery convention** already established in Identity Slice 4 (`/auth/recover/email` always-202,
+uniform-error); keeps the accept-flow as the unchanged **second** consent gate; forward-compatible
+with a future persistent-handle or contact-reveal-seeded path (both additive). Closes the BLOCKER
+and the two MINOR enumeration oracles in one contract move.
+
+### Invariants (C5)
+| # | Invariant | Enforcement |
+|---|-----------|-------------|
+| **INV-C5-1** (no-enumeration, claim code) | Claim-code redemption returns **one uniform** `422 TRANSFER_CLAIM_CODE_INVALID` for **every** failure mode — nonexistent, expired, already-consumed, malformed — with identical body; nonexistent and existing-but-not-shared are **indistinguishable**. | Service: single catch-all branch; no mode-specific message/status/timing. |
+| **INV-C5-2** (no-enumeration, raw path) | `toUserId`/`toOrganizationId` recipient-absent → **generic** `404 RECIPIENT_NOT_FOUND`; message does NOT reveal user-vs-org nor exists-vs-absent (fixes AUDIT3 MINOR). | Service: unify the two 404 branches into one code+message. |
+| **INV-C5-3** (opt-in) | A transfer to a *user* recipient is initiable **only** via (a) a claim code the recipient minted, or (b) a `userId`/`organizationId` the initiator already holds from an in-system relationship. **No open user-search endpoint is introduced.** | Contract: no such endpoint; the code embodies recipient consent. |
+| **INV-C5-4** (rate-limit) | Claim-code mint **and** transfer-initiate are Redis rate-limited per principal → `429 RATE_LIMITED` + `Retry-After`. | `@nestjs/throttler`+Redis on both routes. |
+| **INV-C5-5** (actor≠party / self-transfer) | The resolved recipient (from code or UUID) MUST differ from the caller / current owner → `422 SELF_TRANSFER`, re-checked **after** code resolution. Actor snapshot rules unchanged (ADR-0011 §6). | Service: compare resolved recipient to `actor.userId` / current owner post-resolution. |
+| **INV-C5-6** (single-use + TTL) | A claim code is **consumed atomically** on the first successful initiate (Redis `GETDEL`/Lua) and expires at `now()+15m`; a replay is uniformly `TRANSFER_CLAIM_CODE_INVALID` (INV-C5-1). | OtpService ns=`transfer:claim`, TTL 900s, atomic consume. |
+| **INV-C5-7** (no pre-accept PII) | Initiating with a claim code returns **no recipient PII** to the initiator beyond the opaque `toUserId`/`full_name` already in the `Transfer` schema; recipient contact stays hidden until the recipient acts (existing accept-flow). | Response shape unchanged; no new PII field. |
+
+### Build-spec (backend)
+- **New endpoint** `POST /api/v1/transfers/claim-codes` → `mintTransferClaimCode`. Auth = any end-user role. Body `ClaimCodeRequest {forOrganizationId?}`. If `forOrganizationId` set, assert caller is its org-admin (else 403). Generate an opaque high-entropy code (≥ ~64-bit, Crockford-base32, hyphen-grouped); store via `OtpService.issue(subject=<userId|orgId>, ns='transfer:claim')`-style lifecycle mapping **code → {recipientUserId | recipientOrganizationId}**, TTL 900s; return `ClaimCode {code, expiresAt, recipientType}` **once**. `Idempotency-Key` required (24h; replay returns the same code within window). Rate-limit per principal.
+- **Extend** `TransferInitiateDto` with `claimCode?: string` (`@IsOptional @IsString`, no `@IsUUID`); exactly-one-of `{claimCode, toUserId, toOrganizationId}` at the service layer → `422 RECIPIENT_REQUIRED` (zero) / `422 RECIPIENT_AMBIGUOUS` (>1), before the DB CHECK (extends INV-3).
+- **initiate() resolution order:** if `claimCode` → atomically consume (INV-C5-6); miss → `422 TRANSFER_CLAIM_CODE_INVALID` (INV-C5-1); resolve recipient user/org. Else raw UUID → existence check → generic `404 RECIPIENT_NOT_FOUND` (INV-C5-2). Then self-transfer check post-resolution (INV-C5-5), then the existing PENDING-uniqueness / owner / expiry logic unchanged.
+- **Error codes:** `TRANSFER_CLAIM_CODE_INVALID` (422), `RECIPIENT_NOT_FOUND` (404, generic), `SELF_TRANSFER` (422), `RECIPIENT_AMBIGUOUS`/`RECIPIENT_REQUIRED` (422), `RATE_LIMITED` (429).
+- **No migration / no schema change.** Redis-only state; no `users`/`ownership_transfers` DDL. `OtpService` namespace reuse only.
+- **Test probes (Definition of Done):**
+  1. **Enumeration-negative (claim):** 100 random/garbage/expired/consumed codes → **all** `422 TRANSFER_CLAIM_CODE_INVALID`, byte-identical Problem body; assert nonexistent vs expired vs consumed are indistinguishable.
+  2. **Enumeration-negative (raw):** initiate with a random UUID `toUserId` vs a real-but-unrelated `toUserId` → **both** generic `404 RECIPIENT_NOT_FOUND`; no user-vs-org distinction across the two selectors.
+  3. **Rate-limit:** N+1 mints in the window → `429`+`Retry-After`; N+1 initiates → `429`.
+  4. **Happy path:** recipient mints → initiator initiates with `claimCode` → `201` PENDING, `toUserId`=recipient, code consumed; recipient accepts → `COMPLETED` (re-attribute + history append unchanged).
+  5. **Self-transfer via code:** caller mints own code, caller initiates it → `422 SELF_TRANSFER`.
+  6. **Replay / single-use:** reuse a consumed code → `422 TRANSFER_CLAIM_CODE_INVALID`; org-code minted by a non-admin of that org → `403`.
+
 ## Related Documents
 - [ADR-0013: MVP Ownership Transfer](../../04-decisions/0013-mvp-ownership-transfer.md)
 - [Animal Domain spec](../02-animal-domain.md) · [RBAC Matrix](../security/rbac-matrix.md)

@@ -191,7 +191,7 @@ describe('AdminUserService.erase', () => {
           oauth_google_id: null,
           contact_phone: null,
           contact_telegram: null,
-          contact_prefs: { show_phone: true, show_telegram: false },
+          contact_prefs: { show_phone: false, show_telegram: false }, // ADR-0020: erase-reset leaves distribution OFF (ст.10.1)
           notification_prefs: { email: true, sms: true, promo: false },
           status: 'DEACTIVATED',
           erased_at: expect.any(Date),

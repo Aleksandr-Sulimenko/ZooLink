@@ -3,6 +3,9 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../../lib/auth/public.decorator';
+import { AppConfigService } from '../../config/app-config.service';
+import { parseDurationMs } from '../auth/refresh-token.service';
+import { setRefreshCookie } from '../auth/refresh-cookie';
 import { IdentityService, type AuthResponse } from './identity.service';
 import { RecoveryService } from './recovery.service';
 import {
@@ -13,6 +16,13 @@ import {
   RegisterPhoneResponseDto,
   VerifyPhoneDto,
 } from './dto/identity.dto';
+
+/**
+ * Session body = access token + profile ONLY. The long-lived refresh token is delivered as the
+ * HttpOnly+Secure+SameSite=Strict `refresh_token` cookie (API_CONVENTIONS §2 / AUDIT3 security.md #2),
+ * never in the JSON body — so page JS cannot reach it and an XSS cannot exfiltrate it.
+ */
+type AuthSessionBody = Omit<AuthResponse, 'refreshToken'>;
 
 // Per-IP SMS abuse caps (spec 01 / BR 5.6: ~5 / 15 min per IP), tighter than the global 100/60s.
 // The OtpService adds per-PHONE cooldown (60s) + 5-attempt → 15-min lockout; these are the per-IP layer.
@@ -30,10 +40,22 @@ const RECOVER_VERIFY_THROTTLE = { default: { limit: 15, ttl: 900_000 } };
 @ApiTags('auth')
 @Controller({ path: 'auth', version: '1' })
 export class IdentityController {
+  private readonly refreshTtlMs: number;
+
   constructor(
     private readonly identity: IdentityService,
     private readonly recovery: RecoveryService,
-  ) {}
+    private readonly config: AppConfigService,
+  ) {
+    this.refreshTtlMs = parseDurationMs(this.config.get('JWT_REFRESH_TTL'));
+  }
+
+  /** Move the refresh token into the HttpOnly cookie and strip it from the body (never JS-reachable). */
+  private issueSessionCookie(res: Response, response: AuthResponse): AuthSessionBody {
+    const { refreshToken, ...body } = response;
+    setRefreshCookie(res, refreshToken, this.refreshTtlMs);
+    return body;
+  }
 
   @Public()
   @Throttle(REGISTER_THROTTLE)
@@ -49,8 +71,11 @@ export class IdentityController {
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify the SMS OTP — activates the account and issues a session' })
-  verifyPhone(@Body() dto: VerifyPhoneDto): Promise<AuthResponse> {
-    return this.identity.verifyPhone(dto);
+  async verifyPhone(
+    @Body() dto: VerifyPhoneDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSessionBody> {
+    return this.issueSessionCookie(res, await this.identity.verifyPhone(dto));
   }
 
   @Public()
@@ -61,10 +86,10 @@ export class IdentityController {
     @Param('provider') provider: string,
     @Body() dto: OAuthDto,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<AuthResponse> {
+  ): Promise<AuthSessionBody> {
     const { response, isNew } = await this.identity.oauthLogin(provider, dto);
     res.status(isNew ? HttpStatus.CREATED : HttpStatus.OK);
-    return response;
+    return this.issueSessionCookie(res, response);
   }
 
   @Public()
@@ -81,7 +106,10 @@ export class IdentityController {
   @Post('recover/email/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify the email recovery OTP — issues a session' })
-  recoverEmailVerify(@Body() dto: RecoverEmailVerifyDto): Promise<AuthResponse> {
-    return this.recovery.verifyEmail(dto);
+  async recoverEmailVerify(
+    @Body() dto: RecoverEmailVerifyDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSessionBody> {
+    return this.issueSessionCookie(res, await this.recovery.verifyEmail(dto));
   }
 }

@@ -54,7 +54,7 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
       .expect(201);
     const id = created.body.id as string;
     listings.push(id);
-    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://x/${randomUUID()}.jpg` }).expect(201);
+    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
     const get = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', get.headers['etag']).expect(200);
     return id;

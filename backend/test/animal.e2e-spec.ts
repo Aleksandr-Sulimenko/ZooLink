@@ -6,6 +6,7 @@
  * on PATCH, and the agent-as-principal audit path. e2e hits HOST pg/redis (localhost).
  */
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: join(__dirname, '..', '.env'), quiet: true });
@@ -298,6 +299,24 @@ describe('Animal Slice 1 (e2e)', () => {
       .set('If-Match', get.headers['etag'])
       .send({ colorCoat: 'x' })
       .expect(403);
+  });
+
+  // 404-NO-LEAK (AUDIT3 security.md): a non-owner reading an EXISTING animal must get the SAME 404 as
+  // a missing id — no 403 existence oracle over animal ids. Owner/operator reads stay 200.
+  it('authz: a non-owner USER reading an existing animal gets 404 (not 403) — no existence oracle', async () => {
+    const c = await create(ownerToken, base()).expect(201);
+    created.push(idOf(c));
+    const existing = await request(server())
+      .get(`/v1/animals/${c.body.id}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+    const missing = await request(server())
+      .get(`/v1/animals/${randomUUID()}`)
+      .set('Authorization', `Bearer ${otherToken}`);
+    expect(existing.status).toBe(404); // indistinguishable from a missing id
+    expect(missing.status).toBe(404);
+    // owner + operator still see it
+    await request(server()).get(`/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${ownerToken}`).expect(200);
+    await request(server()).get(`/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${modToken}`).expect(200);
   });
 
   it('deactivate then reactivate, with 409 on a repeat', async () => {

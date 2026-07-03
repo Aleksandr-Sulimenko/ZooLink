@@ -217,10 +217,12 @@ This specification addresses the following Non-Functional Requirements:
   consumer-driven (Pact) for frontend↔backend.
 - **Coverage:** backend unit/integration ≥90%; critical E2E flows (register→verify→animal→listing→moderate→publish→
   search→contact-reveal) green; enforced via `coverageThreshold` in CI.
-- **CI gates (`.github/workflows`):** `ci.yml` (draft template) = lint + typecheck + `prisma migrate deploy` check +
-  unit/integration on PG service + **security gates** (`npm audit`, Trivy image scan, Semgrep SAST, OWASP ZAP baseline
-  on staging). `performance-tests.yml` is a **draft** (k6) — it activates once the `./backend` repo exists; until then
-  it is not a working gate.
+- **CI gates (`.github/workflows`):** `ci.yml` = install + `db:generate` + lint + typecheck + build + unit (coverage) +
+  apply `database_schema.sql` + **schema.prisma drift-check** + seed×2 + e2e + a **migration-drift** job (replay ×2 +
+  blocking DDL diff) + an **RF data-residency** gate (ADR-0017, fail-on-non-RF-region) + **security gates** (`npm audit`,
+  Trivy fs scan, Semgrep SAST; OWASP ZAP baseline on staging). The schema is SQL-canonical + Prisma introspect
+  (ADR-0007) — there is **no `prisma migrate deploy`** step. `performance-tests.yml` is a **draft** (k6) — it activates
+  once perf tests exist; until then it is not a working gate.
 
 ## Related Documents
 

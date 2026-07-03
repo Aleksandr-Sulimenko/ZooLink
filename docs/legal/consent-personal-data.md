@@ -1,4 +1,4 @@
-# Consents for Personal Data Processing — ZooLink   (STATUS: DRAFT)
+# Consents for Personal Data Processing — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
 > **DRAFT for owner review.** These are the **separate** consents required *in addition to* the
 > contract. Core service processing runs on **ст.6 ч.1 п.5 ФЗ-152** (contract) and needs **no**

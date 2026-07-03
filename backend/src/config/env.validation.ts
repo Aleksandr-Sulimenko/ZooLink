@@ -1,13 +1,62 @@
 import { z } from 'zod';
 
 /**
+ * ADR-0017 (RF data residency; ФЗ-152 ст.18 ч.5) — the SINGLE canonical allowlist of approved
+ * RF region identifiers. Every region-bearing env var (today `S3_REGION`; forward: any `*_REGION`
+ * for managed-PG / replica / backup / DR-failover / PII-bearing log sink) must resolve to one of
+ * these, or the process refuses to boot. This is layer 1 of the 3-layer residency guardrail
+ * (layer 2 = the blocking CI residency gate, which derives its list from THIS constant so the two
+ * never diverge; layer 3 = the documented region-pin in deployment_specification.md).
+ *
+ * Identifiers derive from the ADR-0008 provider (Yandex Cloud, `ru-central1*`). A region *string*
+ * is a config-hygiene guard, NOT proof of physical location — it layers on top of provider choice,
+ * it does not replace it. TODO(legal): confirm the exact approved zone set (уточнить с legal).
+ */
+export const RF_ALLOWED_REGIONS = [
+  'ru-central1',
+  'ru-central1-a',
+  'ru-central1-b',
+  'ru-central1-c',
+  'ru-central1-d',
+] as const;
+
+export function isRfRegion(value: string): boolean {
+  return (RF_ALLOWED_REGIONS as readonly string[]).includes(value);
+}
+
+/**
  * Canonical environment contract. Mirrors ../.env.example (ADR-0008 provider choices).
  * Fail-fast: the process must not boot with a missing/invalid required variable.
  */
 export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Fail-SAFE default (OWASP fail-safe defaults): a boot that FORGETS to set NODE_ENV lands in the
+  // most-restrictive mode ('production'), never the permissive one. This is the security-critical
+  // fix for the dev-token fail-OPEN chain (AUDIT3 security.md #1): the old `.default('development')`
+  // meant a prod deploy that omitted NODE_ENV booted with isProduction===false and left the
+  // master-key /auth/dev-token route LIVE. dev/test set NODE_ENV explicitly (.env / jest), so only a
+  // genuinely-unconfigured boot inherits the locked-down default.
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
+  // Dev-token master-key route (auth.controller devToken) is gated by this flag, INDEPENDENT of
+  // NODE_ENV, and defaults to false (fail-closed). Strict parse: only the literal 'true'/'false'
+  // are accepted — a typo ('1','TRUE','yes') is a boot-blocking error, never silently truthy (a
+  // z.coerce.boolean() would treat 'false' as true — the exact footgun we avoid). The endpoint is
+  // reachable ONLY when ENABLE_DEV_TOKEN===true AND NODE_ENV!=='production' (see AppConfigService).
+  ENABLE_DEV_TOKEN: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_DOMAIN: z.string().min(1).default('localhost'),
+
+  // ADR-0017 dev-only escape hatch. Permits a NON-RF `*_REGION` value (e.g. a local MinIO left at
+  // its native `us-east-1` default) ONLY when NODE_ENV!=='production'. Strict-parsed / fail-closed
+  // (same discipline as ENABLE_DEV_TOKEN). In production this flag is IGNORED — the RF allowlist is
+  // unconditional there, because residency is a hard legal precondition (ФЗ-152 ст.18 ч.5). The CI
+  // residency gate additionally blocks any non-RF region in prod config regardless of this flag.
+  RESIDENCY_ALLOW_NON_RF_DEV: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   // PostgreSQL — single source of connectivity is DATABASE_URL.
   DATABASE_URL: z.string().url().startsWith('postgres'),
@@ -20,6 +69,10 @@ export const envSchema = z.object({
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
   S3_BUCKET: z.string().min(1),
+  // Region string. Shape-validated here; the RF-residency allowlist (ADR-0017) is enforced by the
+  // .superRefine below (which also covers any future `*_REGION` var). Default is an approved RF id,
+  // so a dev on our .env.example is compliant without extra config; MinIO's native `us-east-1`
+  // default is rejected in prod (must be pinned to an approved RF id) — the intended trap.
   S3_REGION: z.string().min(1).default('ru-central1'),
 
   // Auth / JWT — secrets must be long enough to be meaningful.
@@ -98,7 +151,27 @@ export const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
     .default('info'),
-});
+})
+  // ADR-0017 layer 1 (runtime, fail-at-boot). Scan EVERY `*_REGION` var generically (S3_REGION
+  // today; managed-PG / replica / backup / DR / log-sink region vars in future) and reject any
+  // value outside RF_ALLOWED_REGIONS. Aggregates into the same boot-blocking error report as the
+  // rest of the schema. The dev bypass applies ONLY outside production (residency is unconditional
+  // in prod). Non-string values (there are none today) are skipped defensively.
+  .superRefine((val, ctx) => {
+    const devBypass =
+      val.NODE_ENV !== 'production' && val.RESIDENCY_ALLOW_NON_RF_DEV === true;
+    for (const [key, raw] of Object.entries(val)) {
+      if (!key.endsWith('_REGION') || typeof raw !== 'string') continue;
+      if (isRfRegion(raw) || devBypass) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `"${raw}" is not an approved RF region (ADR-0017 / ФЗ-152 ст.18 ч.5). Allowed: ${RF_ALLOWED_REGIONS.join(
+          ', ',
+        )}. A non-RF region is permitted only in dev with RESIDENCY_ALLOW_NON_RF_DEV=true.`,
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

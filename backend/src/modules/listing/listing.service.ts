@@ -16,11 +16,14 @@ import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { CryptoService } from '../../lib/crypto/crypto.service';
 import { OutboxService } from '../../lib/outbox/outbox.service';
 import { RedisService } from '../../lib/redis/redis.service';
+import { AppConfigService } from '../../config/app-config.service';
+import { isAllowedMediaUrl, s3HostFromEndpoint } from '../../lib/media/media-url';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import { ModerationService } from '../moderation/moderation.service';
 import { AnimalService } from '../animal/animal.service';
+import { ConsentService } from '../identity/consent.service';
 import {
   type ContactRevealView,
   type ListingAnalyticsView,
@@ -124,7 +127,24 @@ export class ListingService {
     private readonly crypto: CryptoService, // ADR-0019: decrypt contact_phone at reveal
     private readonly outbox: OutboxService, // transactional event emission (ContactReveal.Created / Listing.Sold)
     private readonly redis: RedisService, // per-market contact-reveal rate limit
+    private readonly config: AppConfigService, // S3/MinIO host allowlist for media URLs (AUDIT3)
+    private readonly consent: ConsentService, // ADR-0020: gate contact distribution on CONTACT_DISTRIBUTION consent
   ) {}
+
+  /**
+   * Photo URLs must point at OUR object storage (S3/MinIO), never a seller-controlled remote origin
+   * (AUDIT3 security.md — moderation-swap + latent SSRF). Env-driven allowlist = the S3_ENDPOINT host.
+   * Rejecting here (422) is defence-in-depth on top of the DTO's structural @IsUrl.
+   */
+  private assertOwnMediaHost(url: string): void {
+    const allowed = [s3HostFromEndpoint(this.config.get('S3_ENDPOINT'))];
+    if (!isAllowedMediaUrl(url, allowed)) {
+      throw new UnprocessableEntityException({
+        message: 'Photo URL must reference our own media storage',
+        code: 'VALIDATION_ERROR',
+      });
+    }
+  }
 
   // ── Create (→ DRAFT) ─────────────────────────────────────────────────────────────────────────
   async create(dto: ListingCreateDto, actor: AuthPrincipal): Promise<{ listing: ListingView; etag: string }> {
@@ -432,14 +452,22 @@ export class ListingService {
     return this.toView(row);
   }
 
-  // ── Contact reveal (MVP, no chat — ADR-0005 / spec 16) ───────────────────────────────────────
+  // ── Contact reveal (MVP, no chat — ADR-0005 / spec 16 / ADR-0020) ────────────────────────────
   /**
    * Reveal the seller's enabled contact channels for an ACTIVE listing (spec 16). Gating: listing
-   * ACTIVE (else 404, no existence leak); caller ≠ seller (self-reveal → 422). Per-market, per-viewer,
-   * per-hour Redis rate limit (pet 10/h, livestock 5/h) — the counter is the gate (over-limit → 429
-   * with Retry-After, nothing logged). `contact_phone` is decrypted here (ADR-0019). The reveal row +
-   * `ContactReveal.Created` are written in ONE transaction (outbox atomicity). Only the seller-enabled
-   * channels (`contact_prefs`) are returned — never email.
+   * ACTIVE (else 404, no existence leak); caller ≠ seller (self-reveal → 422).
+   *
+   * ADR-0020 — distribution is a TWO-layer gate: a channel is revealed iff (a) the seller's current
+   * `CONTACT_DISTRIBUTION` consent is granted (ст.10.1 lawful basis) AND (b) that channel's
+   * `contact_prefs.show_*` is on (which channel). We compute the resolvable channels FIRST; if none
+   * (no consent, or all channels off) we return a `NO_CHANNELS` result WITHOUT burning quota, writing a
+   * `contact_reveals` row, or emitting a lead event (billing-unit fix — never charge for an empty reveal).
+   *
+   * Dedup: a repeat reveal of the same (viewer, listing) returns the EXISTING row's channels without
+   * consuming quota or re-writing a lead (a buyer re-viewing a contact they already unlocked is free).
+   * Only a first, resolvable reveal enforces the per-market Redis rate limit (pet 10/h, livestock 5/h),
+   * writes the row, and emits `ContactReveal.Created` — all in one transaction (outbox atomicity).
+   * `contact_phone` is decrypted here (ADR-0019). Email is never returned.
    */
   async revealContact(id: string, actor: AuthPrincipal): Promise<ContactRevealView> {
     const listing = await this.findRow(id);
@@ -452,10 +480,6 @@ export class ListingService {
       throw new UnprocessableEntityException({ message: 'You cannot reveal your own contact', code: 'SELF_REVEAL' });
     }
 
-    const market = await this.marketOf(listing.animal_id);
-    // Rate-limit gate BEFORE any reveal write — a rejected precondition above never consumes quota.
-    await this.enforceRevealRateLimit(actor.userId, market);
-
     const seller = await this.prisma.users.findUnique({
       where: { id: listing.seller_id },
       select: { full_name: true, contact_phone: true, contact_telegram: true, contact_prefs: true },
@@ -465,40 +489,69 @@ export class ListingService {
       throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
     }
 
+    // ADR-0020 gate: lawful basis (consent) AND per-channel visibility — compute channels FIRST.
+    const distributionAllowed = await this.consent.currentlyGranted(listing.seller_id, 'CONTACT_DISTRIBUTION');
     const prefs = (seller.contact_prefs ?? {}) as { show_phone?: boolean; show_telegram?: boolean };
     const channels: { phone?: string; telegram?: string } = {};
-    if (prefs.show_phone) {
+    if (distributionAllowed && prefs.show_phone) {
       const phone = this.crypto.decrypt(seller.contact_phone); // ADR-0019: decrypt at reveal only
       if (phone) channels.phone = phone;
     }
-    if (prefs.show_telegram && seller.contact_telegram) {
+    if (distributionAllowed && prefs.show_telegram && seller.contact_telegram) {
       channels.telegram = seller.contact_telegram;
     }
 
-    const revealedAt = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.contact_reveals.create({
-        data: { listing_id: id, viewer_id: actor.userId, seller_id: listing.seller_id, created_at: revealedAt },
-      });
-      await this.outbox.publish(tx, {
-        aggregateType: 'Listing',
-        aggregateId: id,
-        eventType: 'ContactReveal.Created',
-        schemaVersion: 1,
-        market,
-        occurredAt: revealedAt,
-        payload: { listingId: id, viewerId: actor.userId, sellerId: listing.seller_id },
-      });
+    const sellerName = seller.full_name ?? null;
+    // No resolvable channel → default-deny. Nothing is charged/written/emitted (ADR-0020 billing-unit fix).
+    if (Object.keys(channels).length === 0) {
+      this.logger.log(`Contact reveal for listing ${id} to ${actor.userId}: no channels (consent=${distributionAllowed})`);
+      return { listingId: id, sellerId: listing.seller_id, sellerName, channels: {}, revealedAt: null, status: 'NO_CHANNELS' };
+    }
+
+    // Dedup: a buyer re-revealing the SAME listing gets the existing row — no quota, no new row, no event.
+    const existing = await this.prisma.contact_reveals.findFirst({
+      where: { listing_id: id, viewer_id: actor.userId },
+      select: { created_at: true },
     });
+    if (existing) {
+      return { listingId: id, sellerId: listing.seller_id, sellerName, channels, revealedAt: existing.created_at, status: 'REVEALED' };
+    }
+
+    const market = await this.marketOf(listing.animal_id);
+    // Rate-limit gate — only a first, resolvable reveal consumes quota (empty/dedup paths never reach here).
+    await this.enforceRevealRateLimit(actor.userId, market);
+
+    const revealedAt = new Date();
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.contact_reveals.create({
+          data: { listing_id: id, viewer_id: actor.userId, seller_id: listing.seller_id, created_at: revealedAt },
+        });
+        await this.outbox.publish(tx, {
+          aggregateType: 'Listing',
+          aggregateId: id,
+          eventType: 'ContactReveal.Created',
+          schemaVersion: 1,
+          market,
+          occurredAt: revealedAt,
+          payload: { listingId: id, viewerId: actor.userId, sellerId: listing.seller_id },
+        });
+      });
+    } catch (err) {
+      // A concurrent double-reveal races on uq_contact_reveals_viewer_listing (ADR-0020 DB backstop) →
+      // treat as dedup: return the winner's channels rather than surfacing a 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const won = await this.prisma.contact_reveals.findFirst({
+          where: { listing_id: id, viewer_id: actor.userId },
+          select: { created_at: true },
+        });
+        return { listingId: id, sellerId: listing.seller_id, sellerName, channels, revealedAt: won?.created_at ?? revealedAt, status: 'REVEALED' };
+      }
+      throw err;
+    }
 
     this.logger.log(`Contact revealed for listing ${id} to ${actor.userId} (${market ?? 'unknown'} market)`);
-    return {
-      listingId: id,
-      sellerId: listing.seller_id,
-      sellerName: seller.full_name ?? null,
-      channels,
-      revealedAt,
-    };
+    return { listingId: id, sellerId: listing.seller_id, sellerName, channels, revealedAt, status: 'REVEALED' };
   }
 
   /**
@@ -895,6 +948,7 @@ export class ListingService {
   async addPhoto(id: string, dto: ListingPhotoCreateDto, actor: AuthPrincipal): Promise<ListingPhotoView> {
     const existing = await this.findRow(id);
     await this.assertCanMutate(actor, existing); // L-3
+    this.assertOwnMediaHost(dto.url); // AUDIT3: own-S3 host allowlist (moderation-swap + SSRF defence)
     // L-14: MAX_MEDIA_ITEMS cap, service-layer.
     const count = await this.prisma.listing_photos.count({ where: { listing_id: id } });
     if (count >= MAX_MEDIA_ITEMS) {

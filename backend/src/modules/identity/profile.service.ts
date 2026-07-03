@@ -11,6 +11,7 @@ import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { CryptoService } from '../../lib/crypto/crypto.service';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import { AuthService } from '../auth/auth.service';
+import { ConsentService } from './consent.service';
 import { toUserProfile, type UserProfile } from './user-profile.util';
 import type { UpdateProfileDto } from './dto/identity.dto';
 
@@ -26,6 +27,7 @@ export class ProfileService {
     private readonly audit: AuditLogService,
     private readonly auth: AuthService,
     private readonly crypto: CryptoService,
+    private readonly consent: ConsentService,
   ) {}
 
   async getMe(userId: string): Promise<{ profile: UserProfile; etag: string }> {
@@ -52,13 +54,46 @@ export class ProfileService {
     if (dto.avatarUrl !== undefined) data.avatar_url = dto.avatarUrl;
     if (dto.preferredLanguage !== undefined) data.preferred_language = dto.preferredLanguage;
 
+    // ── Contact-exchange channels (ADR-0020 / ADR-0005) ──────────────────────────────────────────
+    // contact_phone is field-encrypted at rest (ADR-0019, like email); telegram is plaintext. The
+    // per-channel visibility (show_*) lives in contact_prefs; the LAWFUL BASIS to distribute at all is
+    // the CONTACT_DISTRIBUTION consent, recorded in the SAME transaction on opt-in (turning any channel on).
+    if (dto.contactPhone !== undefined) data.contact_phone = this.crypto.encrypt(dto.contactPhone);
+    if (dto.contactTelegram !== undefined) {
+      data.contact_telegram = dto.contactTelegram ? dto.contactTelegram.replace(/^@/, '') : null;
+    }
+    const existingPrefs = (user.contact_prefs ?? {}) as { show_phone?: boolean; show_telegram?: boolean };
+    const touchedShow = dto.showPhone !== undefined || dto.showTelegram !== undefined;
+    const resultShowPhone = dto.showPhone ?? existingPrefs.show_phone ?? false;
+    const resultShowTelegram = dto.showTelegram ?? existingPrefs.show_telegram ?? false;
+    if (touchedShow) {
+      data.contact_prefs = { show_phone: resultShowPhone, show_telegram: resultShowTelegram };
+    }
+    const anyChannelOn = resultShowPhone || resultShowTelegram;
+
     if (Object.keys(data).length === 0) {
       return { profile: toUserProfile(user, this.crypto.decrypt(user.email)), etag: this.etag(user) };
     }
 
     let updated: users;
     try {
-      updated = await this.prisma.users.update({ where: { id: userId }, data });
+      updated = await this.prisma.$transaction(async (tx) => {
+        const u = await tx.users.update({ where: { id: userId }, data });
+        // Record the CONTACT_DISTRIBUTION consent transition (ADR-0020) only when the visibility toggles
+        // are part of THIS change and the derived grant-state actually flips (append-only supersede; no
+        // duplicate rows on an unrelated profile edit). Opt-in (any channel on) → grant; all channels
+        // off → withdrawal (ст.9 ч.2). Same tx as the contact_prefs/contact_phone write.
+        if (touchedShow) {
+          const currentGranted = await this.consent.currentlyGranted(userId, 'CONTACT_DISTRIBUTION', tx);
+          if (anyChannelOn !== currentGranted) {
+            await this.consent.record(
+              { userId, type: 'CONTACT_DISTRIBUTION', granted: anyChannelOn, source: 'PROFILE_SETTINGS', actorId: userId, actorPrincipalType: 'HUMAN' },
+              tx,
+            );
+          }
+        }
+        return u;
+      });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
         throw new BadRequestException({ message: 'Unknown cityId', code: 'VALIDATION_ERROR' });

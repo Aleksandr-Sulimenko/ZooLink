@@ -56,12 +56,20 @@ paths:
             schema: { $ref: '#/components/schemas/OAuthRequest' }
       responses:
         '200':
-          description: Пользователь успешно вошёл (существующий)
+          description: Пользователь успешно вошёл (существующий); установлен refresh_token cookie
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict cookie refresh_token (Path=/v1/auth); refresh-токен НИКОГДА не в теле (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
         '201':
-          description: Пользователь успешно зарегистрирован (новый)
+          description: Пользователь успешно зарегистрирован (новый); установлен refresh_token cookie
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict cookie refresh_token (Path=/v1/auth); refresh-токен НИКОГДА не в теле (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -76,7 +84,8 @@ paths:
       security: []
       description: >-
         Публично (security opt-out). (round-4/Фаза-2, нормативно) Валидирует OTP, переводит пользователя
-        в ACTIVE и возвращает сессию (access + refresh) плюс профиль. 5 неудач → блокировка на 15 мин.
+        в ACTIVE и возвращает сессию — access-токен + профиль в теле, refresh-токен как HttpOnly cookie
+        refresh_token (AUDIT3 #2). 5 неудач → блокировка на 15 мин.
       requestBody:
         required: true
         content:
@@ -84,7 +93,11 @@ paths:
             schema: { $ref: '#/components/schemas/VerifyPhoneRequest' }
       responses:
         '200':
-          description: Телефон подтверждён; сессия выдана
+          description: Телефон подтверждён; сессия выдана (установлен refresh_token cookie)
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict cookie refresh_token (Path=/v1/auth); refresh-токен НИКОГДА не в теле (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -124,7 +137,8 @@ paths:
       security: []
       description: >-
         Публично (security opt-out). (Slice-4, нормативно) Валидирует recovery-OTP, отправленный на
-        подтверждённый email, и возвращает свежую сессию (access + refresh) плюс профиль. 5 неудач →
+        подтверждённый email, и возвращает свежую сессию — access-токен + профиль в теле, refresh-токен
+        как HttpOnly cookie refresh_token (AUDIT3 #2). 5 неудач →
         блокировка на 15 мин. SUSPENDED-аккаунты восстановить нельзя (нужно действие оператора).
         DEACTIVATED-аккаунт в пределах grace реактивируется; после grace восстановить нельзя.
       requestBody:
@@ -134,7 +148,11 @@ paths:
             schema: { $ref: '#/components/schemas/RecoverEmailVerifyRequest' }
       responses:
         '200':
-          description: Восстановление подтверждено; сессия выдана
+          description: Восстановление подтверждено; сессия выдана (установлен refresh_token cookie)
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: HttpOnly+Secure+SameSite=Strict cookie refresh_token (Path=/v1/auth); refresh-токен НИКОГДА не в теле (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -236,37 +254,57 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /auth/refresh:
     post:
-      summary: Обновить access-токен по refresh-токену
+      summary: Ротация refresh-cookie и получение нового access-токена
       operationId: refreshToken
       security: []
-      description: Публично (security opt-out).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
+      description: >-
+        Публично (bearer opt-out). (нормативно) Refresh-токен передаётся ТОЛЬКО как HttpOnly-cookie
+        `refresh_token` (API_CONVENTIONS §2 — никогда в теле, защита от XSS-эксфильтрации). Ротация:
+        предъявленный cookie отзывается и устанавливается новый cookie `refresh_token` (Set-Cookie);
+        повторное предъявление уже ротированного cookie сжигает всё семейство (детект кражи). Ни в
+        запросе, ни в ответе тела refresh-токена нет — тело несёт только новый короткоживущий access-токен.
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: true
+          schema: { type: string }
+          description: HttpOnly refresh-cookie из предыдущей сессии (dev-token / verify-phone / oauth / recover)
       responses:
         '200':
-          description: Токен успешно обновлён
+          description: Токен обновлён; установлен новый cookie refresh_token
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Новый cookie refresh_token (HttpOnly+Secure+SameSite=Strict, Path=/v1/auth)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuthResponse' }
+              schema: { $ref: '#/components/schemas/AccessTokenResponse' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /auth/logout:
     post:
-      summary: Выход пользователя (инвалидация токенов)
+      summary: Выход пользователя (отзыв сессии на сервере + очистка refresh-cookie)
       operationId: logout
       x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      description: >-
+        (нормативно) Отзывает сессию на сервере и очищает refresh-cookie. Если cookie `refresh_token`
+        присутствует — отзывается только семейство этого устройства (точечный выход); если отсутствует
+        — отзываются ВСЕ сессии вызывающего (выход везде). Тела запроса нет — refresh-токен читается из
+        cookie, никогда из тела.
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: false
+          schema: { type: string }
+          description: Refresh-cookie устройства для выхода (опустите, чтобы отозвать все сессии)
       responses:
-        '200': { description: Выход успешен }
+        '204':
+          description: Выход выполнен; cookie refresh_token очищен
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Очищенный cookie refresh_token (Max-Age=0)
         '401': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /me:
@@ -393,8 +431,9 @@ paths:
       description: >-
         ТОЛЬКО для DEV: выпуск сессии для сквозного тестирования аутентификации против
         засиженного пользователя, пока полная поверхность входа (phone OTP + OAuth) не готова.
-        **Отключён в production**: при `NODE_ENV=production` эндпоинт отвечает `404 Not Found`
-        (RFC7807) — он не входит в production-поверхность продукта. Не для клиента/UI; не зависеть.
+        **Fail-closed**: доступен ТОЛЬКО когда явный флаг `ENABLE_DEV_TOKEN` истинен И
+        `NODE_ENV!=='production'`; иначе (включая любой production-деплой или деплой, забывший
+        включить флаг) эндпоинт отвечает `404 Not Found` (RFC7807). Не для клиента/UI; не зависеть.
       x-internal: true
       requestBody:
         required: true
@@ -402,14 +441,20 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/DevTokenRequest' }
       responses:
-        '200':
-          description: Сессия выпущена (только окружения dev/test)
+        '201':
+          description: Сессия выпущена (только dev/test); установлен cookie refresh_token, access-токен в теле
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Cookie refresh_token (HttpOnly+Secure+SameSite=Strict, Path=/v1/auth)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+              schema: { $ref: '#/components/schemas/AccessTokenResponse' }
         '400': { $ref: '#/components/responses/Problem' }
         '404':
-          description: Не найдено — также возвращается для самого эндпоинта в production
+          description: >-
+            Не найдено — возвращается для самого эндпоинта всякий раз, когда он не включён явно
+            (ENABLE_DEV_TOKEN не true) или в production (fail-closed).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -420,6 +465,12 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    cookieAuth:
+      # Транспорт refresh-токена (API_CONVENTIONS §2): HttpOnly+Secure+SameSite=Strict cookie,
+      # scope /v1/auth. Используется /auth/refresh и /auth/logout — никогда в теле.
+      type: apiKey
+      in: cookie
+      name: refresh_token
   parameters:
     UserIdParam:
       in: path
@@ -561,6 +612,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
           description: URL аватара в объектном хранилище (опционально)
         preferredLanguage:
@@ -592,6 +644,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
           description: URL аватара от провайдера (опционально)
     VerifyPhoneRequest:
@@ -621,14 +674,6 @@ components:
         expiresInSeconds:
           type: integer
           description: Окно действия OTP в секундах (напр. 300)
-    RefreshTokenRequest:
-      type: object
-      required:
-        - refreshToken
-      properties:
-        refreshToken:
-          type: string
-          description: Refresh-токен, полученный при входе/регистрации
     DevTokenRequest:
       type: object
       required:
@@ -638,37 +683,30 @@ components:
           type: string
           format: uuid
           description: ID существующего пользователя для выпуска сессии (только dev/test)
-    TokenPairResponse:
+    AccessTokenResponse:
       type: object
+      # (нормативно) Тело ответа сессии = ТОЛЬКО access-токен. Refresh-токен доставляется как
+      # HttpOnly-cookie refresh_token (Set-Cookie), никогда в теле (API_CONVENTIONS §2 / защита от
+      # XSS-эксфильтрации). Возвращается /auth/refresh и /auth/dev-token.
       required:
         - accessToken
-        - refreshToken
       properties:
         accessToken:
           type: string
           description: JWT access-токен (истекает через 15 мин; refresh TTL 7 д — spec 01 round-4)
-        refreshToken:
-          type: string
-          description: Refresh-токен для получения новых access-токенов
-    LogoutRequest:
-      type: object
-      properties:
-        refreshToken:
-          type: string
-          description: Refresh-токен для инвалидации (опционально; если не указан — инвалидируются все токены пользователя)
     AuthResponse:
       type: object
+      # (нормативно) Тело ответа сессии = access-токен + профиль ТОЛЬКО. Долгоживущий refresh-токен
+      # доставляется как HttpOnly+Secure+SameSite=Strict cookie refresh_token (Set-Cookie), НИКОГДА в
+      # теле (API_CONVENTIONS §2 / AUDIT3 security.md #2 — защита от XSS-эксфильтрации). Возвращается
+      # /auth/verify-phone, /auth/register/oauth/{provider}, /auth/recover/email/verify.
       required:
         - accessToken
-        - refreshToken
         - user
       properties:
         accessToken:
           type: string
-          description: JWT access-токен (истекает за 15 мин; refresh TTL 7 д — спека 01 round-4)
-        refreshToken:
-          type: string
-          description: Refresh-токен для получения новых access-токенов
+          description: JWT access-токен (истекает за 15 мин; refresh-токен — HttpOnly cookie — спека 01 round-4)
         user:
           $ref: '#/components/schemas/UserProfile'
     UserProfile:
@@ -713,6 +751,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2); null очищает
           nullable: true
           maxLength: 500
           description: URL аватара в объектном хранилище
@@ -763,6 +802,18 @@ components:
       type: object
       # (Фаза-2/round-7, нормативно) passwordless — `password` убран; cityId — INTEGER (lookup).
       # Все поля опциональны (частичное обновление); хотя бы одно должно присутствовать.
+      #
+      # (ADR-0020, нормативно — ЧТО/ЗАЧЕМ/ЧЕМ-ЛУЧШЕ) добавлены каналы контакт-обмена:
+      #   ЧТО — contactPhone / contactTelegram (каналы) + showPhone / showTelegram (видимость каждого
+      #     канала). Включение ЛЮБОГО канала — это утвердительное согласие, которое записывает согласие
+      #     CONTACT_DISTRIBUTION (append-only лог `consents`) В ТОЙ ЖЕ транзакции, что и обновление профиля;
+      #     выключение всех каналов записывает отзыв (granted=false). contactPhone шифруется AES-256-GCM (ADR-0019).
+      #   ЗАЧЕМ — контакт-раскрытие УЖЕ работает, но не было writer'а для каналов контакта продавца («мёртвый
+      #     маркетплейс», AUDIT2 BLOCKER); а ст.10.1 ФЗ-152 требует отдельного, по-умолчанию-ВЫКЛ, доказуемого
+      #     согласия до распространения — эта точка и есть opt-in.
+      #   ЧЕМ-ЛУЧШЕ — один writer, одна транзакция: данные канала, видимость и доказательство законного
+      #     основания задаются вместе и не расходятся; по умолчанию всё ВЫКЛ (ст.10.1), ничего не
+      #     распространяется, пока продавец явно не включит.
       properties:
         fullName:
           type: string
@@ -776,6 +827,7 @@ components:
         avatarUrl:
           type: string
           format: uri
+          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
           nullable: true
           description: URL аватара в объектном хранилище
@@ -789,6 +841,26 @@ components:
           type: string
           enum: [ru, en]
           description: Предпочитаемый язык (supported_languages.code)
+        contactPhone:
+          type: string
+          nullable: true
+          description: >-
+            Контактный телефон для маркетплейса (E.164). Хранится AES-256-GCM (ADR-0019); отдаётся покупателю
+            при контакт-раскрытии только если showPhone включён И есть согласие на распространение. null очищает.
+          example: '+79991234567'
+        contactTelegram:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: Контактный Telegram-хендл (5–32 символа, опциональный @ в начале). null очищает.
+        showPhone:
+          type: boolean
+          description: >-
+            Показывать телефон покупателю при контакт-раскрытии. Включение любого канала записывает согласие
+            CONTACT_DISTRIBUTION (ADR-0020, ст.10.1); выключение всех каналов — отзыв. По умолчанию всё ВЫКЛ.
+        showTelegram:
+          type: boolean
+          description: Показывать Telegram-хендл при контакт-раскрытии (та же семантика согласия, что и showPhone).
   responses:
     Problem:
       description: Проблема RFC7807 (application/problem+json)

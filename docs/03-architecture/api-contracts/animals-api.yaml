@@ -117,6 +117,11 @@ paths:
       summary: Get animal by ID
       operationId: getAnimalById
       x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      description: >-
+        (normative) Read is scoped to the animal's owner (+ org-admin) and operators (MODERATOR/ADMIN);
+        there is no unconditional public read. 404-NO-LEAK: a caller who is not authorized to read an
+        EXISTING animal receives the SAME 404 as for a missing id — never 403 — so this endpoint cannot
+        be used as an existence oracle over animal ids (parity with listings/saved-search/content-report).
       parameters:
         - in: path
           name: id
@@ -133,8 +138,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Animal' }
         '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '404':
+          description: Animal not found — OR the caller is not authorized to read it (404-no-leak; no existence oracle)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
     patch:
       summary: Update animal

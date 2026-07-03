@@ -65,7 +65,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
   const create = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
     request(server()).post('/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const addPhoto = (tok: string, id: string) =>
-    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://x/${randomUUID()}.jpg` });
+    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
   const getEtag = async (tok: string, id: string): Promise<string> =>
     (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200)).headers['etag'];
 
@@ -171,7 +171,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     animalsCreated.push(animalId);
     // Drive to ACTIVE as seller2 (override the shared sellerTok for this listing's lifecycle).
     const id = (await request(server()).post('/v1/listings').set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send(baseBody({ animalId })).expect(201)).body.id as string;
-    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://x/${randomUUID()}.jpg` }).expect(201);
+    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
     const etag = (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${seller2Tok}`).expect(200)).headers['etag'];
     await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
     await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);

@@ -1,17 +1,23 @@
-# Legal Launch-Compliance Checklist (Legal Definition-of-Done) — ZooLink   (STATUS: DRAFT)
+# Legal Launch-Compliance Checklist (Legal Definition-of-Done) — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
 > The legal gate before public go-live. Each item is **owner-actionable** unless marked
-> (architect/devops/backend). RF-first; analysis dated 2026-06-30 — re-verify every cited norm is
-> current before launch. Ranked by severity × likelihood × cost-of-fix. RU mirror in `docsRU/legal/`.
+> (architect/devops/backend). RF-first; analysis dated 2026-06-30, checklist refreshed 2026-07-02 —
+> re-verify every cited norm is current before launch. Ranked by severity × likelihood × cost-of-fix.
+> RU mirror in `docsRU/legal/`.
+>
+> **BLOCKER ranking (highest → lowest, per AUDIT3 2026-07-02):** A3 (RF residency — primary ФЗ-152
+> floor) → A1 (publish offer/ToS/privacy) → A2 (РКН notice) → A4 (designate ответственный) →
+> A5 (ст.10.1 consent for the now-LIVE contact-reveal + default-off flip). Status legend:
+> ☐ not started · ◑ decision made / partially done, build pending · ☑ done.
 
 ## A. BLOCKERS — must be DONE before any public launch
 | # | Requirement | Norm | Owner / role | Status |
 |---|---|---|---|---|
 | A1 | **Publish the Public Offer, Rules, Privacy Policy** (footer-linked, accessible before registration). Lawful basis ст.6 ч.1 п.5 is only grounded once the offer is published & accepted. | ст.435–438 ГК; ст.18.1 ч.2 п.2 ФЗ-152 | owner (finalise `docs/legal/` drafts + counsel review) | ☐ |
 | A2 | **File the РКН processing notification (уведомление об обработке ПДн)** *before* starting processing. Submit via the РКН portal; keep the registry entry current. | **ст.22 ФЗ-152** | owner | ☐ |
-| A3 | **Data localisation: RF-citizen PII primary storage in the RF** (recording/systematisation/storage/update/retrieval in RF databases). Legal requirement here; the deployment topology (RF-only primary + replicas) is an **ADR** owned by architect/devops. | **ст.18 ч.5 ФЗ-152** | legal sets requirement → **architect/devops** ADR + deploy constraint | ☐ |
+| A3 | **Data localisation: RF-citizen PII primary storage in the RF** (recording/systematisation/storage/update/retrieval in RF databases). **ADR-0017 now Accepted (2026-07-02)** — RF-only primary + replicas + backups + DR (Option 3); de-identified carve-out under ст.12. Decision-level closed; residual = **devops** must build the region-pin + CI/deploy "fail-on-non-RF-region" guardrail (ADR-0017 §Guardrail) **before any RF-citizen PII exists**. | **ст.18 ч.5 ФЗ-152** | legal requirement ✓ → ADR-0017 ✓ → **devops** builds guardrail | ◑ ADR Accepted; guardrail build pending |
 | A4 | **Designate the ответственный за организацию обработки ПДн**; publish name + contact in the Privacy Policy. | ст.22.1 ФЗ-152 | owner | ☐ |
-| A5 | **Separate consents wired** (unbundled, default-off, revocable): contact-distribution (ст.10.1), marketing (ст.9 + ФЗ-38), analytics, cookies. Core service must work if all declined. | ст.9, ст.10.1 ФЗ-152; ст.18 ФЗ-38 | owner + **frontend/backend** | ☐ |
+| A5 | **Separate consents wired** (unbundled, default-off, revocable): contact-distribution (ст.10.1), marketing (ст.9 + ФЗ-38), analytics, cookies. Core service must work if all declined. **NOW URGENT — the contact-reveal is LIVE** (`listing.service.ts` `revealContact` decrypts & returns the seller phone) and `contact_prefs` defaults to `show_phone: true`, so the operator is distributing seller phones on a pre-checked default with **no ст.10.1 consent record** — silence ≠ consent (ст.10.1). **Wave-C dependency (build, not this doc-wave):** (a) flip the column default + both code copies to `show_phone:false, show_telegram:false` incl. the erase/reset paths; (b) add an append-only consent-record seam `consents(subject_id, kind, text_version, action, granted_at, withdrawn_at)` — `contact_prefs` alone is not lawful proof; (c) gate `revealContact` on an explicit ст.10.1 consent record. | ст.9, ст.10.1 ФЗ-152; ст.18 ФЗ-38 | owner + **backend/frontend** (Wave C) | ☐ (Wave-C build dependency) |
 
 ## B. CRITICAL — do before launch or accept a documented, time-boxed risk
 | # | Requirement | Norm | Role | Status |

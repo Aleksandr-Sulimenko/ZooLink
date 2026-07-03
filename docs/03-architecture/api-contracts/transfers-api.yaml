@@ -32,15 +32,29 @@ paths:
       summary: Initiate an ownership transfer of an animal
       operationId: initiateTransfer
       description: >
-        Creates a PENDING transfer of animal `{id}` to a recipient that is **exactly one of**
-        a user (`toUserId`) or an organization (`toOrganizationId`). Object-level rule: the
-        caller MUST be the animal's **current owner** (its present `ownerId`, or an authorized
-        org-admin of its present `organizationId`). Recipient MUST NOT be the current owner
-        (no self-transfer). At most one active PENDING transfer may exist per animal at a time;
-        a second initiate while one is PENDING → 409 `TRANSFER_ALREADY_PENDING`
-        (DB-enforced by `UNIQUE (animal_id) WHERE status='PENDING'`). `expiresAt` is set to
-        `now() + 72h` (OQ-2). The acting principal is snapshotted as `initiatedBy`
-        `{actorId, principalType}` (ADR-0011 §6).
+        Creates a PENDING transfer of animal `{id}` to a recipient selected by **exactly one of**
+        three mutually-exclusive selectors (C5): `claimCode` (RECOMMENDED — a recipient-minted,
+        single-use, opt-in transfer claim code, see `POST /transfers/claim-codes`), `toUserId`, or
+        `toOrganizationId`. **No open user-search endpoint exists** (deliberate, to avoid a PII
+        enumeration oracle — C5/security): a normal user names a recipient either by entering a
+        code that recipient shared out-of-band, or by a `userId`/`organizationId` they already
+        legitimately hold from an in-system relationship (e.g. a `contact_reveals` row). When
+        `claimCode` is supplied it is validated and **consumed atomically** (single-use); the
+        server resolves it to the recipient user (or the org the recipient nominated) — the
+        initiator never learns recipient PII from this step. An invalid / expired / already-used /
+        malformed code returns a **uniform** 422 `TRANSFER_CLAIM_CODE_INVALID` (no distinction
+        between the failure modes — no existence oracle). For the raw `toUserId`/`toOrganizationId`
+        selectors, a recipient that does not exist returns a **generic** 404 `RECIPIENT_NOT_FOUND`
+        that does NOT distinguish user-vs-org or exists-vs-absent (closes the AUDIT3 MINOR
+        enumeration oracle); initiate is additionally rate-limited (429 `RATE_LIMITED` +
+        `Retry-After`). Object-level rule: the caller MUST be the animal's **current owner** (its
+        present `ownerId`, or an authorized org-admin of its present `organizationId`). The
+        resolved recipient MUST NOT be the current owner / the caller (no self-transfer → 422
+        `SELF_TRANSFER`, enforced after code resolution too). At most one active PENDING transfer
+        may exist per animal at a time; a second initiate while one is PENDING → 409
+        `TRANSFER_ALREADY_PENDING` (DB-enforced by `UNIQUE (animal_id) WHERE status='PENDING'`).
+        `expiresAt` is set to `now() + 72h` (OQ-2). The acting principal is snapshotted as
+        `initiatedBy` `{actorId, principalType}` (ADR-0011 §6).
       x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -74,9 +88,52 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }   # malformed body
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }   # caller is not the current owner
-        '404': { $ref: '#/components/responses/Problem' }   # animal not found / recipient not found
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found / RECIPIENT_NOT_FOUND (generic, no user-vs-org leak)
         '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_ALREADY_PENDING
-        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / Idempotency-Key reuse w/ different body
+        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / TRANSFER_CLAIM_CODE_INVALID / Idempotency-Key reuse w/ different body
+        '429': { $ref: '#/components/responses/Problem' }   # RATE_LIMITED (initiate throttle) — Retry-After
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/claim-codes:
+    post:
+      summary: Mint a single-use transfer claim code (recipient opt-in)
+      operationId: mintTransferClaimCode
+      description: >
+        The **recipient** mints a short-lived, single-use **transfer claim code** and shares it
+        out-of-band (read aloud / QR / message) with the current owner, who enters it into
+        `initiateTransfer` (`claimCode`). This is ZooLink's MVP-safe counterparty-resolution
+        mechanism (C5): it needs **no user-search**, so it creates **no PII enumeration oracle** —
+        the code is high-entropy and per-issuance (never per-identity), so a guessed code reveals
+        nothing about who exists. Minting the code IS the recipient's opt-in to receive an incoming
+        transfer; recipient PII is never disclosed to the initiator (the existing accept-flow stays
+        the second consent gate). The code resolves to the authenticated caller as recipient user;
+        if `forOrganizationId` is supplied the caller MUST be an authorized org-admin and the code
+        instead nominates that org as the recipient. Codes are stored server-side (Redis, reusing
+        the namespace-parameterised OTP lifecycle, ns=`transfer:claim`), TTL `expiresAt =
+        now() + 15m`, single-use (consumed atomically on a successful initiate). Rate-limited per
+        principal (429 `RATE_LIMITED` + `Retry-After`). The plaintext code is returned **once** in
+        this response and is never retrievable again.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Client-generated key for safe retry (API_CONVENTIONS §11); a replay returns the same code+expiresAt within the window
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimCodeRequest' }
+      responses:
+        '201':
+          description: Claim code minted (plaintext returned once)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClaimCode' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # forOrganizationId set but caller is not an org-admin of it
+        '429': { $ref: '#/components/responses/Problem' }   # RATE_LIMITED — Retry-After
         '500': { $ref: '#/components/responses/Problem' }
   /transfers/{transferId}/accept:
     post:
@@ -326,24 +383,67 @@ components:
         actorId: { type: string, format: uuid }
         principalType: { type: string, enum: [HUMAN, AGENT] }
         actorDisplayName: { type: string, nullable: true }
+    ClaimCodeRequest:
+      type: object
+      description: >
+        Mint-claim-code request body (C5). Empty body → the code nominates the authenticated caller
+        as the recipient user. `forOrganizationId` (optional) → the code instead nominates that org
+        as recipient; the caller MUST be an authorized org-admin of it (else 403).
+      properties:
+        forOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Nominate this organization as recipient instead of the caller-as-user (caller must be its org-admin)
+    ClaimCode:
+      type: object
+      description: >
+        A minted transfer claim code (C5). `code` is returned in plaintext ONCE and is never
+        retrievable again; the server stores only its lookup key. Opaque, high-entropy, single-use.
+      required: [code, expiresAt, recipientType]
+      properties:
+        code:
+          type: string
+          description: Opaque single-use claim code (e.g. Crockford-base32, unguessable). Share out-of-band with the current owner.
+          example: "T7Q4-9KJ2-M3XZ"
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the code expires (now + 15m). After this it is uniformly invalid.
+        recipientType:
+          type: string
+          enum: [USER, ORGANIZATION]
+          description: Which side this code will resolve to on redemption (USER = the caller; ORGANIZATION = the nominated org)
     TransferInitiate:
       type: object
       description: >
-        Initiate-transfer request body. The recipient is **exactly one of** `toUserId` /
-        `toOrganizationId` (mirrors the `ownership_transfers` exactly-one-of-user/org CHECK,
-        ADR-0013 §3). Supplying both, or neither → 422.
+        Initiate-transfer request body. The recipient is selected by **exactly one of** three
+        mutually-exclusive selectors (C5): `claimCode` (recommended, recipient-minted opt-in),
+        `toUserId`, or `toOrganizationId`. `toUserId`/`toOrganizationId` mirror the
+        `ownership_transfers` exactly-one-of-user/org CHECK (ADR-0013 §3); `claimCode` resolves
+        server-side to one of those two. Supplying zero selectors → 422 `RECIPIENT_REQUIRED`;
+        supplying more than one → 422 `RECIPIENT_AMBIGUOUS`.
       required: []
       properties:
+        claimCode:
+          type: string
+          nullable: true
+          description: >
+            A single-use transfer claim code the recipient minted via `POST /transfers/claim-codes`
+            and shared out-of-band. Validated and consumed atomically; resolves to the recipient
+            user or the org the recipient nominated. Invalid/expired/used/malformed → uniform 422
+            `TRANSFER_CLAIM_CODE_INVALID` (no existence oracle). Mutually exclusive with
+            toUserId/toOrganizationId.
         toUserId:
           type: string
           format: uuid
           nullable: true
-          description: Recipient user (set iff transferring to a user; mutually exclusive with toOrganizationId)
+          description: Recipient user by id (only for a userId already held from an in-system relationship; mutually exclusive with claimCode/toOrganizationId)
         toOrganizationId:
           type: string
           format: uuid
           nullable: true
-          description: Recipient organization (set iff transferring to an org; mutually exclusive with toUserId)
+          description: Recipient organization by id (mutually exclusive with claimCode/toUserId)
         transferReason:
           type: string
           nullable: true
@@ -352,6 +452,7 @@ components:
             Optional free-text reason the initiator gives; persisted on the transfer and copied
             to `animal_ownership_history.transferReason` on completion (ADR-0013 §3 delta).
       oneOf:
+        - required: [claimCode]
         - required: [toUserId]
         - required: [toOrganizationId]
     Transfer:

@@ -15,8 +15,9 @@
  *   2. ABUSE — reveal-quota Sybil reset (new account resets the per-(market,viewer) cap).
  *   3. ABUSE — per-user listing flood (no creation quota).
  *   4. HIDDEN-COST — reveal quota + reveal-row burned even when channels resolve empty.
- *   5. SECURITY (security §headline break) — animal getById is an EXISTENCE ORACLE: 403 for an
- *      existing non-owned id vs 404 for a missing id (violates the 404-no-leak invariant).
+ *   5. SECURITY (security §headline break) — animal getById existence ORACLE. FIXED in Wave B2:
+ *      read-authz failure now collapses to 404 (parity with listing/saved-search); the case below is
+ *      now a GREEN regression proving existing-non-owned and missing BOTH return 404.
  *
  * Run: `npx jest --config test/jest-e2e.json --runInBand --forceExit -t AUDIT2` (flush Redis first).
  */
@@ -75,6 +76,15 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   const devToken = async (uid: string): Promise<string> =>
     (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
+  /** ADR-0020 honest opt-in via the REAL PATCH /me writer (records CONTACT_DISTRIBUTION consent, encrypts phone). */
+  const setContact = async (
+    tok: string,
+    body: { contactPhone?: string; contactTelegram?: string; showPhone?: boolean; showTelegram?: boolean },
+  ): Promise<request.Response> => {
+    const me = await request(server()).get('/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
+    return request(server()).patch('/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body);
+  };
+
   const mkUser = async (name: string, role: string): Promise<string> => {
     const u = await prisma.users.create({
       data: { full_name: name, role, principal_type: 'HUMAN', status: 'ACTIVE', is_active: true },
@@ -115,7 +125,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
       .post(`/v1/listings/${id}/photos`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
-      .send({ url: `http://x/${randomUUID()}.jpg` })
+      .send({ url: `http://localhost:9000/${randomUUID()}.jpg` })
       .expect(201);
     const etag = (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200)).headers['etag'];
     await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
@@ -148,7 +158,10 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
     const br = await prisma.breeds.create({ data: { code: `a2_br_${suffix}`, species_id: speciesId, name_localized: { en: 'B', ru: 'Б' } } });
     breedId = br.id;
 
-    seller = await registerVerify('A2 RealSeller'); // ← the crux: a REAL registered seller, no pre-seeded contact_phone
+    seller = await registerVerify('A2 RealSeller'); // ← a REAL registered seller, no pre-seeded contact_phone
+    // ADR-0020 FIX: the real seller opts in through the REAL writer (PATCH /me) — this is what closes the
+    // AUDIT2 BLOCKER (the "dead marketplace"). No masking fixture; consent + encrypted phone are recorded.
+    await setContact(seller.token, { contactPhone: '+79990001122', contactTelegram: 'realseller', showPhone: true, showTelegram: true }).then((r) => expect(r.status).toBe(200));
     const modId = await mkUser('A2 Mod', 'MODERATOR');
     modTok = await devToken(modId);
     buyerId = await mkUser('A2 Buyer', 'USER');
@@ -169,6 +182,10 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
     }
     if (breedId) await prisma.breeds.delete({ where: { id: breedId } }).catch(() => undefined);
     if (speciesId) await prisma.species.delete({ where: { id: speciesId } }).catch(() => undefined);
+    // consents is append-only + ON DELETE CASCADE on user_id → bypass the immutability trigger for test cleanup.
+    await prisma.$executeRaw`ALTER TABLE consents DISABLE TRIGGER trg_consents_immutable`.catch(() => undefined);
+    for (const id of users) await prisma.consents.deleteMany({ where: { user_id: id } }).catch(() => undefined);
+    await prisma.$executeRaw`ALTER TABLE consents ENABLE TRIGGER trg_consents_immutable`.catch(() => undefined);
     for (const id of users) {
       await prisma.audit_log.deleteMany({ where: { actor_id: id } }).catch(() => undefined);
       await prisma.refresh_tokens.deleteMany({ where: { user_id: id } }).catch(() => undefined);
@@ -180,34 +197,26 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // ════════════════════════════════════════════════════════════════════════════════════════════
   // 1. BLOCKER — the dead marketplace (real registered seller reveals empty channels)
   // ════════════════════════════════════════════════════════════════════════════════════════════
-  describe('BLOCKER: contact-reveal for a REAL registered seller', () => {
-    it('AUDIT2 root-cause (GREEN=confirmed): PATCH /v1/me CANNOT set contactPhone/contactTelegram/showPhone (400 forbidNonWhitelisted)', async () => {
-      // forbidNonWhitelisted fires in the ValidationPipe before the handler → no If-Match needed.
-      const res = await request(server())
-        .patch('/v1/me')
-        .set('Authorization', `Bearer ${seller.token}`)
-        .send({ contactPhone: '+79990001122', contactTelegram: 'realseller', showPhone: true })
-        .expect(400);
-      // The body carries ONLY non-whitelisted props, so a 400 can ONLY be forbidNonWhitelisted →
-      // proves there is genuinely no DTO path to set contact channels for a real user.
-      expect(String(res.body.detail ?? res.body.message ?? res.body.title ?? '')).toMatch(/validation|should not exist|contactPhone/i);
-      // And the profile still exposes no contact channel afterwards.
-      const me = await request(server()).get('/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200);
-      expect(me.body.contactPhone).toBeUndefined();
-      expect(me.body.contactTelegram).toBeUndefined();
+  describe('BLOCKER: contact-reveal for a REAL registered seller — FIXED (ADR-0020 / wave C)', () => {
+    it('AUDIT2 root-cause FIXED: PATCH /v1/me now ACCEPTS contactPhone/contactTelegram/showPhone (200, not 400)', async () => {
+      // The DTO now has the contact fields (ADR-0020), so forbidNonWhitelisted no longer fires. A fresh
+      // PATCH /me with the contact channels succeeds — the writer that was missing at AUDIT2 now exists.
+      const res = await setContact(seller.token, { contactPhone: '+79990001122', contactTelegram: 'realseller', showPhone: true });
+      expect(res.status).toBe(200);
     });
 
-    it('AUDIT2 reality-lock (GREEN=confirmed): a REAL seller listing → buyer reveal returns EMPTY channels', async () => {
+    it('AUDIT2 reality FIXED: a REAL seller (opted in via PATCH /me) → buyer reveal returns a usable channel', async () => {
       const id = await createActiveListingViaApi(seller.token, modTok);
       const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(res.body.sellerId).toBe(seller.userId);
-      expect(res.body.channels).toEqual({}); // ← the dead marketplace, in one assertion
+      expect(res.body.status).toBe('REVEALED');
+      expect(res.body.channels).toMatchObject({ phone: '+79990001122' }); // ← the marketplace is alive
     });
 
-    it('AUDIT2 BLOCKER PROOF (RED=expected-to-fail): a real buyer SHOULD receive at least one usable channel', async () => {
+    it('AUDIT2 BLOCKER PROOF FIXED (was RED, now GREEN): a real buyer receives at least one usable channel', async () => {
       const id = await createActiveListingViaApi(seller.token, modTok);
       const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
-      // DESIRED behaviour — fails today because no writer/editor exists for contact_phone/telegram/prefs.
+      // The BLOCKER is closed: the honest register→verify→PATCH /me→reveal path yields real channels.
       expect(Object.keys(res.body.channels as Record<string, unknown>).length).toBeGreaterThan(0);
     });
   });
@@ -215,19 +224,19 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // ════════════════════════════════════════════════════════════════════════════════════════════
   // 4. HIDDEN-COST — quota + reveal-row burned even when channels resolve empty
   // ════════════════════════════════════════════════════════════════════════════════════════════
-  describe('HIDDEN-COST: reveal burns quota + writes a row before returning empty channels', () => {
-    it('AUDIT2 (GREEN=confirmed): an empty-channel reveal still INCRements the Redis quota AND inserts a contact_reveals row', async () => {
+  describe('HIDDEN-COST: an empty-channel reveal must charge nothing — FIXED (ADR-0020 billing-unit)', () => {
+    it('AUDIT2 FIXED: a reveal against a non-consented seller returns NO_CHANNELS and burns NO quota / writes NO row', async () => {
+      const silentSeller = await registerVerify('A2 SilentSeller'); // real seller, NEVER opts in → no consent
       const hcBuyerId = await mkUser('A2 HcBuyer', 'USER');
       const hcTok = await devToken(hcBuyerId);
       await redis.client.del(`contact-reveal:pet:${hcBuyerId}`);
-      const id = await createActiveListingViaApi(seller.token, modTok);
+      const id = await createActiveListingViaApi(silentSeller.token, modTok);
       const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${hcTok}`).expect(200);
-      expect(res.body.channels).toEqual({}); // nothing useful returned...
-      // ...yet the buyer paid for it: quota consumed + a meaningless reveal row that inflates analytics.contactReveals.
-      const quota = await redis.client.get(`contact-reveal:pet:${hcBuyerId}`);
-      expect(Number(quota)).toBe(1);
-      const rows = await prisma.contact_reveals.count({ where: { listing_id: id, viewer_id: hcBuyerId } });
-      expect(rows).toBe(1);
+      expect(res.body.channels).toEqual({});
+      expect(res.body.status).toBe('NO_CHANNELS');
+      // The buyer is NOT charged: no quota consumed, no meaningless reveal row.
+      expect(await redis.client.get(`contact-reveal:pet:${hcBuyerId}`)).toBeNull();
+      expect(await prisma.contact_reveals.count({ where: { listing_id: id, viewer_id: hcBuyerId } })).toBe(0);
     });
   });
 
@@ -235,22 +244,26 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // 2. ABUSE — reveal-quota Sybil reset (a fresh account resets the per-(market,viewer) cap)
   // ════════════════════════════════════════════════════════════════════════════════════════════
   describe('ABUSE: contact-reveal Sybil / cap bypass', () => {
-    it('AUDIT2 (GREEN=abuse-confirmed): account B hits the pet cap (11th → 429); a NEW account C reveals the same listing → 200', async () => {
-      const id = await createActiveListingViaApi(seller.token, modTok);
+    it('AUDIT2 (GREEN=abuse-confirmed): account B hits the pet cap over 10 DISTINCT listings (11th → 429); a NEW account C resets it → 200', async () => {
+      // Distinct listings: re-revealing the SAME listing is now free dedup (ADR-0020), so the cap is about
+      // revealing MANY listings. The Sybil finding (per-account cap resets on a fresh account) is unchanged
+      // and still open — it is out of this slice's scope (account-age/velocity caps are a later hardening).
+      const ids: string[] = [];
+      for (let i = 0; i < 11; i++) ids.push(await createActiveListingViaApi(seller.token, modTok));
       const bId = await mkUser('A2 SybilB', 'USER');
       const bTok = await devToken(bId);
       await redis.client.del(`contact-reveal:pet:${bId}`);
       for (let i = 0; i < 10; i++) {
-        await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(200);
+        await request(server()).post(`/v1/listings/${ids[i]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(200);
       }
-      const capped = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(429);
+      const capped = await request(server()).post(`/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(429);
       expect(capped.body.code).toBe('RATE_LIMITED');
 
-      // Sybil: a cheap fresh account C resets the entire quota — no per-seller/per-listing/account-age cap bites.
+      // Sybil: a cheap fresh account C resets the entire quota — no per-seller/account-age cap bites yet.
       const cId = await mkUser('A2 SybilC', 'USER');
       const cTok = await devToken(cId);
       await redis.client.del(`contact-reveal:pet:${cId}`);
-      await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${cTok}`).expect(200);
+      await request(server()).post(`/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${cTok}`).expect(200);
     });
   });
 
@@ -280,8 +293,11 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // ════════════════════════════════════════════════════════════════════════════════════════════
   // 5. SECURITY — animal getById existence oracle (403 existing non-owned vs 404 missing)
   // ════════════════════════════════════════════════════════════════════════════════════════════
-  describe('SECURITY: animal getById existence oracle (404-no-leak invariant break)', () => {
-    it('AUDIT2 (GREEN=finding-confirmed): existing non-owned animal → 403, missing id → 404 (distinguishable = oracle)', async () => {
+  describe('SECURITY: animal getById existence oracle (404-no-leak invariant) — FIXED (Wave B2)', () => {
+    // Was AUDIT2 finding #5 (existence oracle: 403 existing-non-owned vs 404 missing). Wave B2 collapsed
+    // the animal read-authz failure to 404 (animal.service.getById), matching listing/saved-search/
+    // content-report. This test is now the GREEN regression proving the oracle is GONE.
+    it('AUDIT2 #5 FIXED: existing non-owned animal AND missing id BOTH → 404 (no existence oracle)', async () => {
       const meId = (await request(server()).get('/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
       const ownedByseller = await newAnimal(meId);
       const attackerTok = buyerTok; // a different, non-owning principal
@@ -289,10 +305,9 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
       const existing = await request(server()).get(`/v1/animals/${ownedByseller}`).set('Authorization', `Bearer ${attackerTok}`);
       const missing = await request(server()).get(`/v1/animals/${randomUUID()}`).set('Authorization', `Bearer ${attackerTok}`);
 
-      expect(existing.status).toBe(403); // existence leaked
+      expect(existing.status).toBe(404); // existence no longer leaked (was 403)
       expect(missing.status).toBe(404);
-      // DESIRED (the invariant listing/saved-search honour): BOTH should be 404 — no existence oracle.
-      expect(existing.status).not.toBe(missing.status); // proves the oracle: the two are distinguishable
+      expect(existing.status).toBe(missing.status); // indistinguishable — oracle eliminated
     });
   });
 });

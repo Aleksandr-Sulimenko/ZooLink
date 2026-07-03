@@ -32,15 +32,28 @@ paths:
       summary: Инициировать передачу владения животным
       operationId: initiateTransfer
       description: >
-        Создаёт PENDING-передачу животного `{id}` получателю, который — **ровно один из**
-        пользователь (`toUserId`) или организация (`toOrganizationId`). Объектное правило: вызывающий
-        ДОЛЖЕН быть **текущим владельцем** животного (его нынешний `ownerId`, или авторизованный
-        org-admin его нынешнего `organizationId`). Получатель НЕ ДОЛЖЕН быть текущим владельцем
-        (нет самопередачи). Максимум одна активная PENDING-передача может существовать на животное за раз;
-        вторая инициация при существующей PENDING → 409 `TRANSFER_ALREADY_PENDING`
-        (DB-enforced через `UNIQUE (animal_id) WHERE status='PENDING'`). `expiresAt` выставляется в
-        `now() + 72h` (OQ-2). Актор-принципал снапшотится как `initiatedBy`
-        `{actorId, principalType}` (ADR-0011 §6).
+        Создаёт PENDING-передачу животного `{id}` получателю, выбранному **ровно одним из** трёх
+        взаимоисключающих селекторов (C5): `claimCode` (РЕКОМЕНДУЕТСЯ — сгенерированный получателем,
+        одноразовый opt-in код передачи, см. `POST /transfers/claim-codes`), `toUserId` или
+        `toOrganizationId`. **Эндпоинта поиска пользователей нет** (намеренно — чтобы не создать
+        оракул перечисления PII, C5/security): обычный пользователь называет получателя либо вводя
+        код, который получатель передал out-of-band, либо `userId`/`organizationId`, которым он уже
+        законно располагает из внутрисистемной связи (напр. строка `contact_reveals`). Когда передан
+        `claimCode`, он проверяется и **атомарно погашается** (одноразовый); сервер разрешает его в
+        получателя-пользователя (или организацию, которую получатель назначил) — инициатор при этом
+        не узнаёт PII получателя. Невалидный / истёкший / уже использованный / некорректный код →
+        **единообразный** 422 `TRANSFER_CLAIM_CODE_INVALID` (без различения режимов отказа — нет
+        оракула существования). Для сырых селекторов `toUserId`/`toOrganizationId` несуществующий
+        получатель → **общий** 404 `RECIPIENT_NOT_FOUND`, не различающий user-vs-org и
+        существует-vs-нет (закрывает MINOR-оракул перечисления из AUDIT3); инициация дополнительно
+        rate-limited (429 `RATE_LIMITED` + `Retry-After`). Объектное правило: вызывающий ДОЛЖЕН быть
+        **текущим владельцем** животного (его нынешний `ownerId`, или авторизованный org-admin его
+        нынешнего `organizationId`). Разрешённый получатель НЕ ДОЛЖЕН быть текущим владельцем /
+        вызывающим (нет самопередачи → 422 `SELF_TRANSFER`, проверяется и после разрешения кода).
+        Максимум одна активная PENDING-передача на животное за раз; вторая инициация при существующей
+        PENDING → 409 `TRANSFER_ALREADY_PENDING` (DB-enforced через `UNIQUE (animal_id) WHERE
+        status='PENDING'`). `expiresAt` выставляется в `now() + 72h` (OQ-2). Актор-принципал
+        снапшотится как `initiatedBy` `{actorId, principalType}` (ADR-0011 §6).
       x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
@@ -74,9 +87,52 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }   # malformed body
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }   # caller is not the current owner
-        '404': { $ref: '#/components/responses/Problem' }   # animal not found / recipient not found
+        '404': { $ref: '#/components/responses/Problem' }   # animal not found / RECIPIENT_NOT_FOUND (общий, без утечки user-vs-org)
         '409': { $ref: '#/components/responses/Problem' }   # TRANSFER_ALREADY_PENDING
-        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / Idempotency-Key reuse w/ different body
+        '422': { $ref: '#/components/responses/Problem' }   # SELF_TRANSFER / RECIPIENT_AMBIGUOUS / RECIPIENT_REQUIRED / TRANSFER_CLAIM_CODE_INVALID / Idempotency-Key reuse w/ different body
+        '429': { $ref: '#/components/responses/Problem' }   # RATE_LIMITED (тротлинг инициации) — Retry-After
+        '500': { $ref: '#/components/responses/Problem' }
+  /transfers/claim-codes:
+    post:
+      summary: Выпустить одноразовый код передачи (opt-in получателя)
+      operationId: mintTransferClaimCode
+      description: >
+        **Получатель** выпускает короткоживущий одноразовый **код передачи (claim code)** и
+        передаёт его out-of-band (зачитывает / QR / сообщение) текущему владельцу, который вводит
+        его в `initiateTransfer` (`claimCode`). Это MVP-безопасный механизм разрешения контрагента
+        ZooLink (C5): он **не требует поиска пользователей**, поэтому **не создаёт оракул
+        перечисления PII** — код высокоэнтропийный и на-выпуск (никогда не на-личность), так что
+        угаданный код ничего не сообщает о существовании кого-либо. Выпуск кода И ЕСТЬ opt-in
+        получателя на приём входящей передачи; PII получателя инициатору не раскрывается (accept-flow
+        остаётся вторым воротам согласия). Код разрешается в аутентифицированного вызывающего как
+        получателя-пользователя; если передан `forOrganizationId`, вызывающий ДОЛЖЕН быть
+        авторизованным org-admin, и код вместо этого назначает получателем ту организацию. Коды
+        хранятся на сервере (Redis, переиспользуя namespace-параметризованный жизненный цикл OTP,
+        ns=`transfer:claim`), TTL `expiresAt = now() + 15m`, одноразовые (погашаются атомарно при
+        успешной инициации). Rate-limited на принципала (429 `RATE_LIMITED` + `Retry-After`).
+        Открытый код возвращается **однократно** в этом ответе и больше не извлекается.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+          description: Сгенерированный клиентом ключ для безопасного ретрая (API_CONVENTIONS §11); ретрай возвращает тот же код+expiresAt в окне
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimCodeRequest' }
+      responses:
+        '201':
+          description: Код передачи выпущен (открытый текст возвращён однократно)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClaimCode' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }   # forOrganizationId задан, но вызывающий не org-admin
+        '429': { $ref: '#/components/responses/Problem' }   # RATE_LIMITED — Retry-After
         '500': { $ref: '#/components/responses/Problem' }
   /transfers/{transferId}/accept:
     post:
@@ -326,24 +382,67 @@ components:
         actorId: { type: string, format: uuid }
         principalType: { type: string, enum: [HUMAN, AGENT] }
         actorDisplayName: { type: string, nullable: true }
+    ClaimCodeRequest:
+      type: object
+      description: >
+        Тело запроса выпуска кода передачи (C5). Пустое тело → код назначает получателем
+        аутентифицированного вызывающего (как пользователя). `forOrganizationId` (опц.) → код вместо
+        этого назначает получателем ту организацию; вызывающий ДОЛЖЕН быть её org-admin (иначе 403).
+      properties:
+        forOrganizationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Назначить получателем эту организацию вместо вызывающего-пользователя (вызывающий должен быть её org-admin)
+    ClaimCode:
+      type: object
+      description: >
+        Выпущенный код передачи (C5). `code` возвращается открытым текстом ОДНОКРАТНО и больше не
+        извлекается; сервер хранит только его ключ поиска. Непрозрачный, высокоэнтропийный, одноразовый.
+      required: [code, expiresAt, recipientType]
+      properties:
+        code:
+          type: string
+          description: Непрозрачный одноразовый код (напр. Crockford-base32, неугадываемый). Передать out-of-band текущему владельцу.
+          example: "T7Q4-9KJ2-M3XZ"
+        expiresAt:
+          type: string
+          format: date-time
+          description: Когда код истекает (now + 15m). После этого он единообразно невалиден.
+        recipientType:
+          type: string
+          enum: [USER, ORGANIZATION]
+          description: В какую сторону разрешится код при погашении (USER = вызывающий; ORGANIZATION = назначенная организация)
     TransferInitiate:
       type: object
       description: >
-        Тело запроса инициации передачи. Получатель — **ровно один из** `toUserId` /
-        `toOrganizationId` (повторяет CHECK ровно-одно-из-user/org таблицы `ownership_transfers`,
-        ADR-0013 §3). Указание обоих, или ни одного → 422.
+        Тело запроса инициации передачи. Получатель выбирается **ровно одним из** трёх
+        взаимоисключающих селекторов (C5): `claimCode` (рекомендуется, opt-in получателя),
+        `toUserId` или `toOrganizationId`. `toUserId`/`toOrganizationId` повторяют CHECK
+        ровно-одно-из-user/org таблицы `ownership_transfers` (ADR-0013 §3); `claimCode` разрешается
+        на сервере в один из этих двух. Ноль селекторов → 422 `RECIPIENT_REQUIRED`; больше одного →
+        422 `RECIPIENT_AMBIGUOUS`.
       required: []
       properties:
+        claimCode:
+          type: string
+          nullable: true
+          description: >
+            Одноразовый код передачи, который получатель выпустил через `POST /transfers/claim-codes`
+            и передал out-of-band. Проверяется и атомарно погашается; разрешается в получателя-
+            пользователя или назначенную получателем организацию. Невалидный/истёкший/использованный/
+            некорректный → единообразный 422 `TRANSFER_CLAIM_CODE_INVALID` (нет оракула
+            существования). Взаимоисключающе с toUserId/toOrganizationId.
         toUserId:
           type: string
           format: uuid
           nullable: true
-          description: Получатель-пользователь (задаётся iff передача пользователю; взаимоисключающе с toOrganizationId)
+          description: Получатель-пользователь по id (только для userId, уже полученного из внутрисистемной связи; взаимоисключающе с claimCode/toOrganizationId)
         toOrganizationId:
           type: string
           format: uuid
           nullable: true
-          description: Получатель-организация (задаётся iff передача орг.; взаимоисключающе с toUserId)
+          description: Получатель-организация по id (взаимоисключающе с claimCode/toUserId)
         transferReason:
           type: string
           nullable: true
@@ -352,6 +451,7 @@ components:
             Опциональная свободно-текстовая причина, которую даёт инициатор; персистится на передаче и копируется
             в `animal_ownership_history.transferReason` при завершении (дельта ADR-0013 §3).
       oneOf:
+        - required: [claimCode]
         - required: [toUserId]
         - required: [toOrganizationId]
     Transfer:

@@ -20,11 +20,13 @@ This directory contains all the Architecture Decision Records (ADRs) for the Zoo
 - [ADR-0014: Offering supertype — polymorphic discovery + moderation seam (anti-god-table)](0014-offering-supertype-polymorphic-seam.md) *(Accepted — ratified 2026-07-01, jointly w/ 0015)*
 - [ADR-0015: `market_scope` — refine the ADR-0002 hard split for species-less offerings](0015-market-scope-refines-0002.md) *(Accepted — ratified 2026-07-01, jointly w/ 0014)*
 - [ADR-0016: Provider model — org-backed | individual | agent-provider](0016-provider-model.md) *(Accepted — security+legal sign-off 2026-07-01: T0–T3 verification matrix + three-regime immunity; residual product-confirms OD-3/4/5 open)*
-- [ADR-0017: RF data residency — РФ-citizen PII stays in the Russian Federation](0017-rf-data-residency.md) *(Proposed — P0 go-live; awaiting owner go on RF topology/cost)*
+- [ADR-0017: RF data residency — РФ-citizen PII stays in the Russian Federation](0017-rf-data-residency.md) *(Accepted 2026-07-02 — owner go on RF-only topology; P0 residency blocker closed at decision level; devops implements region-pin + fail-on-non-RF guardrail)*
 - [ADR-0018: Cross-aggregate access rule — route animal reads through AnimalService (reaffirm ADR-0004)](0018-cross-aggregate-access-rule.md) *(Proposed — ready; awaiting owner nod)*
 - [ADR-0019: PII-at-rest — enforce the ADR-0012 form now (blind-index + crypto seam), stage rollout](0019-pii-at-rest-form-enforcement.md) *(Accepted — owner ratified OD-1/OD-2 2026-07-01; security+legal at-rest sign-off; residual certified-СКЗИ investigation)*
+- [ADR-0020: Versioned consent-record model — append-only `consents` log; gate contact-distribution on it](0020-versioned-consent-record-model.md) *(Proposed — ready; awaiting owner nod on OD-1 seam / OD-2 consent-granularity / OD-3 default-flip; closes go-live legal blocker A5)*
+- [ADR-0021: First real outbox consumer — the in-app notification path (end the silent event layer)](0021-first-outbox-consumer-notification-path.md) *(Proposed — ends AUDIT3 dead-event-layer #2/#3; one IN_APP notification consumer, forward-only replay + no-purge guardrail; email/SMS form-deferred)*
 
-> **Decision memo:** [Ecosystem ADR Plan & Open-Decision Memo (Q1–Q6)](ECOSYSTEM_ADR_PLAN.md) — architect's brief; **Q1–Q6 owner-ratified 2026-07-01** (0014+0015 Accepted jointly; **0016 & 0019 Accepted 2026-07-01** on security+legal sign-off — 0016 residual product-confirms OD-3/4/5, 0019 residual certified-СКЗИ investigation; 0017+0018 stay Proposed with explicit awaiting-conditions).
+> **Decision memo:** [Ecosystem ADR Plan & Open-Decision Memo (Q1–Q6)](ECOSYSTEM_ADR_PLAN.md) — architect's brief; **Q1–Q6 owner-ratified 2026-07-01** (0014+0015 Accepted jointly; **0016 & 0019 Accepted 2026-07-01** on security+legal sign-off — 0016 residual product-confirms OD-3/4/5, 0019 residual certified-СКЗИ investigation; **0017 Accepted 2026-07-02** on owner RF-topology go; 0018 stays Proposed with explicit awaiting-condition).
 
 ## Template
 

@@ -11,10 +11,12 @@ import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { ModerationService } from '../moderation/moderation.service';
 import type { AnimalService } from '../animal/animal.service';
+import type { ConsentService } from '../identity/consent.service';
 import type { OrgMembershipService } from '../../lib/org/org-membership.service';
 import type { CryptoService } from '../../lib/crypto/crypto.service';
 import type { OutboxService } from '../../lib/outbox/outbox.service';
 import type { RedisService } from '../../lib/redis/redis.service';
+import type { AppConfigService } from '../../config/app-config.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListingCreateDto } from './dto/listing.dto';
@@ -76,6 +78,10 @@ interface SetupOpts {
   revealCount?: number;
   /** contact_reveals.findFirst() result (analytics lastActivityAt). */
   lastReveal?: Record<string, unknown> | null;
+  /** ADR-0020: seller's current CONTACT_DISTRIBUTION consent (default granted so reveal returns channels). */
+  consentGranted?: boolean;
+  /** ADR-0020 dedup: an existing contact_reveals row for (viewer, listing) → reveal returns it, no quota. */
+  existingReveal?: Record<string, unknown> | null;
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -106,7 +112,7 @@ function setup(opts: SetupOpts = {}) {
     updateMany: lUpdateMany,
   };
   const animals = { findUnique: jest.fn().mockResolvedValue('animal' in opts ? opts.animal : animalRow()) };
-  const photoCreate = jest.fn().mockResolvedValue({ id: 'photo-1', listing_id: LISTING, url: 'http://x/a.jpg', order_index: 0, created_at: new Date() });
+  const photoCreate = jest.fn().mockResolvedValue({ id: 'photo-1', listing_id: LISTING, url: 'http://localhost:9000/a.jpg', order_index: 0, created_at: new Date() });
   const listing_photos = {
     count: jest.fn().mockResolvedValue(opts.photoCount ?? 0),
     findMany: jest.fn().mockResolvedValue([]),
@@ -128,7 +134,13 @@ function setup(opts: SetupOpts = {}) {
   const users = { findUnique: usersFindUnique };
   const crCreate = jest.fn().mockResolvedValue({ id: 'reveal-1' });
   const crCount = jest.fn().mockResolvedValue(opts.revealCount ?? 0);
-  const crFindFirst = jest.fn().mockResolvedValue('lastReveal' in opts ? opts.lastReveal : null);
+  // findFirst serves two paths: reveal dedup (where has viewer_id → existingReveal) and analytics
+  // lastActivityAt (orderBy, no viewer_id → lastReveal). Branch on the args so both coexist.
+  const existingReveal = 'existingReveal' in opts ? opts.existingReveal : null;
+  const lastReveal = 'lastReveal' in opts ? opts.lastReveal : null;
+  const crFindFirst = jest.fn().mockImplementation((args?: { where?: Record<string, unknown> }) =>
+    Promise.resolve(args?.where?.viewer_id !== undefined ? existingReveal : lastReveal),
+  );
   const contact_reveals = { create: crCreate, count: crCount, findFirst: crFindFirst };
   const tx = { listings, animals, listing_photos, contact_reveals };
   const prisma = {
@@ -172,7 +184,12 @@ function setup(opts: SetupOpts = {}) {
   const expire = jest.fn().mockResolvedValue(1);
   const ttl = jest.fn().mockResolvedValue(3600);
   const redis = { client: { incr, expire, ttl } } as unknown as RedisService;
-  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService, crypto, outbox, redis);
+  // AUDIT3: media-host allowlist derives from S3_ENDPOINT — dev/test host is localhost:9000.
+  const config = { get: (k: string) => (k === 'S3_ENDPOINT' ? 'http://localhost:9000' : undefined) } as unknown as AppConfigService;
+  // ADR-0020: ConsentService stub — currentlyGranted defaults to true so existing reveal tests return channels.
+  const currentlyGranted = jest.fn().mockResolvedValue(opts.consentGranted ?? true);
+  const consent = { currentlyGranted, record: jest.fn() } as unknown as ConsentService;
+  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService, crypto, outbox, redis, config, consent);
   return {
     svc,
     listings,
@@ -193,6 +210,7 @@ function setup(opts: SetupOpts = {}) {
     decrypt,
     publish,
     incr,
+    currentlyGranted,
   };
 }
 
@@ -477,21 +495,37 @@ describe('ListingService', () => {
   });
 
   describe('photos — L-14/L-3', () => {
+    const OWN_URL = 'http://localhost:9000/zoolink-media/a.jpg'; // our S3/MinIO host (allowed)
+
     it('L-14: adding an 11th photo → 422', async () => {
       const { svc } = setup({ photoCount: 10 });
-      await expect(svc.addPhoto(LISTING, { url: 'http://x/a.jpg' }, p(SELLER))).rejects.toBeInstanceOf(UnprocessableEntityException);
+      await expect(svc.addPhoto(LISTING, { url: OWN_URL }, p(SELLER))).rejects.toBeInstanceOf(UnprocessableEntityException);
     });
 
     it('adds a photo to a listing the actor owns', async () => {
       const { svc, listing_photos } = setup({ photoCount: 2 });
-      const photo = await svc.addPhoto(LISTING, { url: 'http://x/a.jpg' }, p(SELLER));
+      const photo = await svc.addPhoto(LISTING, { url: OWN_URL }, p(SELLER));
       expect(photo.id).toBe('photo-1');
       expect(listing_photos.create).toHaveBeenCalled();
     });
 
     it('L-3: a non-owner adding a photo → 403', async () => {
       const { svc } = setup({ photoCount: 0 });
-      await expect(svc.addPhoto(LISTING, { url: 'http://x/a.jpg' }, p(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(svc.addPhoto(LISTING, { url: OWN_URL }, p(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    // AUDIT3: a photo URL on a foreign host is rejected (moderation-swap + SSRF defence). The owner
+    // passes the L-3 gate, so this proves the host-allowlist (not authz) does the rejecting.
+    it('rejects a photo URL on a non-S3 host → 422 (own-media allowlist)', async () => {
+      const { svc, listing_photos } = setup({ photoCount: 0 });
+      await expect(svc.addPhoto(LISTING, { url: 'http://evil.example.com/x.jpg' }, p(SELLER))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      // internal-target SSRF host also rejected
+      await expect(svc.addPhoto(LISTING, { url: 'http://169.254.169.254/latest/meta-data' }, p(SELLER))).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      expect(listing_photos.create).not.toHaveBeenCalled();
     });
   });
 
@@ -620,14 +654,44 @@ describe('ListingService', () => {
       expect(res.channels).toEqual({ phone: '+70000000000' });
     });
 
-    it('both channels disabled → empty channels, but the reveal is still logged (audit/abuse)', async () => {
-      const { svc, crCreate } = setup({
+    it('both channels off → NO_CHANNELS, nothing charged/written/emitted (ADR-0020 billing-unit fix)', async () => {
+      const { svc, crCreate, incr, publish } = setup({
         listing: active(),
         seller: { full_name: 'S', contact_phone: '+7', contact_telegram: 'tg', contact_prefs: { show_phone: false, show_telegram: false } },
       });
       const res = await svc.revealContact(LISTING, p(OTHER));
       expect(res.channels).toEqual({});
-      expect(crCreate).toHaveBeenCalled();
+      expect(res.status).toBe('NO_CHANNELS');
+      expect(res.revealedAt).toBeNull();
+      expect(crCreate).not.toHaveBeenCalled(); // no reveal row
+      expect(incr).not.toHaveBeenCalled(); // no quota burned
+      expect(publish).not.toHaveBeenCalled(); // no lead event
+    });
+
+    it('no CONTACT_DISTRIBUTION consent → NO_CHANNELS even when show_phone is on (ADR-0020 gate)', async () => {
+      const { svc, crCreate, incr, currentlyGranted } = setup({
+        listing: active(),
+        consentGranted: false,
+        seller: { full_name: 'S', contact_phone: '+79990001122', contact_telegram: 'tg', contact_prefs: { show_phone: true, show_telegram: true } },
+      });
+      const res = await svc.revealContact(LISTING, p(OTHER));
+      expect(currentlyGranted).toHaveBeenCalledWith(SELLER, 'CONTACT_DISTRIBUTION');
+      expect(res.channels).toEqual({});
+      expect(res.status).toBe('NO_CHANNELS');
+      expect(crCreate).not.toHaveBeenCalled();
+      expect(incr).not.toHaveBeenCalled();
+    });
+
+    it('dedup: a repeat reveal of the same (viewer, listing) returns the existing row, no quota/row/event', async () => {
+      const when = new Date('2026-07-01T00:00:00Z');
+      const { svc, crCreate, incr, publish } = setup({ listing: active(), existingReveal: { created_at: when } });
+      const res = await svc.revealContact(LISTING, p(OTHER));
+      expect(res.status).toBe('REVEALED');
+      expect(res.channels).toEqual({ phone: '+79990001122', telegram: 'sellertg' });
+      expect(res.revealedAt).toEqual(when); // from the existing row
+      expect(crCreate).not.toHaveBeenCalled(); // not re-written
+      expect(incr).not.toHaveBeenCalled(); // not re-charged
+      expect(publish).not.toHaveBeenCalled(); // not re-emitted
     });
 
     it('pet market: the 11th reveal within the hour → 429 + Retry-After (spec 16); the over-limit attempt logs nothing', async () => {

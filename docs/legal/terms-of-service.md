@@ -1,4 +1,4 @@
-# Terms of Service / Platform Rules — ZooLink   (STATUS: DRAFT)
+# Terms of Service / Platform Rules — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
 > **DRAFT for owner review.** Incorporated by reference into the Public Offer (`public-offer.md`).
 > RU version in `docsRU/legal/` is operative. Basis: ФЗ-149, ГК ст.1253.1, 498-ФЗ, ЗоЗПП,

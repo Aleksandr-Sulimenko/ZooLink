@@ -412,7 +412,14 @@ export interface ContactRevealView {
   sellerId: string;
   sellerName: string | null;
   channels: { phone?: string; telegram?: string };
-  revealedAt: Date;
+  /** null when nothing was revealed (status NO_CHANNELS); otherwise the reveal timestamp. */
+  revealedAt: Date | null;
+  /**
+   * ADR-0020 discriminator: `REVEALED` = at least one channel returned (consent granted + a channel on);
+   * `NO_CHANNELS` = the seller has not consented to distribution or has all channels off — nothing was
+   * charged/written. Lets the client show "seller has not shared contacts" distinctly from a real reveal.
+   */
+  status: 'REVEALED' | 'NO_CHANNELS';
 }
 
 /**

@@ -30,8 +30,15 @@ import { AuthController } from './auth.controller';
       inject: [AppConfigService],
       useFactory: (config: AppConfigService) => ({
         secret: config.get('JWT_ACCESS_SECRET'),
+        // Pin HS256 on BOTH sign and verify (defence against alg-confusion / "alg":"none" —
+        // AUDIT3 security.md #3). Only a symmetric secret is configured, but pinning is explicit
+        // so an accidental future RS256 key cannot be abused to force an asymmetric→symmetric swap.
         signOptions: {
+          algorithm: 'HS256',
           expiresIn: config.get('JWT_ACCESS_TTL') as JwtSignOptions['expiresIn'],
+        },
+        verifyOptions: {
+          algorithms: ['HS256'],
         },
       }),
     }),

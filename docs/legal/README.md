@@ -1,11 +1,16 @@
-# Legal artifacts — ZooLink   (STATUS: DRAFT)
+# Legal artifacts — ZooLink   (STATUS: DRAFT — ready for counsel review)
 
-> **These are DRAFTS prepared by the `legal` agent for the owner's review. They are NOT executed,
-> NOT published, and do NOT constitute legal advice from a licensed attorney.** The owner must
+> **These are DRAFTS prepared by the `legal` agent for the owner's review. They are content-complete
+> and ready to hand to retained RF counsel, but they are NOT executed, NOT published, and do NOT
+> constitute legal advice from a licensed attorney.** The owner must
 > (1) finalise the operator's identity (ИП / ООО / самозанятый — fill every `[…]` placeholder),
 > (2) have them reviewed by retained RF counsel before publication, and (3) publish + link them in
 > the product footer. Only then is the lawful basis for processing PII (ст.6 ч.1 п.5 ФЗ-152) actually
 > grounded. See `launch-compliance-checklist.md`.
+>
+> **Related decision (2026-07-02):** the RF data-residency requirement (ст.18 ч.5 ФЗ-152, checklist A3)
+> is now settled at the decision level — **ADR-0017 Accepted** (RF-only primary/replicas/backups/DR);
+> the residual is a devops guardrail build, not a legal-doc item.
 >
 > **Jurisdiction:** Russian Federation. **The RU version (`docsRU/legal/`) is the legally operative
 > text** for RF users; this EN copy is a working translation for the team. Analysis dated 2026-06-30 —

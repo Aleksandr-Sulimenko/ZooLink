@@ -5,8 +5,12 @@ import {
   HttpCode,
   NotFoundException,
   Post,
+  Req,
+  Res,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { Public } from '../../lib/auth/public.decorator';
 import { CurrentUser } from '../../lib/auth/current-user.decorator';
 import { Roles } from '../../lib/auth/roles.decorator';
@@ -14,31 +18,60 @@ import { CheckPolicies } from '../../lib/auth/policies.guard';
 import type { AuthPrincipal, PrincipalType, Role } from '../../lib/auth/principal';
 import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../lib/db/prisma.service';
-import { AuthService, type TokenPair } from './auth.service';
-import { DevTokenDto, LogoutDto, RefreshTokenDto, TokenPairDto } from './dto/auth.dto';
+import { AuthService } from './auth.service';
+import { parseDurationMs } from './refresh-token.service';
+import {
+  clearRefreshCookie,
+  readRefreshCookie,
+  setRefreshCookie,
+} from './refresh-cookie';
+import { AccessTokenDto, DevTokenDto } from './dto/auth.dto';
 
 @ApiTags('auth')
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
+  private readonly refreshTtlMs: number;
+
   constructor(
     private readonly auth: AuthService,
     private readonly config: AppConfigService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) {
+    this.refreshTtlMs = parseDurationMs(this.config.get('JWT_REFRESH_TTL'));
+  }
 
   @Public()
   @Post('refresh')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Rotate a refresh token and obtain a new access token' })
-  refresh(@Body() dto: RefreshTokenDto): Promise<TokenPair> {
-    return this.auth.refresh(dto.refreshToken);
+  @ApiOperation({ summary: 'Rotate the refresh cookie and obtain a new access token' })
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AccessTokenDto> {
+    // Refresh token is read from the HttpOnly cookie, never the body (XSS-exfil defence, AUDIT3 #2).
+    const presented = readRefreshCookie(req);
+    if (!presented) {
+      throw new UnauthorizedException({
+        message: 'Missing refresh token',
+        code: 'UNAUTHENTICATED',
+      });
+    }
+    const pair = await this.auth.refresh(presented);
+    setRefreshCookie(res, pair.refreshToken, this.refreshTtlMs);
+    return { accessToken: pair.accessToken };
   }
 
   @Post('logout')
   @HttpCode(204)
-  @ApiOperation({ summary: 'Revoke the current session (or all sessions if no token given)' })
-  async logout(@CurrentUser() user: AuthPrincipal, @Body() dto: LogoutDto): Promise<void> {
-    await this.auth.logout(user.userId, dto.refreshToken);
+  @ApiOperation({ summary: 'Revoke the current session (or all sessions if no cookie present)' })
+  async logout(
+    @CurrentUser() user: AuthPrincipal,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    // Targeted single-device logout when the refresh cookie is present; revoke-all otherwise.
+    await this.auth.logout(user.userId, readRefreshCookie(req));
+    clearRefreshCookie(res);
   }
 
   @Get('whoami')
@@ -62,8 +95,14 @@ export class AuthController {
   @Public()
   @Post('dev-token')
   @ApiOperation({ summary: '[dev only] Mint a session for an existing user id' })
-  async devToken(@Body() dto: DevTokenDto): Promise<TokenPairDto> {
-    if (this.config.isProduction) {
+  async devToken(
+    @Body() dto: DevTokenDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AccessTokenDto> {
+    // FAIL-CLOSED: reachable ONLY when ENABLE_DEV_TOKEN===true AND NODE_ENV!=='production'
+    // (AppConfigService.isDevTokenEnabled). A prod deploy — or any deploy that forgets to opt in —
+    // gets a 404, closing the arbitrary-account-takeover chain (AUDIT3 security.md #1).
+    if (!this.config.isDevTokenEnabled) {
       throw new NotFoundException({ message: 'Not found', code: 'NOT_FOUND' });
     }
     const user = await this.prisma.users.findUnique({ where: { id: dto.userId } });
@@ -75,6 +114,8 @@ export class AuthController {
       role: user.role as Role,
       principalType: user.principal_type as PrincipalType,
     };
-    return this.auth.issueSession(principal, 'dev-token');
+    const pair = await this.auth.issueSession(principal, 'dev-token');
+    setRefreshCookie(res, pair.refreshToken, this.refreshTtlMs);
+    return { accessToken: pair.accessToken };
   }
 }
