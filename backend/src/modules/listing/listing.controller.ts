@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Ip,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -88,9 +89,13 @@ export class ListingController {
   async getById(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthPrincipal | undefined,
+    @Ip() ip: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<ListingView> {
-    const { listing, etag } = await this.service.getById(id, actor);
+    // D1 views-capture: pass the client IP so anonymous detail-views can be deduped (F5 guard) by IP.
+    // Normalise the IPv4-mapped IPv6 prefix (mirrors metrics.guard); empty → null (no stable identity).
+    const viewerIp = (ip ?? '').replace(/^::ffff:/, '') || null;
+    const { listing, etag } = await this.service.getById(id, actor, viewerIp);
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', listing.status === 'ACTIVE' ? 'public, max-age=30' : 'private, no-store');
     return listing;

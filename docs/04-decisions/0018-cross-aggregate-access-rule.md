@@ -1,7 +1,7 @@
 # ADR-0018: Cross-aggregate access rule — route animal reads through AnimalService (reaffirm ADR-0004)
 
-**Status**: Proposed — ready (low-risk, reaffirms ADR-0004); awaiting owner nod (reviewed Q1–Q6 2026-07-01)
-**Date**: 2026-07-01
+**Status**: Accepted — 2026-07-04 (form resolved: the breach is 3 sites, not 1, and is fixed in **two ordered parts** — see §Decision / §Implementation Notes; low-risk, reaffirms ADR-0004). Owner-nod folded into the Wave-D kickoff (surfaced as a confirm item, not silently assumed). Supersedes its earlier "Proposed — awaiting owner nod (2026-07-01)".
+**Date**: 2026-07-01 (accepted 2026-07-04)
 **Amends**: [ADR-0004](0004-animal-as-aggregate.md) — **reaffirms and operationalises its aggregate boundary; does NOT supersede it.** ADR-0004's decision stands; this ADR fixes the code that drifted from it and makes the boundary an enforceable, reviewable rule.
 **Relates to**: [ADR-0014](0014-offering-supertype-polymorphic-seam.md) (this is a **prerequisite** — the polymorphic seam must sit on clean aggregate boundaries), [ADR-0009](0009-mvp-vs-target-architecture.md).
 
@@ -68,7 +68,19 @@ Adopt **Option (b)**. ADR-0004 stands. Normative rules:
 2. **`AnimalService` exposes a public ownership-aware accessor** — returns the minimal animal summary required by the caller AND performs the owner / org-admin / agent-principal check with **404-no-leak** (no existence oracle). `ListingService` and `ModerationService` use it; their private `loadAnimal` / `assertOwnsAnimal` are removed.
 3. **Ownership/authz logic is not duplicated.** `isOrgAdmin` (currently duplicated across ~4 services) is consolidated into the shared org-membership service; animal-ownership lives only in `AnimalService`.
 4. **This is a prerequisite for ADR-0014.** The polymorphic Offering seam MUST be built on these clean boundaries; reviewer-qa enforces "no cross-aggregate raw table reads" as a review gate.
-5. **MVP behaviour is unchanged** — same checks, same results; only the *location* of the logic changes. No contract/schema change.
+5. **MVP behaviour is unchanged** — same checks, same results; only the *location* of the logic changes. No contract/schema change on the single-row path.
+
+### Amendment 2026-07-04 — the breach is 3 sites, and the fix is two ordered parts (resolves the AUDIT3 circularity)
+
+**WHAT** — AUDIT3 verified the raw `animals ⋈ species` cross-aggregate join lives in **three** sites, not one: `listing.service.ts:627-628` (`marketOf`), `moderation.service.ts:577-578` (`marketOf`, **verbatim duplicate**), and the moderation-**queue base CTE** `moderation.service.ts:189-191` (`FROM listings l JOIN animals a JOIN species s`). The queue CTE is a **paginated list query** and does **not** decompose into per-row `AnimalService` calls without an N+1. So this ADR is fixed in **two ordered parts**:
+
+- **Part 1 — single-row (the true ADR-0014 prerequisite).** The two `marketOf` copies and every single-row ownership read route through a public `AnimalService` accessor (rule 2). Pure code refactor, **no schema change**, **no dependency on ADR-0014**. This is the part that genuinely *precedes* 0014 (clean boundaries before the seam).
+- **Part 2 — list-path (fixed via a data seam, NOT per-row calls).** The queue/discovery **list joins** are removed by reading a **denormalised derived-`market` cache column on `listings`** (a cache of `species.market`, computed in-tx at listing write, backfilled once, recomputed on the rare admin species-correction). The queue CTE and both `marketOf` copies then read `listings.market` with **zero** cross-aggregate joins.
+
+**WHY-BETTER / circularity resolved** — AUDIT3 noted "0018 is a prerequisite for 0014" is *partly circular*, because the clean fix for the list joins is 0014's discovery read-model. It is **not** circular once split: Part 1 needs nothing from 0014; Part 2 needs only a **minimal derived-`market` cache column**, which is a cheap standalone slice of — and forward-compatible with — 0014's eventual read-model. We do **not** build the full materialised discovery projection now (that is Phase-2-heavy: a projector, eventual consistency, ops burden); the cache column subsumes into the read-model later. The cache carries the **derived** `market` (`pet|livestock`), **not** the assigned `market_scope` tag — so ADR-0015 rule 7 ("no animal listing carries `market_scope`") is honoured: this is a derivation *cache*, not the assigned dimension.
+
+6. **A denormalised derived-`market` cache column on `listings` is the sanctioned form** for removing the list-path joins. It is still "derived from species" per ADR-0004/0015 — merely cached, kept consistent in-tx. It is NOT the assigned `market_scope` tag (which lives only on species-less offerings, ADR-0015).
+7. **Ordering is normative:** Part 1 (AnimalService accessor) and the `market` cache column both land **before** the `marketOf`/queue refactor; the refactor is GREEN only when a `grep -rnE "FROM +animals|JOIN +species|JOIN +animals"` over `listing` **and** `moderation` modules returns zero hits outside `AnimalService`.
 
 ## Consequences
 
@@ -86,11 +98,18 @@ Adopt **Option (b)**. ADR-0004 stands. Normative rules:
 - No API/schema change; purely internal structure + a review gate.
 - ADR-0004 text unchanged; this ADR operationalises its Implementation Note #2.
 
-## Implementation Notes (backend — bounded refactor, separate task)
+## Implementation Notes (backend — Wave D, sequenced)
+**Part 1 — single-row (Wave-D slice D4, CODE-ONLY, no migration):**
 - Add `AnimalService.getOwnedAnimalForActor(actor, animalId)` (or equivalent) — minimal summary + owner/org-admin/agent check + 404-no-leak.
-- Remove `listing.service.ts` `loadAnimal` / `assertOwnsAnimal`; repoint `ModerationService` similarly if it reads `animals` directly.
+- Remove `listing.service.ts` `loadAnimal` / `assertOwnsAnimal`; repoint the single-row `marketOf` in **both** `listing.service.ts:627` **and** `moderation.service.ts:577` (the verbatim duplicate).
 - Consolidate `isOrgAdmin`/`orgAdminIds` into the shared org-membership service (single definition).
-- Keep existing behaviour identical (parity tests); reviewer-qa adds a "no cross-aggregate raw table read" check.
+
+**Part 2 — list-path (needs the `market` cache column first, Wave-D slice D3 migration, then D8 CODE-ONLY):**
+- Migration (D3): `listings.market VARCHAR(9) CHECK (market IN ('pet','livestock'))`, computed in-tx from the animal's `species.market` at listing create/update, idempotent backfill from the existing join, recompute hook on the admin species-correction path.
+- Refactor (D8): the moderation-queue base CTE (`moderation.service.ts:189-191`) and both `marketOf` copies read `listings.market` — **drop** the `animals ⋈ species` joins.
+- **Do NOT** route the list-query join through per-row `AnimalService` calls (N+1). The list path is fixed by the data seam, the single-row path by the service accessor.
+
+**Both parts:** keep existing behaviour identical (parity tests); reviewer-qa adds the "no cross-aggregate raw table read" grep gate over `listing` **and** `moderation` modules (all 3 sites). The full ADR-0014 materialised discovery read-model is **not** built here; the `market` cache column subsumes into it when the first species-less subtype ships.
 
 ## Related Decisions
 - **ADR-0004** — Animal as aggregate (reaffirmed & operationalised).

@@ -373,6 +373,12 @@ export interface ListingView {
   currency: string | null;
   quantity: number;
   isActive: boolean;
+  /**
+   * Total detail-page views (listings-api Listing.viewCount; column `listings.view_count`, migration 0031
+   * / D1). Read-only, server-maintained: best-effort +1 on the public GET /listings/{id} read, deduped per
+   * (viewer, listing) in Redis, seller self-views excluded. Reflects the count BEFORE this read's increment.
+   */
+  viewCount: number;
   status: ListingStatus;
   moderationStatus: ModerationStatus;
   publishedAt: Date | null;
@@ -424,8 +430,8 @@ export interface ContactRevealView {
 
 /**
  * Wire shape of per-listing analytics (listings-api ListingAnalytics). `contactReveals` is sourced
- * from the `contact_reveals` table; `views` has no capture source in MVP (GAP-TRACE-006) → 0.
- * `series` (x-phase:2) is intentionally omitted in MVP.
+ * from the `contact_reveals` table; `views` is sourced from `listings.view_count` (migration 0031 / D1;
+ * was hard-0 under GAP-TRACE-006). `series` (x-phase:2) is intentionally omitted in MVP.
  */
 export interface ListingAnalyticsView {
   listingId: string;

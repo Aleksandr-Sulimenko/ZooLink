@@ -48,6 +48,7 @@ function listingRow(over: Record<string, unknown> = {}): Record<string, unknown>
     price_cents: 5000n,
     currency: 'RUB',
     quantity: 1,
+    view_count: 0n,
     status: 'DRAFT',
     moderation_status: 'PENDING',
     published_at: null,
@@ -183,7 +184,10 @@ function setup(opts: SetupOpts = {}) {
   const incr = jest.fn().mockImplementation(() => Promise.resolve(++revealCounter));
   const expire = jest.fn().mockResolvedValue(1);
   const ttl = jest.fn().mockResolvedValue(3600);
-  const redis = { client: { incr, expire, ttl } } as unknown as RedisService;
+  // D1 views-capture dedup: SET NX EX returns 'OK' when the key was fresh (→ count) or null when it
+  // already existed within the window (→ skip). Default 'OK' so a first view increments.
+  const set = jest.fn().mockResolvedValue('OK');
+  const redis = { client: { incr, expire, ttl, set } } as unknown as RedisService;
   // AUDIT3: media-host allowlist derives from S3_ENDPOINT — dev/test host is localhost:9000.
   const config = { get: (k: string) => (k === 'S3_ENDPOINT' ? 'http://localhost:9000' : undefined) } as unknown as AppConfigService;
   // ADR-0020: ConsentService stub — currentlyGranted defaults to true so existing reveal tests return channels.
@@ -210,6 +214,7 @@ function setup(opts: SetupOpts = {}) {
     decrypt,
     publish,
     incr,
+    set,
     currentlyGranted,
   };
 }
@@ -310,6 +315,61 @@ describe('ListingService', () => {
     it('MODERATOR may read a non-active listing', async () => {
       const { svc } = setup();
       await expect(svc.getById(LISTING, p(OTHER, 'MODERATOR'))).resolves.toBeDefined();
+    });
+  });
+
+  // ── D1 views-capture (GAP-TRACE-006 · AUDIT3) ────────────────────────────────────────────────
+  describe('getById — view capture (D1)', () => {
+    const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
+
+    it('an ACTIVE detail read by a non-seller USER increments view_count once (deduped in Redis)', async () => {
+      const { svc, listings, set } = setup({ listing: active() });
+      const { listing } = await svc.getById(LISTING, p(OTHER));
+      expect(set).toHaveBeenCalledWith(`listing-view:${LISTING}:u:${OTHER}`, '1', 'EX', 1800, 'NX');
+      expect(listings.update).toHaveBeenCalledWith({ where: { id: LISTING }, data: { view_count: { increment: 1 } } });
+      // The returned count reflects the pre-increment value (this reader is not counted in their own number).
+      expect(listing.viewCount).toBe(0);
+    });
+
+    it('an anonymous detail read is deduped by client IP (F5 guard)', async () => {
+      const { svc, listings, set } = setup({ listing: active() });
+      await svc.getById(LISTING, undefined, '203.0.113.7');
+      expect(set).toHaveBeenCalledWith(`listing-view:${LISTING}:ip:203.0.113.7`, '1', 'EX', 1800, 'NX');
+      expect(listings.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('a repeat view inside the dedup window (SET NX → null) does NOT re-increment', async () => {
+      const { svc, listings, set } = setup({ listing: active() });
+      set.mockResolvedValueOnce(null); // key already present → within window
+      await svc.getById(LISTING, p(OTHER));
+      expect(listings.update).not.toHaveBeenCalled();
+    });
+
+    it('the seller viewing their own ACTIVE listing is NOT counted (demand signal, not owner activity)', async () => {
+      const { svc, listings, set } = setup({ listing: active() });
+      await svc.getById(LISTING, p(SELLER));
+      expect(set).not.toHaveBeenCalled();
+      expect(listings.update).not.toHaveBeenCalled();
+    });
+
+    it('a non-ACTIVE listing is never counted (owner-visible DRAFT → no increment)', async () => {
+      const { svc, listings, set } = setup({ listing: listingRow({ status: 'DRAFT' }) });
+      await svc.getById(LISTING, p(SELLER));
+      expect(set).not.toHaveBeenCalled();
+      expect(listings.update).not.toHaveBeenCalled();
+    });
+
+    it('an anonymous read with no resolvable IP is skipped rather than over-counted', async () => {
+      const { svc, listings, set } = setup({ listing: active() });
+      await svc.getById(LISTING, undefined, null);
+      expect(set).not.toHaveBeenCalled();
+      expect(listings.update).not.toHaveBeenCalled();
+    });
+
+    it('best-effort: a Redis failure never fails the read (capture is additive, not critical)', async () => {
+      const { svc, set } = setup({ listing: active() });
+      set.mockRejectedValueOnce(new Error('redis down'));
+      await expect(svc.getById(LISTING, p(OTHER))).resolves.toMatchObject({ listing: expect.objectContaining({ status: 'ACTIVE' }) });
     });
   });
 
@@ -767,11 +827,11 @@ describe('ListingService', () => {
   describe('getAnalytics', () => {
     const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
 
-    it('owner sees contactReveals (sourced) + lastActivityAt; views is 0 in MVP (GAP-TRACE-006)', async () => {
+    it('owner sees contactReveals (sourced) + lastActivityAt; views is sourced from view_count (D1)', async () => {
       const when = new Date('2026-06-28T10:00:00Z');
-      const { svc } = setup({ listing: active(), revealCount: 3, lastReveal: { created_at: when } });
+      const { svc } = setup({ listing: active({ view_count: 42n }), revealCount: 3, lastReveal: { created_at: when } });
       const { analytics } = await svc.getAnalytics(LISTING, p(SELLER));
-      expect(analytics).toMatchObject({ listingId: LISTING, views: 0, contactReveals: 3, lastActivityAt: when });
+      expect(analytics).toMatchObject({ listingId: LISTING, views: 42, contactReveals: 3, lastActivityAt: when });
     });
 
     it('no reveals → contactReveals 0, lastActivityAt null', async () => {

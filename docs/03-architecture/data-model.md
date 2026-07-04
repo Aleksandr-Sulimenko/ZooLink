@@ -140,6 +140,7 @@ CREATE TABLE listings (
     price_cents BIGINT, -- money is stored in minor units (kopecks) as BIGINT, never FLOAT/INTEGER: INTEGER overflows on livestock-scale deals
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
+    view_count BIGINT NOT NULL DEFAULT 0, -- D1 (migration 0031): denormalized detail-view counter; best-effort +1 on public GET /listings/{id}, Redis-deduped per (viewer, listing). Funnel-top signal (AUDIT3, GAP-TRACE-006). CHECK (view_count >= 0). contact-show is sourced from contact_reveals, not denormalized here.
     location_point GEOGRAPHY(POINT, 4326),
     search_radius_m INTEGER,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -157,6 +158,11 @@ CREATE TABLE listings (
 - Mandatory relationship to an animal (each listing relates to a specific animal)
 - The seller is always a user (even for organizational listings)
 - Optional association with an organization/branch
+- `view_count` (migration 0031, D1) is a denormalized funnel-top counter: best-effort incremented on the
+  public `GET /listings/{id}` detail read, deduped per (viewer, listing) in Redis so a refresh does not
+  inflate it, seller self-views excluded. It is the one analytics signal whose history cannot be
+  backfilled (AUDIT3), hence captured first. Contact-show count is NOT denormalized here — it is derived
+  from the `contact_reveals` table.
 - Geospatial position for radius search
 - Various listing types through a CHECK constraint. The set is `sale, breeding, show, adoption,
   stud_service, leasing` (migration 0021). `leasing` is **form now / behaviour Фаза 2** (B3): the

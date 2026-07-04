@@ -62,6 +62,10 @@ const BOUNDARY_TOLERANCE_M = 100; // ±100 m so "exactly at radius" is included 
 /** Whitelisted sort fields (L2-11). `distance` requires geo coords (L2-12). */
 const SORT_FIELDS = new Set(['created_at', 'price', 'distance']);
 
+// ── D1 views-capture (GAP-TRACE-006 / AUDIT3 data-analyst) ───────────────────────────────────────
+/** Dedup window (seconds) per (viewer, listing) — a repeat detail-view inside 30 min does not re-count. */
+const VIEW_DEDUP_WINDOW_SEC = 1800;
+
 /** A raw `listings` row, narrowed to the columns this slice reads/maps. */
 interface ListingRow {
   id: string;
@@ -76,6 +80,7 @@ interface ListingRow {
   price_cents: bigint | null;
   currency: string | null;
   quantity: number | null;
+  view_count: bigint;
   status: string;
   moderation_status: string;
   published_at: Date | null;
@@ -214,7 +219,11 @@ export class ListingService {
   }
 
   // ── Read one (public if ACTIVE, else owner/operator) ─────────────────────────────────────────
-  async getById(id: string, actor: AuthPrincipal | undefined): Promise<{ listing: ListingView; etag: string }> {
+  async getById(
+    id: string,
+    actor: AuthPrincipal | undefined,
+    viewerIp?: string | null,
+  ): Promise<{ listing: ListingView; etag: string }> {
     const row = await this.findRow(id);
     // L-5: a non-active listing is visible only to its owner / operator; otherwise 404 (no leak).
     if (row.status !== 'ACTIVE' && !(await this.canSeeNonActive(actor, row))) {
@@ -227,7 +236,42 @@ export class ListingService {
     if (await this.canSeeNonActive(actor, row)) {
       view.lastModerationResult = await this.moderation.latestEffectiveResult(id);
     }
+    // D1 views-capture: best-effort, deduped increment of the funnel-top counter. Awaited but fully
+    // error-swallowed (never gates the read). `view.viewCount` reflects the pre-increment value (this
+    // reader is not counted in their own returned number) — the increment lands for the next reader.
+    await this.captureView(row, actor, viewerIp ?? null);
     return { listing: view, etag: this.etag(row) };
+  }
+
+  /**
+   * D1 views-capture (GAP-TRACE-006 · AUDIT3 data-analyst — the ONE analytics signal whose history
+   * cannot be backfilled). Best-effort increment of `listings.view_count` on a public detail read.
+   *
+   * Policy:
+   *  - Only an **ACTIVE** listing is counted. Non-ACTIVE listings are visible solely to their
+   *    owner/operator, so counting them would be self-view noise, not buyer demand.
+   *  - The **seller's own view is excluded** (a demand signal, not owner activity — mirrors the
+   *    self-reveal exclusion). Org-admins/operators are distinct actors and are counted (kept cheap:
+   *    no extra membership query on the hot read path).
+   *  - **Dedup** per (viewer, listing) in Redis via `SET NX EX` (30-min window): the viewer key is the
+   *    authed userId, or the client IP for anonymous readers, so an F5 refresh does not inflate the
+   *    count. No stable identity (no auth AND no IP) → skip rather than over-count.
+   *  - **Never throws.** A Redis/DB hiccup must not fail the read — funnel-top capture is additive, not
+   *    critical. The increment is the DB-atomic `SET view_count = view_count + 1` (Prisma `increment`).
+   */
+  private async captureView(row: ListingRow, actor: AuthPrincipal | undefined, viewerIp: string | null): Promise<void> {
+    if (row.status !== 'ACTIVE') return;
+    if (actor && actor.userId === row.seller_id) return;
+    const viewerKey = actor ? `u:${actor.userId}` : viewerIp ? `ip:${viewerIp}` : null;
+    if (!viewerKey) return;
+    try {
+      const dedupKey = `listing-view:${row.id}:${viewerKey}`;
+      const fresh = await this.redis.client.set(dedupKey, '1', 'EX', VIEW_DEDUP_WINDOW_SEC, 'NX');
+      if (fresh === null) return; // already counted within the window
+      await this.prisma.listings.update({ where: { id: row.id }, data: { view_count: { increment: 1 } } });
+    } catch (err) {
+      this.logger.warn(`view capture failed for listing ${row.id}: ${(err as Error).message}`);
+    }
   }
 
   // ── Update — DRAFT edit (stays DRAFT) OR ACTIVE material edit (re-enqueues, M-14) ─────────────
@@ -645,8 +689,8 @@ export class ListingService {
   /**
    * Seller-facing per-listing analytics. Owner-scoped: seller, org-admin, MODERATOR, or ADMIN
    * (canSeeNonActive's exact set); anyone else → 404 (no-leak, even for a public ACTIVE listing —
-   * analytics are private, and the contract permits 404). `contactReveals` is sourced from the now-
-   * populated `contact_reveals` table; `views` has no capture source in MVP (GAP-TRACE-006) → 0.
+   * analytics are private, and the contract permits 404). `contactReveals` is sourced from the
+   * `contact_reveals` table; `views` is sourced from `listings.view_count` (D1; was hard-0 GAP-TRACE-006).
    */
   async getAnalytics(id: string, actor: AuthPrincipal): Promise<{ analytics: ListingAnalyticsView; etag: string }> {
     const row = await this.findRow(id);
@@ -664,10 +708,9 @@ export class ListingService {
     const lastActivityAt = latest?.created_at ?? null;
     const analytics: ListingAnalyticsView = {
       listingId: id,
-      // FLAG (GAP-TRACE-006): no page-view capture source in MVP (no listings.view_count column, no
-      // Listing.Viewed event) → 0. Capturing views (durable column vs event-sourced) is a tracked
-      // follow-up for architect/data-analyst; contactReveals below is the real, sourced count.
-      views: 0,
+      // D1 (GAP-TRACE-006 resolved): the real, deduped detail-view counter (listings.view_count). Was
+      // hard-0 before Wave D; contactReveals below is likewise a real, sourced count (contact_reveals).
+      views: Number(row.view_count),
       contactReveals,
       lastActivityAt,
     };
@@ -1107,6 +1150,8 @@ export class ListingService {
       currency: row.currency,
       quantity: row.quantity ?? 1,
       isActive: row.is_active,
+      // D1: funnel-top view counter (defensive ?? 0 — the column is NOT NULL DEFAULT 0, migration 0031).
+      viewCount: Number(row.view_count ?? 0n),
       status: row.status as ListingStatus,
       moderationStatus: row.moderation_status as ListingView['moderationStatus'],
       publishedAt: row.published_at,

@@ -303,6 +303,7 @@ model listings {
   locked_at                         DateTime?             @db.Timestamptz(6)
   lock_expires_at                   DateTime?             @db.Timestamptz(6)
   escalated_at                      DateTime?             @db.Timestamptz(6)
+  view_count                        BigInt                @default(0)
   contact_reveals                   contact_reveals[]
   conversations                     conversations[]
   favorites                         favorites[]

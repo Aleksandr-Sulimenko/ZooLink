@@ -681,6 +681,19 @@ components:
           type: integer
           default: 1
           description: Quantity (number of items/animals)
+        viewCount:
+          type: integer
+          format: int64
+          default: 0
+          readOnly: true
+          description: >
+            Total detail-page views of this listing (BR `view_count`; column `listings.view_count`,
+            migration 0031 / D1). **Read-only, server-maintained.** Best-effort incremented on the public
+            `GET /listings/{id}` read, deduped per (viewer, listing) in Redis so a refresh does not inflate
+            it, and the seller's own views are excluded. Present on both the single-get and the list
+            response. This is the funnel-TOP demand signal whose history cannot be backfilled (AUDIT3
+            data-analyst, GAP-TRACE-006), so it is captured from the first live day. The value returned on
+            a given read reflects the count **before** that read's own increment.
         isActive:
           type: boolean
           description: Active status (legacy boolean; lifecycle is tracked by `status`)
@@ -1062,10 +1075,11 @@ components:
         views:
           type: integer
           description: >
-            Total times the listing appeared/was viewed (BR `view_count`). NOTE (Impl-wave C): there is
-            no page-view capture source yet (no `listings.view_count` column, no `Listing.Viewed` event
-            — GAP-TRACE-006), so MVP returns `0`. Capturing views (durable column vs. event-sourced)
-            is a tracked follow-up for architect/data-analyst; the field shape is final and stable.
+            Total detail-page views of this listing (BR `view_count`). Sourced from `listings.view_count`
+            (migration 0031 / D1) — best-effort incremented on the public `GET /listings/{id}` read,
+            deduped per (viewer, listing) in Redis, seller self-views excluded. Was hard-`0` through
+            Impl-wave C (GAP-TRACE-006); D1 supplies the durable capture source and this now returns the
+            real counter.
         contactReveals:
           type: integer
           description: Total contact reveals (BR `contact_shown_count`; sourced from `contact_reveals`)

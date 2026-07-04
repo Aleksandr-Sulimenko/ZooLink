@@ -252,6 +252,12 @@ CREATE TABLE listings (
     price_cents BIGINT, -- minor units (kopecks); BIGINT to accommodate high-value livestock. Nullable for non-price listings (e.g., breeding)
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
+    -- D1 views-capture (migration 0031): denormalized detail-view counter. Best-effort incremented on
+    -- the public GET /listings/{id} read (SET view_count = view_count + 1), deduped per (viewer, listing)
+    -- in Redis (F5 does not inflate); seller self-views excluded. Funnel-TOP demand signal whose history
+    -- cannot be backfilled (AUDIT3 data-analyst CRITICAL, GAP-TRACE-006). contact-show count is NOT
+    -- denormalized here — it is durably sourced from the contact_reveals table (no second counter to drift).
+    view_count BIGINT NOT NULL DEFAULT 0,
     -- Lifecycle state machine (spec docs/specs/statemachines/listing_state_machine.md)
     status VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
         CHECK (status IN ('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED')),
@@ -274,6 +280,9 @@ CREATE TABLE listings (
         (lat IS NULL AND lng IS NULL) OR
         (lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
     ),
+    -- D1 (migration 0031): the view counter is monotonic — never negative. DB-level guarantee, not a
+    -- service-only assumption; the increment path is SET view_count = view_count + 1 (race-safe).
+    CONSTRAINT chk_listings_view_count_nonneg CHECK (view_count >= 0),
     -- For organizational listings: either organization_id or branch_id must be set (or both)
     -- For personal listings: both organization_id and branch_id must be NULL
     CONSTRAINT chk_listing_ownership CHECK (

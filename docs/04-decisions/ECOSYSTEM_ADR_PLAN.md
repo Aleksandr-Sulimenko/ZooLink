@@ -113,3 +113,44 @@ Reasoning:
 - **devops**: ADR-0017 region pinning + CI guardrail + deployment-spec fix; ADR-0019 storage-level encryption.
 - **security + legal**: ADR-0016 verification risk-matrix; ADR-0019 at-rest launch-floor sign-off; ADR-0017 ст.12 carve-out review.
 - **alpha-analyst**: polymorphic discovery+moderation contract (ADR-0014), provider+verification contract (ADR-0016), `market_scope` filter Gherkin (ADR-0015) — when the side is built.
+
+---
+
+## Wave D — seam plan & ordering (architect, 2026-07-04)
+
+Fixes the AUDIT3 forward-compat findings: **ADR-0018 circularity** (3 join sites, queue-CTE non-decomposable → resolved by a two-part split, see ADR-0018 §Amendment 2026-07-04) and **ADR-0014 timing self-contradiction** (resolved by ADR-0014 §Amendment 2026-07-04 rule 11). D1 (views-capture, migration 0031) is done. Migrations are strictly sequential from **0032**.
+
+### Seam → form → D-slice → migration?
+| Seam | Form (column / table) | Default / gate | D-slice | Migration? |
+|---|---|---|---|---|
+| **OfferingRef** | `offering_type VARCHAR` + `offering_id UUID` on `favorites` **and** `saved_searches`; contract `offeringType`/`offeringId`; moderation subject vocabulary reconciled later | `offering_type` default+`CHECK IN ('ANIMAL_LISTING')` (additive) — behaves listing-only | **D2** | **0032** |
+| **derived `market` cache** | `listings.market VARCHAR(9) CHECK IN ('pet','livestock')`, computed in-tx from `species.market`, backfilled, recompute on admin species-fix | pure read cache — no behaviour change; **not** the assigned `market_scope` tag | **D3** | **0033** |
+| **AnimalService accessor** | public `getOwnedAnimalForActor` + `isOrgAdmin` consolidation | code-only; 404-no-leak; behaviour parity | **D4** | none |
+| **value-event subject** | event payload `offeringType`/`offeringId` on Sold/ContactReveal/view | `ANIMAL_LISTING`; funnel spans offerings | **D5** | none |
+| **multi-role** | `user_roles(user_id, role)` junction; `users.role` stays primary (ADR-0022) | dormant; MVP authz reads `users.role` | **D6** | **0034** |
+| **geo_anchor** | reconcile the two near-me endpoints to one geo contract; reserve `geo_anchor` as discovery key | point-now (lat/lng exist); PostGIS gated/deferred | **D7** | none |
+| **marketOf refactor** | queue-CTE + both `marketOf` read `listings.market`; drop all 3 `animals⋈species` joins; flip ADR-0018 Accepted | grep-gate green (0 raw joins outside AnimalService) | **D8** | none |
+| **monetization_type** | spec-only reservation of `{lead-gen,subscription,take-rate,none}` on the offering contract | born with subtype; no physical table now | **D9** | deferred |
+| **market_scope (assigned) + discovery read-model** | assigned `{pet,livestock,both}` tag + materialised projection table | **DEFERRED** to first species-less subtype; queue/discovery use `listings.market` cache until then | **D10** | deferred |
+| **favorites controller** | build against the D2 OfferingRef contract | — | **D11** | none |
+
+### Executable order (dependencies respected)
+1. **D2** — OfferingRef seam (0014 form-now, migration **0032**) → unblocks D11.
+2. **D3** — derived `market` cache column (0018 cycle-breaker, migration **0033**) → unblocks D8 list-path.
+3. **D4** — AnimalService accessor + `isOrgAdmin` consolidation (0018 Part-1, code-only) — the *true* 0014 prerequisite.
+4. **D5** — polymorphic value-event subject (code-only).
+5. **D6** — `user_roles` junction (ADR-0022, migration **0034**).
+6. **D7** — geo_anchor / near-me reconciliation (contract/code-only).
+7. **D8** — marketOf refactor complete (code-only; needs D3+D4); **flip ADR-0018 → Accepted done**; add CI grep-gate.
+8. **D9** — `monetization_type` spec reservation (alpha-analyst; doc-only).
+9. **D10** — discovery read-model + assigned `market_scope`: **DEFERRED** to first species-less subtype (alpha-analyst writes the contract stub only).
+10. **D11** — favorites controller build (needs D2) + tests.
+
+Migrations consumed: **0032** (D2), **0033** (D3), **0034** (D6). All else code / contract / deferred.
+
+### Owner decisions to surface
+1. **Multi-role model (ADR-0022):** junction-with-primary vs `roles TEXT[]`; and self-claim policy (free non-regulated roles, ADR-0016-tier-gated regulated roles?).
+2. **`market_scope` for species-less offerings:** confirm assigned `{pet,livestock,both}` with `both` = one offering in both contexts (ADR-0015), and the verification coupling for regulated categories.
+3. **`monetization_type` form:** confirm the enum and whether the read-model envelope must carry it now (North-star funnel) or wait for the subtype.
+4. **Derived `market` cache (D3):** confirm the controlled denormalisation (still derived, just cached) is acceptable vs strict always-join — it carries derived `market`, not the assigned `market_scope`, so ADR-0015 rule 7 holds.
+5. **ADR-0018 flip → Accepted:** confirm the 2026-07-04 flip (low-risk, reaffirms 0004).

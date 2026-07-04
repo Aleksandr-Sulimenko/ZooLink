@@ -140,6 +140,7 @@ CREATE TABLE listings (
     price_cents BIGINT, -- деньги в минорных единицах (копейках) как BIGINT, никогда FLOAT/INTEGER: INTEGER переполняется на сделках масштаба livestock
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
+    view_count BIGINT NOT NULL DEFAULT 0, -- D1 (миграция 0031): денормализованный счётчик просмотров карточки; best-effort +1 на публичном GET /listings/{id}, дедуп в Redis по (viewer, listing). Сигнал вершины воронки (AUDIT3, GAP-TRACE-006). CHECK (view_count >= 0). Показ контактов — из contact_reveals, здесь не денормализуется.
     location_point GEOGRAPHY(POINT, 4326),
     search_radius_m INTEGER,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -157,6 +158,11 @@ CREATE TABLE listings (
 - Обязательная связь с животным (каждое объявление относится к конкретному животному)
 - Продавец всегда пользователь (даже для организационных объявлений)
 - Опциональная привязка к организации/филиалу
+- `view_count` (миграция 0031, D1) — денормализованный счётчик вершины воронки: best-effort +1 на
+  публичном чтении карточки `GET /listings/{id}`, дедуп по (viewer, listing) в Redis (обновление
+  страницы не накручивает), просмотры самого продавца исключаются. Это единственный аналитический
+  сигнал, чью историю нельзя восстановить задним числом (AUDIT3), поэтому закладывается первым. Счётчик
+  показов контактов здесь НЕ денормализуется — он выводится из таблицы `contact_reveals`.
 - Геопространственная позиция для поиска по радиусу
 - Различные типы объявлений через ограничение CHECK. Набор — `sale, breeding, show, adoption,
   stud_service, leasing` (миграция 0021). `leasing` — **форма сейчас / поведение Фаза 2** (B3):

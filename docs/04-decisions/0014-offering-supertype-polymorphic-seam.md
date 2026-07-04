@@ -112,6 +112,17 @@ Adopt **Option 2**. ZooLink models a **logical Offering supertype** realised as 
 - MVP behaviour unchanged: only `ANIMAL_LISTING` exists; the seam is dormant until a subtype is built.
 - PostGIS remains a later, gated DB-image swap; `geo_anchor` is a plain point until then.
 
+## Amendment 2026-07-04 — form-now timing (resolves the rule-2 ↔ Implementation-Notes contradiction)
+
+*Clarification only — does not change the decision; disambiguates two contradictory sentences AUDIT3 flagged (rule 2 "ships now" vs Impl Notes "not now"), which made grep=0 un-adjudicable.*
+
+**WHAT / normative rule 11** — Split the seam by irreversibility, and land each part in the slice where a row it governs is first written:
+
+- **Form-now — lands in Wave D now (irreversible-if-deferred):** the **polymorphic reference shape** on rows that would otherwise be un-retrofittable — `favorites` and `saved_searches` carry `(offering_type, offering_id)` (Wave-D slice **D2**, migration), and the **public contract** ships `offeringType`/`offeringId` from day one (default/`CHECK` = `ANIMAL_LISTING`). This **must** precede the favorites controller (slice **D11**): a favorites row or contract committed against a listing-only `listingId` (`favorites-api.yaml:58`) cannot be retrofitted truthfully and becomes a breaking v1 change. The value-event subject also becomes `(offering_type, offering_id)` (slice **D5**).
+- **Defer — born with the subtype (NOT irreversible):** the **subtype tables** (`service_offerings`, …), the **materialised discovery read-model projection table**, the reshaped polymorphic **moderation queue**, and the offering-side attributes **`monetization_type`** and the **assigned `market_scope` tag** — none of these has a physical home until a species-less offering exists, so nothing is written now that a later additive migration cannot supply. `geo_anchor` reconciliation of the two near-me endpoints is a contract/code task (slice **D7**), PostGIS deferred.
+
+**WHY-BETTER** — Resolves the ambiguity without pulling any Phase-2 behaviour into MVP: only rows that accumulate now (favorites/saved_searches/events) get the polymorphic shape now; everything born with a future subtype waits for that subtype. rule 2 stands (the *reference shape* ships now); the Implementation-Notes "not now" applies to the *subtype tables and read-model*, not to the reference shape. The moderation **decision** ledger is already `(entity_type, entity_id)`-shaped; only the enum vocabulary (`LISTING` vs `ANIMAL_LISTING`) is reconciled when the queue is made polymorphic (with the subtype).
+
 ## Implementation Notes (for backend / alpha-analyst when the side is built — not now)
 - Form-now migration (separate task, backend): polymorphic `(offering_type, offering_id)` on `favorites` + `saved_searches`; polymorphic moderation subject; discovery read-model table + `offering_type` enum (`ANIMAL_LISTING` only); `monetization_type` + `geo_anchor` columns on the offering side. Each behind the rule "form now, behaviour gated."
 - alpha-analyst writes the polymorphic discovery + moderation **contract** (object-level authz, 404-no-leak, `market_scope` filter, read-model envelope) before any subtype code.

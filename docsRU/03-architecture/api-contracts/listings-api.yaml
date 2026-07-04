@@ -682,6 +682,19 @@ components:
           type: integer
           default: 1
           description: Количество (число единиц/животных)
+        viewCount:
+          type: integer
+          format: int64
+          default: 0
+          readOnly: true
+          description: >
+            Всего просмотров карточки этого объявления (BR `view_count`; колонка `listings.view_count`,
+            миграция 0031 / D1). **Read-only, поддерживается сервером.** Best-effort +1 на публичном чтении
+            `GET /listings/{id}`, дедуп по (viewer, listing) в Redis (обновление страницы не накручивает),
+            просмотры самого продавца исключаются. Присутствует и в одиночном GET, и в списке. Это сигнал
+            вершины воронки, чью историю нельзя восстановить задним числом (AUDIT3 data-analyst,
+            GAP-TRACE-006), поэтому захватывается с первого рабочего дня. Значение, возвращаемое в конкретном
+            чтении, отражает счётчик **до** инкремента этого же чтения.
         isActive:
           type: boolean
           description: Активность (legacy-булево; жизненный цикл отслеживает `status`)
@@ -1063,11 +1076,10 @@ components:
         views:
           type: integer
           description: >
-            Сколько раз объявление показано/просмотрено (BR `view_count`). ЗАМЕЧАНИЕ (Impl-волна C):
-            источника захвата просмотров пока нет (нет колонки `listings.view_count`, нет события
-            `Listing.Viewed` — GAP-TRACE-006), поэтому MVP возвращает `0`. Захват просмотров (durable
-            колонка vs. event-sourced) — отслеживаемый follow-up для architect/data-analyst; форма поля
-            финальна и стабильна.
+            Всего просмотров карточки этого объявления (BR `view_count`). Источник — `listings.view_count`
+            (миграция 0031 / D1): best-effort +1 на публичном чтении `GET /listings/{id}`, дедуп по
+            (viewer, listing) в Redis, просмотры самого продавца исключаются. До Impl-волны C было
+            жёстко `0` (GAP-TRACE-006); D1 даёт durable-источник захвата, и теперь возвращается реальный счётчик.
         contactReveals:
           type: integer
           description: Всего показов контактов (BR `contact_shown_count`; источник — `contact_reveals`)

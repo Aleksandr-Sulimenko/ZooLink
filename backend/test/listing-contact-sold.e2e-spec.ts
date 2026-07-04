@@ -334,10 +334,11 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
 
   // ── Analytics ──────────────────────────────────────────────────────────────────────────────
   describe('GET /v1/listings/{id}/analytics', () => {
-    it('owner sees contactReveals sourced from the table; views is 0 in MVP; ETag + Cache-Control set', async () => {
+    it('owner sees contactReveals sourced from the table; views reflects captured detail-views (0 here — reveal only, no GET); ETag + Cache-Control set', async () => {
       const id = await activeListing();
       await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       const res = await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      // No public detail GET happened (only a POST reveal) → view_count is still 0; contactReveals is sourced.
       expect(res.body).toMatchObject({ listingId: id, views: 0, contactReveals: 1 });
       expect(res.body.lastActivityAt).not.toBeNull();
       expect(res.headers['etag']).toBeDefined();
@@ -357,6 +358,45 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     it('requires auth (401)', async () => {
       const id = await activeListing();
       await request(server()).get(`/v1/listings/${id}/analytics`).expect(401);
+    });
+  });
+
+  // ── D1 views-capture (GAP-TRACE-006 · AUDIT3) — real HTTP GET → view_count ──────────────────
+  describe('GET /v1/listings/{id} — view capture (D1)', () => {
+    const viewsOf = async (id: string): Promise<number> => {
+      const res = await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      return res.body.views as number;
+    };
+
+    it("a buyer's detail GET of an ACTIVE listing increments view_count; the response carries viewCount (pre-increment)", async () => {
+      const id = await activeListing();
+      await redis.client.del(`listing-view:${id}:u:${buyerId}`);
+      const get1 = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      expect(get1.body.viewCount).toBe(0); // pre-increment value returned to this reader
+      expect(await viewsOf(id)).toBe(1); // the counter advanced
+    });
+
+    it('a repeat GET by the same viewer inside the dedup window does NOT re-increment (F5 guard)', async () => {
+      const id = await activeListing();
+      await redis.client.del(`listing-view:${id}:u:${buyerId}`);
+      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      expect(await viewsOf(id)).toBe(1); // three GETs, one dedup window → counted once
+    });
+
+    it('an anonymous detail GET is counted (deduped by client IP)', async () => {
+      const id = await activeListing();
+      const before = await viewsOf(id);
+      await request(server()).get(`/v1/listings/${id}`).expect(200); // no Authorization → anon, dedup by IP
+      expect(await viewsOf(id)).toBe(before + 1);
+    });
+
+    it('the seller viewing their own ACTIVE listing does NOT inflate the count (demand signal only)', async () => {
+      const id = await activeListing();
+      await redis.client.del(`listing-view:${id}:u:${sellerId}`);
+      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      expect(await viewsOf(id)).toBe(0); // owner self-view excluded
     });
   });
 });
