@@ -54,6 +54,11 @@ notification flow.
 | `ContentReport.Filed` | ContentReport | moderation module | report_id, entity_type, entity_id | moderation (enqueue) |
 | `ContentReport.Actioned` | ContentReport | moderation module | report_id, target, action | listing (deactivate target), **notification (notify reporter+owner)** |
 | `ContactReveal.Created` | Listing | contact module | listing_id, viewer_id | analytics/counter (rate-limit + owner stats) |
+| `OwnershipTransfer.Initiated` | OwnershipTransfer | animal/transfer module (T1) | transferId, animalId, fromUserId, fromOrganizationId, toUserId, toOrganizationId | **notification (notify to-party)** |
+| `OwnershipTransfer.Accepted` | OwnershipTransfer | animal/transfer module (T2) | (as above) | **notification (notify from-party / initiator)** |
+| `OwnershipTransfer.Declined` | OwnershipTransfer | animal/transfer module (T3) | (as above) | **notification (notify from-party / initiator)** |
+| `OwnershipTransfer.Cancelled` | OwnershipTransfer | animal/transfer module (T4) | (as above) | **notification (notify to-party)** |
+| `OwnershipTransfer.Expired` | OwnershipTransfer | animal/transfer module (T5, lazy-on-read) | (as above) | **notification (notify BOTH parties)** |
 | `Payment.Completed` / `Payment.Failed` | Payment | payment module | **Фаза 2+ (gated `feature_toggles.payments`)** | listing (SOLD), notification |
 
 > Producers/consumers are **modules within the monolith** (ADR-0009), not microservices. "Consumer" = an
@@ -72,6 +77,26 @@ Each row maps to a `notification_templates(name, type, language)` row (seed in a
 | `Listing.Expired` | email | `listing_expired` | seller |
 | `ContentReport.Actioned` | email | `report_resolved` | reporter (+ owner if removed) |
 | `Moderation.Escalated` | email | `moderation_sla_escalated` | ADMIN (escalation queue) |
+| `OwnershipTransfer.Initiated` | in-app | `transfer_initiated` | to-party |
+| `OwnershipTransfer.Accepted` | in-app | `transfer_accepted` | from-party (initiator) |
+| `OwnershipTransfer.Declined` | in-app | `transfer_declined` | from-party (initiator) |
+| `OwnershipTransfer.Cancelled` | in-app | `transfer_cancelled` | to-party |
+| `OwnershipTransfer.Expired` | in-app | `transfer_expired` | both parties |
+
+> **(round-N, normative — ownership-transfer events + first `IN_APP` consumer, ADR-0021, C4) WHAT:**
+> added the `OwnershipTransfer.{Initiated,Accepted,Declined,Cancelled,Expired}` events (aggregate =
+> OwnershipTransfer) to §2 and their `IN_APP` notification routes to §3, and recorded that the
+> notification module is now a **real** consumer (channel `IN_APP`) rather than a form-only stub. The
+> transfer service emits each event in the **same tx** as the state change (initiate/accept/decline/
+> cancel/lazy-expire); recipient = "the other party" relative to who acted (system-expiry → both).
+> **WHY:** the ownership-transfer outcomes were produced-then-silent (no consumer), and the transfer
+> events were not catalogued at all, so a backend dev could not build their emission or notification
+> from §2/§3. ADR-0021 makes `IN_APP` the MVP channel (no provider, no consent — transactional ≠
+> advertising, ФЗ-38). **WHY-BETTER-for-the-whole-project:** ends the "silent event layer" for the two
+> highest-value flows (moderation + transfer) with the smallest reversible change; the registry-driven
+> consumer stays Offering-ready (ADR-0014) — a new event/offering type is a registry edit, not a
+> dispatch-core change; forward-only replay (relay `WHERE processed_at IS NULL`) is the correct
+> spam-safe semantics, with the no-purge guardrail keeping analytics backfill open. RU mirror updated.
 
 > **(round-N, normative — `Moderation.Escalated`, Slice 4c) WHAT:** added the `Moderation.Escalated`
 > event (aggregate = Listing) to the catalog + notification matrix. The moderation SLA job scans

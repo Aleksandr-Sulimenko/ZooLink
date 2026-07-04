@@ -92,7 +92,13 @@ Append-only запись аудита (`moderation_decisions`) решения м
 Платёж (`payment_transactions`) и его возврат (`refunds`). Суммы — **минорные единицы** (BIGINT), никогда не float.
 
 **Notification Template / Notification Log**  
-Шаблон сообщения по языкам (`notification_templates`) и запись доставки (`notification_logs`).
+Шаблон сообщения по языкам (`notification_templates`) и запись доставки (`notification_logs`). `notification_logs.type` — **канал** доставки (`EMAIL` / `SMS` / **`IN_APP`** — `IN_APP` добавлен миграцией 0030, ADR-0021); `notification_templates.type` — **источник** контента (`EMAIL` / `SMS`). См. **IN_APP notification**.
+
+**IN_APP notification**  
+Внутриприложенческое уведомление, которое пишет воркерный **NotificationConsumer** — первый реальный потребитель **Outbox Event** (ADR-0021, миграция 0030). Рендерится из шаблона с источником `EMAIL` и идемпотентно по `idempotency_key = event.id‖recipient‖template`. Канал ≠ источник: `IN_APP` — значение канала доставки в `notification_logs.type`, а не вид шаблона.
+
+**Consent** (согласие, запись)  
+Append-only версионированная запись согласия (`consents`, ADR-0020, миграция 0029) — законное доказательство (ст.9 ч.1 ФЗ-152): версия текста политики + отметка времени + утвердительное действие. Новая строка **замещает** предыдущую (форма supersede из ADR-0011); **текущее согласие = последняя строка по `(user_id, consent_type)`**; неизменяема (`trg_consents_immutable`). `consent_type` ∈ {`CONTACT_DISTRIBUTION` (действует), `MARKETING`, `ANALYTICS_PROFILING`, `NONESSENTIAL_COOKIES` (зарезервированы)}. Несёт actor-снапшот ADR-0011/0006 (записавшим может быть **AI-агент**).
 
 **Species / Breed / City**  
 Справочные (lookup) данные с INTEGER-ключами (`species`, `breeds`, `cities`). См. **ID convention**.
@@ -174,6 +180,9 @@ Append-only запись аудита (`moderation_decisions`) решения м
 
 **OTP (одноразовый код)**  
 6-значный SMS-код подтверждения: TTL 5 мин, cooldown повторной отправки 60 с, 5 попыток затем lockout 15 мин. Хранится только как SHA-256-дайджест в Redis (не в PG); ключ — `phone_hash`.
+
+**Claim code** (код передачи)  
+Сгенерированный получателем одноразовый opt-in селектор контрагента для **Ownership Transfer** (C5, `POST /transfers/claim-codes`). Получатель выпускает непрозрачный высокоэнтропийный код (Crockford-base32, TTL 15 мин) через namespace-параметризованный `OtpService` (`ns=transfer:claim`) и передаёт его out-of-band; текущий владелец вводит его как `claimCode` в `initiateTransfer`, где он **атомарно погашается** (Redis `GETDEL`). Нужен, чтобы адресовать передачу конкретному лицу **без** открытого каталога поиска пользователей (без enumeration-оракула): отказы погашения возвращают один единообразный `422 TRANSFER_CLAIM_CODE_INVALID`. Выпуск и инициация rate-limited (`429 RATE_LIMITED` + `Retry-After`).
 
 **phone_hash (HMAC + pepper)**  
 Детерминированный `HMAC-SHA256(phone, server_pepper)` (base64url) от телефона в E.164, хранится уникально в `users`. Детерминированный (в отличие от bcrypt), чтобы телефоны были уникальны/искомы без хранения самого номера; секрет `PHONE_HASH_PEPPER` — серверный env.

@@ -1,6 +1,8 @@
 import {
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,11 +12,17 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { OrgMembershipService } from '../../lib/org/org-membership.service';
+import { OutboxService } from '../../lib/outbox/outbox.service';
+import { type EventMarket } from '../../lib/outbox/outbox.types';
+import { RedisService } from '../../lib/redis/redis.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
+import { ClaimCodeService, type ClaimRecipient } from './claim-code.service';
 import {
   type ActorView,
+  type ClaimCodeRequestDto,
+  type ClaimCodeView,
   type ListTransfersQueryDto,
   type TransferInitiateDto,
   type TransferView,
@@ -22,6 +30,16 @@ import {
 
 /** Expiry window for a PENDING transfer (ADR-0013 OQ-2 = 72h, lazy-on-read; no worker in MVP). */
 const EXPIRY_HOURS = 72;
+/**
+ * Per-principal, per-hour rate limits for the C5 counterparty-resolution surface (INV-C5-4). Redis
+ * INCR gate, uniform with the contact-reveal limiter (listing.service) — the first hit sets the hour
+ * TTL, a count over the limit → 429 `RATE_LIMITED` + `Retry-After` (from the key TTL, via the
+ * problem-filter seam). Chosen over @nestjs/throttler for consistency with the established reveal
+ * limiter and because our filter carries `retryAfter` → a real `Retry-After` header.
+ */
+const RATE_WINDOW_SEC = 3600;
+const CLAIM_MINT_LIMIT_PER_HOUR = 10;
+const INITIATE_LIMIT_PER_HOUR = 20;
 /**
  * Audit actor label for a system-initiated act (lazy expiry has no human actor). 'system' is the
  * documented sentinel role for platform-initiated actions (it is NOT a user-role-canon value, so it
@@ -73,7 +91,41 @@ export class TransferService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly orgMembership: OrgMembershipService,
+    private readonly redis: RedisService,
+    private readonly claimCodes: ClaimCodeService,
+    private readonly outbox: OutboxService,
   ) {}
+
+  // ── Mint claim code (C5, recipient opt-in) ───────────────────────────────────────────────────
+  /**
+   * Mint a single-use transfer claim code (transfers-api.yaml `mintTransferClaimCode`). The caller is
+   * nominated as the recipient user; if `forOrganizationId` is set the caller MUST be that org's
+   * admin (else 403) and the code nominates the org instead. Rate-limited per principal (INV-C5-4).
+   * The plaintext code is returned ONCE.
+   */
+  async mintClaimCode(dto: ClaimCodeRequestDto, actor: AuthPrincipal): Promise<ClaimCodeView> {
+    await this.enforceRateLimit(`transfer-claim-mint:${actor.userId}`, CLAIM_MINT_LIMIT_PER_HOUR);
+
+    let recipient: ClaimRecipient;
+    if (dto.forOrganizationId) {
+      // Least-privilege: minting an ORG code requires an actual org-admin membership — a platform
+      // ADMIN is NOT implicitly an admin of an arbitrary org (the code is the org's opt-in to receive).
+      if (!(await this.orgMembership.isOrgAdmin(actor.userId, dto.forOrganizationId))) {
+        throw new ForbiddenException({ message: 'Only an org-admin may mint a claim code for this organization', code: 'FORBIDDEN' });
+      }
+      recipient = { recipientOrganizationId: dto.forOrganizationId };
+    } else {
+      recipient = { recipientUserId: actor.userId };
+    }
+
+    const minted = await this.claimCodes.mint(recipient);
+    this.logger.log(`Claim code minted (recipientType=${minted.recipientType}) by ${actor.userId}`);
+    return {
+      code: minted.code,
+      expiresAt: new Date(Date.now() + minted.expiresInSeconds * 1000).toISOString(),
+      recipientType: minted.recipientType,
+    };
+  }
 
   // ── Initiate (T1) ────────────────────────────────────────────────────────────────────────────
   async initiate(
@@ -81,44 +133,62 @@ export class TransferService {
     dto: TransferInitiateDto,
     actor: AuthPrincipal,
   ): Promise<{ transfer: TransferView; etag: string }> {
-    // INV-3 (recipient exactly-one-of), service-layer, before the DB CHECK.
-    const hasUser = dto.toUserId != null;
-    const hasOrg = dto.toOrganizationId != null;
-    if (hasUser && hasOrg) {
-      throw new UnprocessableEntityException({ message: 'Specify exactly one of toUserId or toOrganizationId', code: 'RECIPIENT_AMBIGUOUS' });
+    // INV-3 / INV-C5 (recipient exactly-one-of), service-layer, before the DB CHECK. Three
+    // mutually-exclusive selectors now (C5): claimCode / toUserId / toOrganizationId.
+    const selectorCount = [dto.claimCode, dto.toUserId, dto.toOrganizationId].filter((v) => v != null).length;
+    if (selectorCount > 1) {
+      throw new UnprocessableEntityException({ message: 'Specify exactly one of claimCode, toUserId or toOrganizationId', code: 'RECIPIENT_AMBIGUOUS' });
     }
-    if (!hasUser && !hasOrg) {
-      throw new UnprocessableEntityException({ message: 'A recipient (toUserId or toOrganizationId) is required', code: 'RECIPIENT_REQUIRED' });
+    if (selectorCount === 0) {
+      throw new UnprocessableEntityException({ message: 'A recipient (claimCode, toUserId or toOrganizationId) is required', code: 'RECIPIENT_REQUIRED' });
     }
+
+    // INV-C5-4: rate-limit initiate per principal (also throttles the raw-UUID 404 enumeration probe).
+    await this.enforceRateLimit(`transfer-initiate:${actor.userId}`, INITIATE_LIMIT_PER_HOUR);
 
     const animal = await this.loadAnimalOwner(animalId);
 
-    // INV-1: only the current owner (or org-admin of the owning org) may initiate.
+    // INV-1: only the current owner (or org-admin of the owning org) may initiate. Checked BEFORE
+    // consuming any claim code so a non-owner can neither burn a recipient's code nor probe codes.
     await this.assertIsCurrentOwner(actor, animal);
 
-    // INV-2: recipient ≠ current owner (no self-transfer).
-    if (
-      (dto.toUserId && animal.owner_id === dto.toUserId) ||
-      (dto.toOrganizationId && animal.organization_id === dto.toOrganizationId)
-    ) {
-      throw new UnprocessableEntityException({ message: 'Cannot transfer an animal to its current owner', code: 'SELF_TRANSFER' });
+    // Resolve the recipient to a concrete user/org (C5 resolution order).
+    let toUserId: string | null = null;
+    let toOrganizationId: string | null = null;
+    if (dto.claimCode != null) {
+      // INV-C5-6: atomic single-use consume. INV-C5-1: every failure mode (nonexistent / expired /
+      // consumed / malformed) is one uniform 422 — no existence oracle, no per-mode message/timing.
+      const resolved = await this.claimCodes.consume(dto.claimCode);
+      if (!resolved) {
+        throw new UnprocessableEntityException({ message: 'The transfer claim code is invalid or has expired', code: 'TRANSFER_CLAIM_CODE_INVALID' });
+      }
+      toUserId = resolved.recipientUserId ?? null;
+      toOrganizationId = resolved.recipientOrganizationId ?? null;
+    } else if (dto.toUserId != null) {
+      const u = await this.prisma.users.findUnique({ where: { id: dto.toUserId }, select: { id: true } });
+      // INV-C5-2: generic 404 — does NOT reveal user-vs-org nor exists-vs-absent (closes AUDIT3 MINOR).
+      if (!u) throw new NotFoundException({ message: 'Recipient not found', code: 'RECIPIENT_NOT_FOUND' });
+      toUserId = dto.toUserId;
+    } else {
+      const o = await this.prisma.organizations.findUnique({ where: { id: dto.toOrganizationId }, select: { id: true } });
+      if (!o) throw new NotFoundException({ message: 'Recipient not found', code: 'RECIPIENT_NOT_FOUND' });
+      toOrganizationId = dto.toOrganizationId ?? null;
     }
 
-    // Recipient must exist (404 per contract).
-    if (dto.toUserId) {
-      const u = await this.prisma.users.findUnique({ where: { id: dto.toUserId }, select: { id: true } });
-      if (!u) throw new NotFoundException({ message: 'Recipient user not found', code: 'NOT_FOUND' });
-    } else if (dto.toOrganizationId) {
-      const o = await this.prisma.organizations.findUnique({ where: { id: dto.toOrganizationId }, select: { id: true } });
-      if (!o) throw new NotFoundException({ message: 'Recipient organization not found', code: 'NOT_FOUND' });
+    // INV-2 / INV-C5-5: recipient ≠ current owner (no self-transfer) — re-checked AFTER resolution.
+    if (
+      (toUserId && animal.owner_id === toUserId) ||
+      (toOrganizationId && animal.organization_id === toOrganizationId)
+    ) {
+      throw new UnprocessableEntityException({ message: 'Cannot transfer an animal to its current owner', code: 'SELF_TRANSFER' });
     }
 
     const data: Prisma.ownership_transfersUncheckedCreateInput = {
       animal_id: animalId,
       from_user_id: animal.owner_id,
       from_organization_id: animal.organization_id,
-      to_user_id: dto.toUserId ?? null,
-      to_organization_id: dto.toOrganizationId ?? null,
+      to_user_id: toUserId,
+      to_organization_id: toOrganizationId,
       status: 'PENDING',
       transfer_reason: dto.transferReason ?? null,
       initiated_by_user_id: actor.userId,
@@ -126,6 +196,7 @@ export class TransferService {
       expires_at: new Date(Date.now() + EXPIRY_HOURS * 3600_000),
     };
 
+    const market = await this.marketOfAnimal(animalId);
     const row = await this.mapWrite(() =>
       this.prisma.$transaction(async (tx) => {
         const created = (await tx.ownership_transfers.create({ data })) as unknown as TransferRow;
@@ -141,6 +212,9 @@ export class TransferService {
           },
           tx,
         );
+        // Event seam (ADR-0021 §5, event-catalog §2) — emitted in the SAME tx as the state change so the
+        // outbox row is atomic with it. Consumed by NotificationConsumer → notify the TO-party.
+        await this.publishTransferEvent(tx, 'OwnershipTransfer.Initiated', created, market);
         return created;
       }),
     );
@@ -173,6 +247,7 @@ export class TransferService {
     row = await this.expireIfDue(row);
     this.assertPending(row);
 
+    const market = await this.marketOfAnimal(row.animal_id);
     const completed = await this.mapWrite(() =>
       this.prisma.$transaction(async (tx) => {
         // INV-6: re-attribution is permitted only under the controlled GUC (set transaction-local).
@@ -247,6 +322,9 @@ export class TransferService {
           tx,
         );
 
+        // Event seam (ADR-0021 §5) — notify the FROM-party (initiator) that the recipient accepted.
+        await this.publishTransferEvent(tx, 'OwnershipTransfer.Accepted', row, market);
+
         const updated = (await tx.ownership_transfers.findUnique({ where: { id: transferId } })) as unknown as TransferRow;
         return updated;
       }),
@@ -267,7 +345,7 @@ export class TransferService {
       return { transfer: this.toView(row), etag: this.etag(row) };
     }
     this.assertPending(row);
-    return this.terminate(transferId, 'declined', actor, 'animal.transfer_declined', true);
+    return this.terminate(transferId, 'declined', actor, 'animal.transfer_declined', true, row, 'OwnershipTransfer.Declined');
   }
 
   // ── Cancel (T4) ──────────────────────────────────────────────────────────────────────────────
@@ -280,7 +358,7 @@ export class TransferService {
       return { transfer: this.toView(row), etag: this.etag(row) };
     }
     this.assertPending(row);
-    return this.terminate(transferId, 'cancelled_by_initiator', actor, 'animal.transfer_cancelled', false);
+    return this.terminate(transferId, 'cancelled_by_initiator', actor, 'animal.transfer_cancelled', false, row, 'OwnershipTransfer.Cancelled');
   }
 
   // ── List (principal-scoped) ──────────────────────────────────────────────────────────────────
@@ -360,7 +438,10 @@ export class TransferService {
     actor: AuthPrincipal,
     auditAction: string,
     recordResponder: boolean,
+    transferRow: TransferRow,
+    eventType: 'OwnershipTransfer.Declined' | 'OwnershipTransfer.Cancelled',
   ): Promise<{ transfer: TransferView; etag: string }> {
+    const market = await this.marketOfAnimal(transferRow.animal_id);
     const row = await this.mapWrite(() =>
       this.prisma.$transaction(async (tx) => {
         // Status-guarded conditional transition (uniform with accept): only one racer claims PENDING.
@@ -390,6 +471,8 @@ export class TransferService {
           },
           tx,
         );
+        // Event seam (ADR-0021 §5) — decline → notify the FROM-party; cancel → notify the TO-party.
+        await this.publishTransferEvent(tx, eventType, transferRow, market);
         return (await tx.ownership_transfers.findUnique({ where: { id: transferId } })) as unknown as TransferRow;
       }),
     );
@@ -400,6 +483,7 @@ export class TransferService {
   /** Lazy expiry (INV-11/T5): a PENDING transfer past expiresAt is transitioned to CANCELLED(expired). */
   private async expireIfDue(row: TransferRow): Promise<TransferRow> {
     if (row.status !== 'PENDING' || !row.expires_at || row.expires_at.getTime() > Date.now()) return row;
+    const market = await this.marketOfAnimal(row.animal_id);
     return this.mapWrite(() =>
       this.prisma.$transaction(async (tx) => {
         // Status-guarded (uniform with accept/terminate): if a concurrent action already moved it off
@@ -421,6 +505,10 @@ export class TransferService {
             },
             tx,
           );
+          // Event seam (ADR-0021 §5) — system expiry (no human actor) → notify BOTH parties. Emitted
+          // only on the winning claim (count===1), atomically with the state change, so a concurrent
+          // no-op expiry neither double-audits nor double-emits.
+          await this.publishTransferEvent(tx, 'OwnershipTransfer.Expired', row, market);
         }
         return (await tx.ownership_transfers.findUnique({ where: { id: row.id } })) as unknown as TransferRow;
       }),
@@ -529,6 +617,64 @@ export class TransferService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Per-principal, per-hour Redis-INCR rate limit (INV-C5-4), uniform with the contact-reveal
+   * limiter. The first hit sets the hour TTL; a count over `limit` → 429 `RATE_LIMITED` with
+   * `retryAfter` (the key TTL) — the problem filter renders it as the `Retry-After` header.
+   */
+  private async enforceRateLimit(key: string, limit: number): Promise<void> {
+    const count = await this.redis.client.incr(key);
+    if (count === 1) {
+      await this.redis.client.expire(key, RATE_WINDOW_SEC);
+    }
+    if (count > limit) {
+      const ttl = await this.redis.client.ttl(key);
+      const retryAfter = ttl > 0 ? ttl : RATE_WINDOW_SEC;
+      throw new HttpException(
+        { message: 'Rate limit reached; retry later', code: 'RATE_LIMITED', retryAfter },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /**
+   * Publish an ownership-transfer lifecycle event into the outbox, in the CALLER'S transaction (atomic
+   * with the state change). The payload carries both party identities (user AND org, either side) so the
+   * notification consumer's registry can resolve "the other party" without a cross-aggregate join
+   * (ADR-0018) — org recipients fan out via OrgMembershipService at delivery time. `market` (ADR-0002)
+   * is stamped so the event stream stays market-attributable.
+   */
+  private publishTransferEvent(
+    tx: Prisma.TransactionClient,
+    eventType: string,
+    row: TransferRow,
+    market: EventMarket,
+  ): Promise<unknown> {
+    return this.outbox.publish(tx, {
+      aggregateType: 'OwnershipTransfer',
+      aggregateId: row.id,
+      eventType,
+      schemaVersion: 1,
+      market,
+      payload: {
+        transferId: row.id,
+        animalId: row.animal_id,
+        fromUserId: row.from_user_id,
+        fromOrganizationId: row.from_organization_id,
+        toUserId: row.to_user_id,
+        toOrganizationId: row.to_organization_id,
+      },
+    });
+  }
+
+  /** Resolve the ADR-0002 market of a transfer from its animal's species (pet|livestock|null). */
+  private async marketOfAnimal(animalId: string): Promise<EventMarket> {
+    const rows = await this.prisma.$queryRaw<{ market: string }[]>`
+      SELECT s.market FROM animals a JOIN species s ON s.id = a.species_id WHERE a.id = ${animalId}::uuid`;
+    const m = rows[0]?.market;
+    return m === 'pet' || m === 'livestock' ? m : null;
   }
 
   private etag(row: TransferRow): string {

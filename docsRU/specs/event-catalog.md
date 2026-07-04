@@ -53,6 +53,11 @@ status: "Approved"
 | `ContentReport.Filed` | ContentReport | moderation | report_id, entity_type, entity_id | moderation (в очередь) |
 | `ContentReport.Actioned` | ContentReport | moderation | report_id, target, action | listing (деактивировать цель), **notification (репортёру+владельцу)** |
 | `ContactReveal.Created` | Listing | contact | listing_id, viewer_id | analytics/counter (rate-limit + статистика владельца) |
+| `OwnershipTransfer.Initiated` | OwnershipTransfer | animal/transfer (T1) | transferId, animalId, fromUserId, fromOrganizationId, toUserId, toOrganizationId | **notification (получателю)** |
+| `OwnershipTransfer.Accepted` | OwnershipTransfer | animal/transfer (T2) | (как выше) | **notification (инициатору)** |
+| `OwnershipTransfer.Declined` | OwnershipTransfer | animal/transfer (T3) | (как выше) | **notification (инициатору)** |
+| `OwnershipTransfer.Cancelled` | OwnershipTransfer | animal/transfer (T4) | (как выше) | **notification (получателю)** |
+| `OwnershipTransfer.Expired` | OwnershipTransfer | animal/transfer (T5, ленивое истечение) | (как выше) | **notification (ОБЕИМ сторонам)** |
 | `Payment.Completed` / `Payment.Failed` | Payment | payment | **Фаза 2+ (гейт `feature_toggles.payments`)** | listing (SOLD), notification |
 
 > Producer/consumer — это **модули внутри монолита** (ADR-0009), не микросервисы. «Consumer» = in-process хендлер,
@@ -71,6 +76,24 @@ status: "Approved"
 | `Listing.Expired` | email | `listing_expired` | продавец |
 | `ContentReport.Actioned` | email | `report_resolved` | репортёр (+ владелец, если удалено) |
 | `Moderation.Escalated` | email | `moderation_sla_escalated` | ADMIN (очередь эскалаций) |
+| `OwnershipTransfer.Initiated` | in-app | `transfer_initiated` | получатель |
+| `OwnershipTransfer.Accepted` | in-app | `transfer_accepted` | инициатор |
+| `OwnershipTransfer.Declined` | in-app | `transfer_declined` | инициатор |
+| `OwnershipTransfer.Cancelled` | in-app | `transfer_cancelled` | получатель |
+| `OwnershipTransfer.Expired` | in-app | `transfer_expired` | обе стороны |
+
+> **(round-N, нормативно — события ownership-transfer + первый `IN_APP`-consumer, ADR-0021, C4) WHAT:**
+> добавлены события `OwnershipTransfer.{Initiated,Accepted,Declined,Cancelled,Expired}` (агрегат —
+> OwnershipTransfer) в §2 и их `IN_APP`-маршруты в §3; зафиксировано, что модуль notification теперь —
+> **реальный** consumer (канал `IN_APP`), а не заглушка. Сервис передачи публикует каждое событие в **той
+> же транзакции**, что и смену состояния; получатель — «другая сторона» относительно действующего (при
+> системном истечении — обе). **WHY:** исходы передачи владения производились, но были «немыми» (нет
+> consumer), а сами события не были в каталоге — по §2/§3 нельзя было построить ни их эмиссию, ни
+> нотификацию. ADR-0021 делает `IN_APP` MVP-каналом (без провайдера и согласия — транзакционные ≠ реклама,
+> ФЗ-38). **WHY-BETTER-для-всего-проекта:** заканчивает «немой слой событий» для двух ключевых потоков
+> (модерация + передача) минимальным обратимым изменением; consumer на реестре остаётся Offering-ready
+> (ADR-0014); forward-only replay (реле `WHERE processed_at IS NULL`) — корректная спам-безопасная
+> семантика, а запрет очистки outbox сохраняет возможность backfill для аналитики. EN-оригинал обновлён.
 
 > **(round-N, нормативно — `Moderation.Escalated`, Slice 4c) WHAT:** добавлено событие
 > `Moderation.Escalated` (aggregate = Listing) в каталог + матрицу нотификаций. SLA-job модерации сканирует

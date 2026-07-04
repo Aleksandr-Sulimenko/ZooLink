@@ -32,4 +32,18 @@ export class OrgMembershipService {
     });
     return rows.map((r) => r.organization_id);
   }
+
+  /**
+   * The user ids of every ACTIVE OWNER (org-admin) of `organizationId` — the inverse of
+   * {@link isOrgAdmin}. Used by the notification consumer to fan an org-directed transactional
+   * notification out to the org's admins (recipient resolution via the org aggregate's own service,
+   * ADR-0018 — never a raw cross-aggregate join in the consumer).
+   */
+  async orgAdminUserIds(organizationId: string): Promise<string[]> {
+    const rows = await this.prisma.organization_users.findMany({
+      where: { organization_id: organizationId, role_in_org: 'OWNER', status: 'ACTIVE' },
+      select: { user_id: true },
+    });
+    return rows.map((r) => r.user_id);
+  }
 }

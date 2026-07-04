@@ -10,6 +10,7 @@ import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module'
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { OutboxRelayModule } from './lib/outbox/outbox-relay.module';
 import { SchedulerModule } from './lib/scheduler/scheduler.module';
+import { NotificationModule } from './modules/notification/notification.module';
 
 /**
  * Worker context — shares the platform foundation with the API but hosts no HTTP layer.
@@ -27,6 +28,9 @@ import { SchedulerModule } from './lib/scheduler/scheduler.module';
     CryptoModule,
     FeatureToggleModule,
     OutboxModule,
+    // NotificationModule (worker-only) MUST be imported BEFORE OutboxRelayModule so its
+    // OUTBOX_CONSUMERS provider is resolvable when the relay injects the token.
+    NotificationModule,
     OutboxRelayModule,
     SchedulerModule,
   ],

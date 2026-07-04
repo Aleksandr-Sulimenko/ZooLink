@@ -19,11 +19,13 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
 
 describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let redis: RedisService['client'];
   const animals: string[] = [];
   const transfers: string[] = [];
   let ownerId: string;
@@ -63,6 +65,15 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
 
   const initiate = (tok: string, animalId: string, body: Record<string, unknown>, key = randomUUID()) =>
     request(server()).post(`/v1/animals/${animalId}/transfers`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+  const mintCode = (tok: string, body: Record<string, unknown> = {}) =>
+    request(server()).post('/v1/transfers/claim-codes').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send(body);
+  // Clear the C5 per-principal Redis rate-limit counters so the many shared-owner initiates across
+  // this suite cannot accumulate into a spurious 429 (the limits are a security control, unit-tested;
+  // e2e asserts business flows — the dedicated rate-limit test loops within a single test body).
+  const clearRateLimits = async (): Promise<void> => {
+    const keys = [...(await redis.keys('transfer-initiate:*')), ...(await redis.keys('transfer-claim-mint:*'))];
+    if (keys.length > 0) await redis.del(...keys);
+  };
   const idOf = (res: { body: { id?: unknown } }): string => res.body.id as string;
   const track = (res: { body: { id?: unknown } }): string => {
     const id = idOf(res);
@@ -83,6 +94,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     await app.init();
     await resetThrottle(app);
     prisma = app.get(PrismaService);
+    redis = app.get(RedisService).client;
 
     const mk = (n: string, role: string) =>
       prisma.users.create({ data: { full_name: n, role, principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -116,6 +128,10 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
       if (id) await prisma.users.delete({ where: { id } }).catch(() => undefined);
     }
     await app.close();
+  });
+
+  beforeEach(async () => {
+    await clearRateLimits();
   });
 
   it('requires auth (401)', async () => {
@@ -390,5 +406,103 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     animals.splice(animals.indexOf(animalId), 1);
     await prisma.organization_users.deleteMany({ where: { organization_id: org.id } }).catch(() => undefined);
     await prisma.organizations.delete({ where: { id: org.id } }).catch(() => undefined);
+  });
+
+  // ── C5 — safe counterparty resolution (claim code) ─────────────────────────────────────────────
+  describe('C5 — claim code + enumeration hardening', () => {
+    const mintPlain = async (tok: string, body: Record<string, unknown> = {}): Promise<string> =>
+      (await mintCode(tok, body).expect(201)).body.code as string;
+
+    it('probe 4 (happy path): recipient mints → owner initiates with claimCode → 201 PENDING; recipient accepts → COMPLETED', async () => {
+      const code = await mintPlain(recipTok);
+      const animalId = await newAnimal(ownerId);
+      const res = await initiate(ownerTok, animalId, { claimCode: code }).expect(201);
+      expect(res.body.status).toBe('PENDING');
+      expect(res.body.toUserId).toBe(recipId); // resolved server-side; initiator supplied no PII (INV-C5-7)
+      const xfer = track(res);
+      const etag = await getEtag(recipTok, xfer);
+      const acc = await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      expect(acc.body.status).toBe('COMPLETED');
+    });
+
+    it('probe 6 (single-use / replay): a consumed code reused → 422 TRANSFER_CLAIM_CODE_INVALID', async () => {
+      const code = await mintPlain(recipTok);
+      const a1 = await newAnimal(ownerId);
+      track(await initiate(ownerTok, a1, { claimCode: code }).expect(201)); // consumes the code
+      const a2 = await newAnimal(ownerId);
+      const replay = await initiate(ownerTok, a2, { claimCode: code }).expect(422);
+      expect(replay.body.code).toBe('TRANSFER_CLAIM_CODE_INVALID');
+    });
+
+    it('probe 5 (self-transfer via code): owner mints own code, owner initiates it → 422 SELF_TRANSFER', async () => {
+      const code = await mintPlain(ownerTok);
+      const animalId = await newAnimal(ownerId);
+      const res = await initiate(ownerTok, animalId, { claimCode: code }).expect(422);
+      expect(res.body.code).toBe('SELF_TRANSFER');
+    });
+
+    it('probe 1 (no-enumeration, claim): garbage / well-formed-absent / consumed codes all → uniform 422, indistinguishable body', async () => {
+      const consumed = await mintPlain(recipTok);
+      const a0 = await newAnimal(ownerId);
+      track(await initiate(ownerTok, a0, { claimCode: consumed }).expect(201)); // now consumed
+      const animalId = await newAnimal(ownerId);
+      const bodies: Record<string, unknown>[] = [];
+      for (const badCode of ['!!!garbage!!!', 'ZZZZ-ZZZZ-ZZZZ-ZZZZ', consumed]) {
+        const r = await initiate(ownerTok, animalId, { claimCode: badCode }).expect(422);
+        bodies.push(r.body as Record<string, unknown>);
+      }
+      // Every failure mode yields the SAME security-relevant Problem shape (requestId/instance aside):
+      // nonexistent / malformed / already-consumed are indistinguishable (INV-C5-1, no oracle).
+      const sig = (b: Record<string, unknown>) => ({ status: b.status, code: b.code, title: b.title, detail: b.detail });
+      expect(bodies.every((b) => b.code === 'TRANSFER_CLAIM_CODE_INVALID')).toBe(true);
+      expect(sig(bodies[1])).toEqual(sig(bodies[0]));
+      expect(sig(bodies[2])).toEqual(sig(bodies[0]));
+    });
+
+    it('probe 2 (no-enumeration, raw): an absent toUserId and an absent toOrganizationId → the SAME generic 404 RECIPIENT_NOT_FOUND (no user-vs-org leak)', async () => {
+      const animalId = await newAnimal(ownerId);
+      const asUser = await initiate(ownerTok, animalId, { toUserId: randomUUID() }).expect(404);
+      const asOrg = await initiate(ownerTok, animalId, { toOrganizationId: randomUUID() }).expect(404);
+      const sig = (b: Record<string, unknown>) => ({ status: b.status, code: b.code, title: b.title, detail: b.detail });
+      expect(asUser.body.code).toBe('RECIPIENT_NOT_FOUND');
+      expect(sig(asOrg.body as Record<string, unknown>)).toEqual(sig(asUser.body as Record<string, unknown>)); // byte-identical selector-agnostic 404
+    });
+
+    it('probe 6b (org opt-in authz): forOrganizationId minted by a non-org-admin → 403', async () => {
+      const org = await prisma.organizations.create({ data: { name_localized: { en: 'C5Org', ru: 'Орг' }, status: 'ACTIVE' } });
+      await mintCode(strangerTok, { forOrganizationId: org.id }).expect(403); // stranger is not an admin of org
+      await prisma.organizations.delete({ where: { id: org.id } }).catch(() => undefined);
+    });
+
+    it('probe 3 (rate-limit): mint over the per-principal hourly limit → 429 + Retry-After', async () => {
+      const rl = (await prisma.users.create({ data: { full_name: 'C5RlMint', role: 'USER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } })).id;
+      const rlTok = await devToken(rl);
+      await redis.del('transfer-claim-mint:' + rl);
+      let limited: request.Response | undefined;
+      for (let i = 0; i < 12; i++) {
+        const r = await mintCode(rlTok);
+        if (r.status === 429) { limited = r; break; }
+      }
+      expect(limited).toBeDefined();
+      expect(limited!.body.code).toBe('RATE_LIMITED');
+      expect(limited!.headers['retry-after']).toBeTruthy();
+      await prisma.users.delete({ where: { id: rl } }).catch(() => undefined);
+    });
+
+    it('probe 3b (rate-limit): initiate over the per-principal hourly limit → 429', async () => {
+      const rl = (await prisma.users.create({ data: { full_name: 'C5RlInit', role: 'USER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } })).id;
+      const rlTok = await devToken(rl);
+      await redis.del('transfer-initiate:' + rl);
+      // The rate-limit is enforced BEFORE the animal lookup, so a random animal id (each → 404) still
+      // increments the counter until the limit trips → 429 (no owned animal / FK cleanup needed).
+      let limited: request.Response | undefined;
+      for (let i = 0; i < 25; i++) {
+        const r = await initiate(rlTok, randomUUID(), { toUserId: randomUUID() });
+        if (r.status === 429) { limited = r; break; }
+      }
+      expect(limited).toBeDefined();
+      expect(limited!.body.code).toBe('RATE_LIMITED');
+      await prisma.users.delete({ where: { id: rl } }).catch(() => undefined);
+    });
   });
 });

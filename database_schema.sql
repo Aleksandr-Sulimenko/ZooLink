@@ -495,7 +495,9 @@ CREATE TABLE notification_templates (
 CREATE TABLE notification_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    type VARCHAR(10) NOT NULL CHECK (type IN ('EMAIL', 'SMS')),
+    -- IN_APP added by migration 0030 (ADR-0021, first outbox consumer). type here = the delivery
+    -- CHANNEL (EMAIL/SMS/IN_APP); notification_templates.type is the content SOURCE (EMAIL/SMS).
+    type VARCHAR(10) NOT NULL CONSTRAINT chk_notiflog_type CHECK (type IN ('EMAIL', 'SMS', 'IN_APP')),
     template_id UUID REFERENCES notification_templates(id) ON DELETE SET NULL,
     recipient VARCHAR(255) NOT NULL,
     content TEXT,
@@ -1404,4 +1406,19 @@ INSERT INTO notification_templates (name, type, subject_template, body_template,
  ('listing_expired', 'EMAIL', 'Your listing expired', 'Your listing "{{listing_title}}" has expired. Renew it in your account.', 'en', TRUE),
  ('report_resolved', 'EMAIL', 'Ваша жалоба рассмотрена', 'Жалоба на {{entity_type}} рассмотрена. Решение: {{decision}}.', 'ru', TRUE),
  ('report_resolved', 'EMAIL', 'Your report was reviewed', 'Your report on the {{entity_type}} was reviewed. Decision: {{decision}}.', 'en', TRUE)
+ON CONFLICT (name, type, language) DO NOTHING;
+
+-- Ownership-transfer lifecycle templates (migration 0030, ADR-0021). EMAIL source rows; the IN_APP
+-- notification consumer renders its content from these (channel≠source, see notification_logs.type).
+INSERT INTO notification_templates (name, type, subject_template, body_template, language, is_active) VALUES
+ ('transfer_initiated', 'EMAIL', 'Предложена передача владения', 'Вам предложена передача владения животным (заявка {{transfer_id}}). Подтвердите или отклоните её в личном кабинете.', 'ru', TRUE),
+ ('transfer_initiated', 'EMAIL', 'Ownership transfer offered', 'You have been offered an ownership transfer (request {{transfer_id}}). Accept or decline it in your account.', 'en', TRUE),
+ ('transfer_accepted', 'EMAIL', 'Передача владения принята', 'Передача владения (заявка {{transfer_id}}) принята получателем.', 'ru', TRUE),
+ ('transfer_accepted', 'EMAIL', 'Ownership transfer accepted', 'Your ownership transfer (request {{transfer_id}}) was accepted by the recipient.', 'en', TRUE),
+ ('transfer_declined', 'EMAIL', 'Передача владения отклонена', 'Передача владения (заявка {{transfer_id}}) отклонена получателем.', 'ru', TRUE),
+ ('transfer_declined', 'EMAIL', 'Ownership transfer declined', 'Your ownership transfer (request {{transfer_id}}) was declined by the recipient.', 'en', TRUE),
+ ('transfer_cancelled', 'EMAIL', 'Передача владения отменена', 'Передача владения (заявка {{transfer_id}}) отменена инициатором.', 'ru', TRUE),
+ ('transfer_cancelled', 'EMAIL', 'Ownership transfer cancelled', 'The ownership transfer (request {{transfer_id}}) was cancelled by the initiator.', 'en', TRUE),
+ ('transfer_expired', 'EMAIL', 'Срок передачи владения истёк', 'Срок передачи владения (заявка {{transfer_id}}) истёк без ответа.', 'ru', TRUE),
+ ('transfer_expired', 'EMAIL', 'Ownership transfer expired', 'The ownership transfer (request {{transfer_id}}) expired without a response.', 'en', TRUE)
 ON CONFLICT (name, type, language) DO NOTHING;

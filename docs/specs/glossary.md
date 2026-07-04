@@ -92,7 +92,13 @@ An editable, admin-managed canned decision-note (`decision_templates`, B10): the
 A payment (`payment_transactions`) and its refund (`refunds`). Amounts are **minor units** (BIGINT), never floats.
 
 **Notification Template / Notification Log**  
-A per-language message template (`notification_templates`) and the delivery record (`notification_logs`).
+A per-language message template (`notification_templates`) and the delivery record (`notification_logs`). `notification_logs.type` is the delivery **channel** (`EMAIL` / `SMS` / **`IN_APP`** — `IN_APP` added by migration 0030, ADR-0021); `notification_templates.type` is the content **source** (`EMAIL` / `SMS`). See **IN_APP notification**.
+
+**IN_APP notification**  
+An in-application notification row written by the worker **NotificationConsumer** — the first real **Outbox Event** consumer (ADR-0021, migration 0030). It renders from an `EMAIL`-source template and is idempotent on `idempotency_key = event.id‖recipient‖template`. Channel ≠ source: `IN_APP` is a delivery channel value on `notification_logs.type`, not a template kind.
+
+**Consent** (record)  
+An append-only, versioned consent record (`consents`, ADR-0020, migration 0029) — the statutory proof (ст.9 ч.1 ФЗ-152): policy text version + timestamp + affirmative action. A new row **supersedes** the previous (ADR-0011 supersede shape); **current consent = latest row by `(user_id, consent_type)`**; immutable (`trg_consents_immutable`). `consent_type` ∈ {`CONTACT_DISTRIBUTION` (live), `MARKETING`, `ANALYTICS_PROFILING`, `NONESSENTIAL_COOKIES` (reserved)}. Carries the ADR-0011/0006 actor snapshot (recorder may be an **AI Agent**).
 
 **Species / Breed / City**  
 Reference (lookup) data with INTEGER keys (`species`, `breeds`, `cities`). See **ID convention**.
@@ -174,6 +180,9 @@ End-user authentication uses **phone OTP + OAuth**, never a password. `password_
 
 **OTP (one-time password)**  
 6-digit SMS verification code: TTL 5 min, 60 s resend cooldown, 5 attempts then 15-min lockout. Stored only as a SHA-256 digest in Redis (never at rest in PG); keyed by `phone_hash`.
+
+**Claim code** (transfer claim code)  
+A recipient-minted, single-use, opt-in **Ownership Transfer** counterparty selector (C5, `POST /transfers/claim-codes`). The recipient mints an opaque high-entropy code (Crockford-base32, TTL 15 min) via the namespace-parameterised `OtpService` (`ns=transfer:claim`) and shares it out-of-band; the current owner enters it as `claimCode` on `initiateTransfer`, where it is **consumed atomically** (Redis `GETDEL`). It exists so a transfer can be addressed to a specific person **without** an open user-search directory (no enumeration oracle): redemption failures return one uniform `422 TRANSFER_CLAIM_CODE_INVALID`. Mint and initiate are rate-limited (`429 RATE_LIMITED` + `Retry-After`).
 
 **phone_hash (HMAC + pepper)**  
 Deterministic `HMAC-SHA256(phone, server_pepper)` (base64url) of the E.164 phone, stored unique on `users`. Deterministic (unlike bcrypt) so phones are unique/look-up-able without storing the raw number; the `PHONE_HASH_PEPPER` secret is server-side env.

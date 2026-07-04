@@ -19,6 +19,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { OrgMembershipService } from '../src/lib/org/org-membership.service';
+import { NotificationConsumer } from '../src/modules/notification/notification.consumer';
 import { resetThrottle } from './throttle-reset.util';
 
 describe('Admin Slice 4a — moderation (e2e)', () => {
@@ -86,6 +88,7 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
   });
 
   afterAll(async () => {
+    await prisma.notification_logs.deleteMany({ where: { user_id: sellerId } }).catch(() => undefined);
     await prisma.moderation_decisions.deleteMany({ where: { entity_id: { in: listings } } }).catch(() => undefined);
     await prisma.outbox_events.deleteMany({ where: { aggregate_id: { in: listings } } }).catch(() => undefined);
     for (const id of listings) {
@@ -214,6 +217,18 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
     });
     expect(activated).not.toBeNull();
     expect((activated!.payload as Record<string, unknown>).sellerId).toBe(sellerId);
+
+    // No-silence gate (ADR-0021 §Test-invariants #5): the produced event must actually MATERIALIZE a
+    // notification, not merely land in outbox_events (the previous assertion was the AUDIT3 test-mask).
+    // moderation.e2e boots the API graph (no worker relay), so we drive the real consumer over the real
+    // produced event+payload to prove end-to-end materialization.
+    const consumer = new NotificationConsumer(prisma, app.get(OrgMembershipService));
+    await consumer.handle({ id: decided!.id, aggregateType: 'Listing', aggregateId: id, eventType: 'Moderation.Decided', payload: decided!.payload, attempts: 1 });
+    const notif = await prisma.notification_logs.findFirst({
+      where: { user_id: sellerId, type: 'IN_APP', idempotency_key: `${decided!.id}:${sellerId}:listing_approved` },
+    });
+    expect(notif).not.toBeNull();
+    expect((notif!.content ?? '').length).toBeGreaterThan(0);
   });
 
   it('event seam: REJECT emits Moderation.Decided but NOT Listing.Activated (no ACTIVE transition)', async () => {

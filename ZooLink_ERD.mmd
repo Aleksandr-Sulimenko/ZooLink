@@ -415,6 +415,19 @@ erDiagram
         %% ADR-0005: MVP "contact the seller" (no chat); audit + rate-limit source
     }
 
+    consents {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_40 consent_type
+        BOOLEAN granted
+        VARCHAR_20 policy_version
+        VARCHAR_30 source
+        UUID actor_id FK
+        VARCHAR_10 actor_principal_type
+        TIMESTAMPTZ created_at
+        %% ADR-0020 (migration 0029): append-only versioned consent log (ст.9 ч.1 ФЗ-152 proof); current = latest row by (user_id, consent_type); immutable trigger
+    }
+
     %% Identity sessions & audit (round-4 integrity)
     refresh_tokens {
         UUID id PK
@@ -510,6 +523,7 @@ erDiagram
     users ||..o{ content_reports : "files report"
     users ||..o{ contact_reveals : "reveals/owns"
     listings ||..o{ contact_reveals : "contact revealed for"
+    users ||..o{ consents : "subject / actor (ADR-0020)"
     users ||..o{ refresh_tokens : "has sessions"
     users ||..o{ audit_log : "acted (nullable)"
     users ||..o{ service_credentials : "agent service-auth (gated)"

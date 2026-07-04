@@ -7,9 +7,12 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { TransferService } from './transfer.service';
+import { ClaimCodeService } from './claim-code.service';
+import { OutboxService } from '../../lib/outbox/outbox.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import type { OrgMembershipService } from '../../lib/org/org-membership.service';
+import type { RedisService } from '../../lib/redis/redis.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListTransfersQueryDto } from './dto/transfer.dto';
@@ -68,6 +71,7 @@ interface SetupOpts {
   animal?: Record<string, unknown> | null;
   orgAdmin?: boolean;
   recipientUserExists?: boolean;
+  claimResolves?: { recipientUserId?: string; recipientOrganizationId?: string } | null;
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -117,6 +121,8 @@ function setup(opts: SetupOpts = {}) {
     animal_ownership_history,
     users,
     organizations,
+    // marketOfAnimal() resolves the ADR-0002 market via a raw species join before each outbox publish.
+    $queryRaw: jest.fn().mockResolvedValue([{ market: 'pet' }]),
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
@@ -125,8 +131,20 @@ function setup(opts: SetupOpts = {}) {
   const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
   const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
-  const svc = new TransferService(prisma, audit, orgMembership);
-  return { svc, ownership_transfers, animals, animal_ownership_history, users, record, isOrgAdmin, orgAdminIds, tx };
+  // Redis rate-limit mock: INCR returns a controllable count so a test can force the 429 branch.
+  const incr = jest.fn().mockResolvedValue(1);
+  const expire = jest.fn().mockResolvedValue(1);
+  const ttl = jest.fn().mockResolvedValue(3600);
+  const redis = { client: { incr, expire, ttl } } as unknown as RedisService;
+  // Claim-code store mock: consume() returns the recipient or null (uniform miss); mint() returns a code.
+  const consume = jest.fn().mockResolvedValue(opts.claimResolves ?? null);
+  const mint = jest.fn().mockResolvedValue({ code: 'T7Q4-9KJ2-M3XZ-1H5P', expiresInSeconds: 900, recipientType: 'USER' });
+  const claimCodes = { consume, mint } as unknown as ClaimCodeService;
+  // OutboxService mock — publish() is called in-tx on every lifecycle transition (ADR-0021 producer gap).
+  const publish = jest.fn().mockResolvedValue(undefined);
+  const outbox = { publish } as unknown as OutboxService;
+  const svc = new TransferService(prisma, audit, orgMembership, redis, claimCodes, outbox);
+  return { svc, ownership_transfers, animals, animal_ownership_history, users, organizations, record, isOrgAdmin, orgAdminIds, incr, consume, mint, publish, tx };
 }
 
 const etagOf = (): string => weakEtag(`transfer:${XFER}`, UPDATED);
@@ -193,6 +211,96 @@ describe('TransferService', () => {
     it('an org-admin USER may initiate for an org-owned animal', async () => {
       const { svc } = setup({ transfer: null, animal: animalRow({ owner_id: null, organization_id: ORG }), orgAdmin: true });
       await expect(svc.initiate(ANIMAL, { toUserId: RECIP }, p(STRANGER))).resolves.toBeDefined();
+    });
+  });
+
+  describe('C5 — claim code + enumeration hardening', () => {
+    it('exactly-one-of: claimCode + toUserId → 422 RECIPIENT_AMBIGUOUS', async () => {
+      const { svc } = setup({ transfer: null });
+      const err = await svc.initiate(ANIMAL, { claimCode: 'ABCD', toUserId: RECIP }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'RECIPIENT_AMBIGUOUS' });
+    });
+
+    it('INV-C5-6/1: happy path — a valid code resolves to the recipient user, code consumed once', async () => {
+      const { svc, ownership_transfers, consume } = setup({ transfer: null, claimResolves: { recipientUserId: RECIP } });
+      const { transfer } = await svc.initiate(ANIMAL, { claimCode: 'T7Q4-9KJ2' }, p(OWNER));
+      expect(consume).toHaveBeenCalledTimes(1);
+      expect(transfer.toUserId).toBe(RECIP);
+      expect(ownership_transfers.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ to_user_id: RECIP }) }),
+      );
+    });
+
+    it('INV-C5-1: an invalid/expired/consumed code (consume→null) → uniform 422 TRANSFER_CLAIM_CODE_INVALID', async () => {
+      const { svc } = setup({ transfer: null, claimResolves: null });
+      const err = await svc.initiate(ANIMAL, { claimCode: 'GARBAGE' }, p(OWNER)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'TRANSFER_CLAIM_CODE_INVALID' });
+    });
+
+    it('INV-C5-2: raw toUserId absent → generic 404 RECIPIENT_NOT_FOUND (no user-vs-org leak)', async () => {
+      const { svc } = setup({ transfer: null, recipientUserExists: false });
+      const err = await svc.initiate(ANIMAL, { toUserId: RECIP }, p(OWNER)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NotFoundException);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'RECIPIENT_NOT_FOUND' });
+    });
+
+    it('INV-C5-2: raw toOrganizationId absent → the SAME generic 404 RECIPIENT_NOT_FOUND', async () => {
+      const { svc, organizations } = setup({ transfer: null });
+      organizations.findUnique.mockResolvedValueOnce(null);
+      const err = await svc.initiate(ANIMAL, { toOrganizationId: ORG }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'RECIPIENT_NOT_FOUND' });
+    });
+
+    it('INV-C5-3/5: a non-owner cannot even reach code consume (403 BEFORE consume — no code burned)', async () => {
+      const { svc, consume } = setup({ transfer: null, claimResolves: { recipientUserId: RECIP } });
+      await expect(svc.initiate(ANIMAL, { claimCode: 'T7Q4' }, p(STRANGER))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(consume).not.toHaveBeenCalled();
+    });
+
+    it('INV-C5-5: a code that resolves to the current owner → 422 SELF_TRANSFER (checked post-resolution)', async () => {
+      const { svc } = setup({ transfer: null, claimResolves: { recipientUserId: OWNER } });
+      const err = await svc.initiate(ANIMAL, { claimCode: 'SELF' }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'SELF_TRANSFER' });
+    });
+
+    it('INV-C5-4: initiate over the per-principal limit → 429 RATE_LIMITED + retryAfter', async () => {
+      const { svc, incr } = setup({ transfer: null, claimResolves: { recipientUserId: RECIP } });
+      incr.mockResolvedValueOnce(9999);
+      const err = await svc.initiate(ANIMAL, { claimCode: 'T7Q4' }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getStatus()).toBe(429);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'RATE_LIMITED', retryAfter: expect.any(Number) });
+    });
+
+    describe('mintClaimCode', () => {
+      it('mints a USER code for the caller (recipientType USER, expiresAt set)', async () => {
+        const { svc, mint } = setup({ transfer: null });
+        const res = await svc.mintClaimCode({}, p(OWNER));
+        expect(mint).toHaveBeenCalledWith({ recipientUserId: OWNER });
+        expect(res.recipientType).toBe('USER');
+        expect(res.expiresAt).toBeTruthy();
+      });
+
+      it('forOrganizationId by a non-org-admin → 403 (INV: least-privilege org opt-in)', async () => {
+        const { svc, mint } = setup({ transfer: null, orgAdmin: false });
+        await expect(svc.mintClaimCode({ forOrganizationId: ORG }, p(OWNER))).rejects.toBeInstanceOf(ForbiddenException);
+        expect(mint).not.toHaveBeenCalled();
+      });
+
+      it('forOrganizationId by an org-admin → mints an ORGANIZATION code', async () => {
+        const { svc, mint } = setup({ transfer: null, orgAdmin: true });
+        mint.mockResolvedValueOnce({ code: 'ORG1-2345', expiresInSeconds: 900, recipientType: 'ORGANIZATION' });
+        const res = await svc.mintClaimCode({ forOrganizationId: ORG }, p(OWNER));
+        expect(mint).toHaveBeenCalledWith({ recipientOrganizationId: ORG });
+        expect(res.recipientType).toBe('ORGANIZATION');
+      });
+
+      it('INV-C5-4: mint over the per-principal limit → 429 RATE_LIMITED', async () => {
+        const { svc, incr } = setup({ transfer: null });
+        incr.mockResolvedValueOnce(9999);
+        const err = await svc.mintClaimCode({}, p(OWNER)).catch((e: unknown) => e);
+        expect((err as HttpException).getStatus()).toBe(429);
+      });
     });
   });
 

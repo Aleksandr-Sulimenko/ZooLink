@@ -21,9 +21,11 @@ import { PageQueryDto } from '../../lib/pagination/page-query.dto';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import { TransferService } from './transfer.service';
 import {
+  ClaimCodeRequestDto,
   ListTransfersQueryDto,
   TRANSFER_ROLES,
   TransferInitiateDto,
+  type ClaimCodeView,
   type TransferView,
 } from './dto/transfer.dto';
 
@@ -56,6 +58,17 @@ export class TransferController {
     res.setHeader('Location', `/api/v1/transfers/${transfer.id}`);
     res.status(201);
     return transfer;
+  }
+
+  @Post('transfers/claim-codes')
+  @HttpCode(201)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiOperation({ summary: 'Mint a single-use transfer claim code (recipient opt-in; Idempotency-Key, rate-limited)' })
+  mintClaimCode(
+    @Body() dto: ClaimCodeRequestDto,
+    @CurrentUser() actor: AuthPrincipal,
+  ): Promise<ClaimCodeView> {
+    return this.service.mintClaimCode(dto, actor);
   }
 
   @Get('transfers')

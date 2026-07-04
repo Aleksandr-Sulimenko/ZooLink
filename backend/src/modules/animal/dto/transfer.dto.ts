@@ -10,7 +10,18 @@ import type { PrincipalType } from '../../../lib/auth/principal';
  * before the DB CHECK, per INV-3.
  */
 export class TransferInitiateDto {
-  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Recipient user (XOR toOrganizationId)' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Single-use transfer claim code the recipient minted (POST /transfers/claim-codes) and shared ' +
+      'out-of-band (C5). NOT a UUID — an opaque high-entropy code. Mutually exclusive with toUserId/toOrganizationId.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  claimCode?: string;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Recipient user (XOR claimCode/toOrganizationId)' })
   @IsOptional()
   @IsUUID()
   toUserId?: string;
@@ -25,6 +36,25 @@ export class TransferInitiateDto {
   @IsString()
   @MaxLength(2000)
   transferReason?: string;
+}
+
+/**
+ * Mint-claim-code request body (C5, transfers-api.yaml ClaimCodeRequest). Empty body → the code
+ * nominates the authenticated caller as the recipient user; `forOrganizationId` → nominates that org
+ * (caller must be its org-admin, else 403).
+ */
+export class ClaimCodeRequestDto {
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Nominate this org as recipient (caller must be its org-admin)' })
+  @IsOptional()
+  @IsUUID()
+  forOrganizationId?: string;
+}
+
+/** Wire shape of a minted claim code (transfers-api.yaml ClaimCode) — the plaintext code is returned ONCE. */
+export interface ClaimCodeView {
+  code: string;
+  expiresAt: string;
+  recipientType: 'USER' | 'ORGANIZATION';
 }
 
 /** Status filter / sort for GET /transfers. role is required (validated in the controller via enum). */

@@ -3,6 +3,7 @@ import { AnimalController } from './animal.controller';
 import { AnimalService } from './animal.service';
 import { TransferController } from './transfer.controller';
 import { TransferService } from './transfer.service';
+import { ClaimCodeService } from './claim-code.service';
 
 /**
  * Animal domain (ADR-0004 animal-as-aggregate).
@@ -15,7 +16,7 @@ import { TransferService } from './transfer.service';
  */
 @Module({
   controllers: [AnimalController, TransferController],
-  providers: [AnimalService, TransferService],
+  providers: [AnimalService, TransferService, ClaimCodeService],
   exports: [AnimalService, TransferService],
 })
 export class AnimalModule {}
