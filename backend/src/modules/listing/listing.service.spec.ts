@@ -64,7 +64,8 @@ function listingRow(over: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
-const animalRow = (over: Record<string, unknown> = {}) => ({ id: ANIMAL, owner_id: SELLER, organization_id: null, ...over });
+// D3: the AnimalService ownership summary now carries the derived market (species.market).
+const animalRow = (over: Record<string, unknown> = {}) => ({ id: ANIMAL, owner_id: SELLER, organization_id: null, market: 'pet', ...over });
 
 interface SetupOpts {
   listing?: Record<string, unknown> | null;
@@ -83,6 +84,8 @@ interface SetupOpts {
   consentGranted?: boolean;
   /** ADR-0020 dedup: an existing contact_reveals row for (viewer, listing) → reveal returns it, no quota. */
   existingReveal?: Record<string, unknown> | null;
+  /** D3: ids AnimalService.animalIdsForSpecies returns (drives recomputeMarketForSpecies). */
+  animalIdsForSpecies?: string[];
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -173,7 +176,9 @@ function setup(opts: SetupOpts = {}) {
     if (animal.organization_id && (await isOrgAdmin(actor.userId, animal.organization_id))) return animal;
     throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   });
-  const animalService = { getOwnedAnimalForActor } as unknown as AnimalService;
+  // D3 (ADR-0018 §Amendment): the animal-side half of the market-cache recompute.
+  const animalIdsForSpecies = jest.fn().mockResolvedValue(opts.animalIdsForSpecies ?? [ANIMAL]);
+  const animalService = { getOwnedAnimalForActor, animalIdsForSpecies } as unknown as AnimalService;
   // Contact-exchange collaborators: crypto (decrypt = plaintext passthrough by default), outbox (publish),
   // redis (a stateful incr counter so repeated reveals in one test cross the per-market limit).
   const decrypt = jest.fn().mockImplementation((v: string | null) => v);
@@ -205,6 +210,8 @@ function setup(opts: SetupOpts = {}) {
     isOrgAdmin,
     orgAdminIds,
     getOwnedAnimalForActor,
+    animalIdsForSpecies,
+    lUpdateMany,
     queryRaw,
     latestEffectiveResult,
     usersFindUnique,
@@ -239,6 +246,22 @@ describe('ListingService', () => {
         expect.objectContaining({ data: expect.objectContaining({ seller_id: SELLER, status: 'DRAFT' }) }),
       );
       expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'listing.created' }), expect.anything());
+    });
+
+    it('D3: caches the derived market from the animal species (pet)', async () => {
+      const { svc, listings } = setup({ listing: null });
+      await svc.create(validCreate(), p(SELLER));
+      expect(listings.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ market: 'pet' }) }),
+      );
+    });
+
+    it('D3: caches market=livestock for a livestock-species animal', async () => {
+      const { svc, listings } = setup({ listing: null, animal: animalRow({ market: 'livestock' }) });
+      await svc.create(validCreate(), p(SELLER));
+      expect(listings.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ market: 'livestock' }) }),
+      );
     });
 
     it('L-2: creating for an animal the actor does not own → 403', async () => {
@@ -849,6 +872,29 @@ describe('ListingService', () => {
       const { svc } = setup({ listing: active(), revealCount: 1 });
       const { analytics } = await svc.getAnalytics(LISTING, p(OTHER, 'MODERATOR'));
       expect(analytics.listingId).toBe(LISTING);
+    });
+  });
+
+  // D3 (ADR-0018 §Amendment): the admin species-market-correction recompute hook.
+  describe('recomputeMarketForSpecies', () => {
+    it('updates listings.market for the species animals (via AnimalService), returns the count', async () => {
+      const { svc, animalIdsForSpecies, lUpdateMany } = setup({ listing: listingRow() });
+      const n = await svc.recomputeMarketForSpecies(3, 'livestock');
+      expect(animalIdsForSpecies).toHaveBeenCalledWith(3);
+      expect(lUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ animal_id: { in: [ANIMAL] }, market: { not: 'livestock' } }),
+          data: { market: 'livestock' },
+        }),
+      );
+      expect(n).toBe(1);
+    });
+
+    it('short-circuits (no listings write) when the species has no animals', async () => {
+      const { svc, lUpdateMany } = setup({ listing: listingRow(), animalIdsForSpecies: [] });
+      const n = await svc.recomputeMarketForSpecies(999, 'pet');
+      expect(lUpdateMany).not.toHaveBeenCalled();
+      expect(n).toBe(0);
     });
   });
 });

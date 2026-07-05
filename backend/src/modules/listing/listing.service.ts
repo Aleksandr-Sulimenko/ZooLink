@@ -81,6 +81,8 @@ interface ListingRow {
   currency: string | null;
   quantity: number | null;
   view_count: bigint;
+  /** D3 (ADR-0018 §Amendment): derived market cache (species.market via animal). Not exposed in the view. */
+  market: string;
   status: string;
   moderation_status: string;
   published_at: Date | null;
@@ -167,8 +169,9 @@ export class ListingService {
 
     // L-2 / ADR-0018: obtain the animal + assert ownership through AnimalService — no direct
     // cross-aggregate read of the `animals` table. Parity: 404 if it doesn't exist, 403 if the
-    // actor isn't its owner / an org-admin of its owning org.
-    await this.animals.getOwnedAnimalForActor(actor, dto.animalId);
+    // actor isn't its owner / an org-admin of its owning org. The summary also carries the DERIVED
+    // market (species.market), which we cache on the row below (D3).
+    const animalSummary = await this.animals.getOwnedAnimalForActor(actor, dto.animalId);
 
     // L-2/L-4: an organizational listing's org must be one the actor org-admins.
     if (dto.organizationId) {
@@ -189,6 +192,11 @@ export class ListingService {
       quantity: dto.quantity ?? 1,
       lat: dto.lat ?? null,
       lng: dto.lng ?? null,
+      // D3 (ADR-0018 §Amendment): cache the DERIVED market (species.market via the animal) in-tx at
+      // create, so the future queue/discovery list-path (D8) reads it with zero cross-aggregate joins.
+      // Derivation, not the assigned market_scope tag (ADR-0015 rule 7); species.market is NOT NULL so
+      // it is always resolvable. Write-only here — no read path switches to this column until D8.
+      market: animalSummary.market,
       is_active: dto.isActive ?? true,
       expires_at: dto.expiresAt ? new Date(dto.expiresAt) : null,
       status: 'DRAFT', // L-12/L-P0: always DRAFT on create; never client-set, never ACTIVE
@@ -716,6 +724,28 @@ export class ListingService {
     };
     const etag = weakEtag(`analytics:${id}`, lastActivityAt ?? row.updated_at);
     return { analytics, etag };
+  }
+
+  /**
+   * D3 (ADR-0018 §Amendment) — recompute the derived `market` cache for every listing whose animal
+   * belongs to `speciesId`, after an admin corrects that species' market (reference-data). Keeps the
+   * cache consistent with its species source. The animal ids come from AnimalService (the owning
+   * aggregate); the write touches only the `listings` table — so no `FROM animals`/`JOIN species` lives
+   * in this module and the D8 grep-gate stays green. `market: { not }` makes the write a no-op when the
+   * value is already correct (and the updated_at trigger only fires on actual row changes). Returns the
+   * count of rows re-pointed.
+   */
+  async recomputeMarketForSpecies(speciesId: number, newMarket: Market): Promise<number> {
+    const animalIds = await this.animals.animalIdsForSpecies(speciesId);
+    if (animalIds.length === 0) return 0;
+    const result = await this.prisma.listings.updateMany({
+      where: { animal_id: { in: animalIds }, market: { not: newMarket } },
+      data: { market: newMarket },
+    });
+    if (result.count > 0) {
+      this.logger.log(`Recomputed market cache to '${newMarket}' for ${result.count} listing(s) of species ${speciesId}`);
+    }
+    return result.count;
   }
 
   /** The market (ADR-0002) of a listing via its animal's species, or null if unresolved. */

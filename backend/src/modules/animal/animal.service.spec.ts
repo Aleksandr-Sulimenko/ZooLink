@@ -31,6 +31,8 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     owner_id: OWNER,
     organization_id: null,
     species_id: 1,
+    // Nested species.market — read by getOwnedAnimalForActor (ADR-0018 §Amendment D3) to derive market.
+    species: { market: 'pet' },
     breed_id: 7,
     breed_text_localized: null,
     nickname_localized: { en: 'Rex', ru: '' },
@@ -261,12 +263,18 @@ describe('AnimalService', () => {
   describe('getOwnedAnimalForActor (ADR-0018)', () => {
     it('returns the ownership summary for the owner', async () => {
       const { svc } = setup();
-      // (The prisma mock ignores `select`; in production only id/owner_id/organization_id come back.)
+      // (The prisma mock ignores `select`; in production only id/owner_id/organization_id/species come back.)
       await expect(svc.getOwnedAnimalForActor(user(), ANIMAL)).resolves.toMatchObject({
         id: ANIMAL,
         owner_id: OWNER,
         organization_id: null,
+        market: 'pet', // D3: derived from species.market
       });
+    });
+
+    it('derives market=livestock from the species (D3 cache source)', async () => {
+      const { svc } = setup({ animal: row({ species: { market: 'livestock' } }) });
+      await expect(svc.getOwnedAnimalForActor(user(), ANIMAL)).resolves.toMatchObject({ market: 'livestock' });
     });
 
     it('lets an org-admin act for an org-owned animal', async () => {
@@ -293,6 +301,20 @@ describe('AnimalService', () => {
     it('403s a MODERATOR (no Animal ownership grant)', async () => {
       const { svc } = setup();
       await expect(svc.getOwnedAnimalForActor(moderator, ANIMAL)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  // ADR-0018 §Amendment D3: the animal-side half of the derived-market recompute.
+  describe('animalIdsForSpecies (ADR-0018 §Amendment D3)', () => {
+    it('returns the ids of every animal of the species', async () => {
+      const { svc, animals } = setup();
+      await expect(svc.animalIdsForSpecies(1)).resolves.toEqual([ANIMAL]);
+      expect(animals.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { species_id: 1 } }));
+    });
+
+    it('returns an empty list when the species has no animals', async () => {
+      const { svc } = setup({ animal: null });
+      await expect(svc.animalIdsForSpecies(999)).resolves.toEqual([]);
     });
   });
 

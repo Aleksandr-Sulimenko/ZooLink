@@ -36,6 +36,7 @@ describe('ModerationEscalationService (Slice 4c-A, live PG)', () => {
         animal_id: animal.id,
         seller_id: userId,
         listing_type: 'sale',
+        market: speciesId === liveSp ? 'livestock' : 'pet', // D3: derived-market cache mirrors species
         title_localized: { en: 't', ru: 'т' },
         status: 'PENDING_MODERATION',
         moderation_status: 'PENDING',

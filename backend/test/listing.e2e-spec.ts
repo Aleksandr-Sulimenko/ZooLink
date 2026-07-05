@@ -166,7 +166,7 @@ describe('Listings Slice 1 (e2e)', () => {
   it('L-P0: a forced ACTIVE while moderation_status≠APPROVED is rejected by the trigger (clean error, not 500)', async () => {
     const animalId = await newAnimal(sellerId);
     const listing = await prisma.listings.create({
-      data: { animal_id: animalId, seller_id: sellerId, listing_type: 'sale', title_localized: { en: 'X', ru: 'X' }, status: 'DRAFT', moderation_status: 'PENDING' },
+      data: { animal_id: animalId, seller_id: sellerId, listing_type: 'sale', market: 'pet', title_localized: { en: 'X', ru: 'X' }, status: 'DRAFT', moderation_status: 'PENDING' },
     });
     listings.push(listing.id);
     // Direct forced ACTIVE while PENDING → trigger RAISE.

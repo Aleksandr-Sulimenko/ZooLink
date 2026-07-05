@@ -5,6 +5,7 @@ import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
+import type { ListingService } from '../listing/listing.service';
 
 const admin: AuthPrincipal = { userId: 'admin-1', role: 'ADMIN', principalType: 'HUMAN' };
 
@@ -66,7 +67,10 @@ function setup(opts: {
   const record = jest.fn().mockResolvedValue(undefined);
   const prisma = { species, breeds, cities } as unknown as PrismaService;
   const audit = { record } as unknown as AuditLogService;
-  return { svc: new ReferenceDataService(prisma, audit), species, breeds, cities, record };
+  // D3 (ADR-0018 §Amendment): species market-correction recomputes the derived listings.market cache.
+  const recomputeMarketForSpecies = jest.fn().mockResolvedValue(0);
+  const listings = { recomputeMarketForSpecies } as unknown as ListingService;
+  return { svc: new ReferenceDataService(prisma, audit, listings), species, breeds, cities, record, recomputeMarketForSpecies };
 }
 
 describe('resolveLang', () => {
@@ -248,6 +252,28 @@ describe('ReferenceDataService.update', () => {
     const { svc } = setup();
     const etag = weakEtag('species:1', speciesRow.updated_at);
     await expect(svc.update('species', 1, {}, etag, admin)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  // D3 (ADR-0018 §Amendment): correcting a species' market recomputes the derived listings.market cache.
+  it('recomputes the listings.market cache when a species market changes', async () => {
+    const { svc, recomputeMarketForSpecies } = setup(); // speciesRow.market === 'pet'
+    const etag = weakEtag('species:1', speciesRow.updated_at);
+    await svc.update('species', 1, { market: 'livestock' }, etag, admin);
+    expect(recomputeMarketForSpecies).toHaveBeenCalledWith(1, 'livestock');
+  });
+
+  it('does NOT recompute when the species market is unchanged', async () => {
+    const { svc, recomputeMarketForSpecies } = setup(); // speciesRow.market === 'pet'
+    const etag = weakEtag('species:1', speciesRow.updated_at);
+    await svc.update('species', 1, { market: 'pet', sortOrder: 5 }, etag, admin);
+    expect(recomputeMarketForSpecies).not.toHaveBeenCalled();
+  });
+
+  it('does NOT recompute for a non-species dataset', async () => {
+    const { svc, recomputeMarketForSpecies } = setup();
+    const etag = weakEtag('cities:9', cityRow.updated_at);
+    await svc.update('cities', 9, { nameLocalized: { ru: 'СПб', en: 'SPb' } }, etag, admin);
+    expect(recomputeMarketForSpecies).not.toHaveBeenCalled();
   });
 });
 

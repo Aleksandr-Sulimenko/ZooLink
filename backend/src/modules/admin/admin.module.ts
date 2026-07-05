@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { IdentityModule } from '../identity/identity.module';
+import { ListingModule } from '../listing/listing.module';
 import { OptionalJwtGuard } from '../../lib/auth/optional-jwt.guard';
 import { ReferenceDataController } from './reference-data.controller';
 import { ReferenceDataService } from './reference-data.service';
@@ -21,7 +22,7 @@ import { SystemSettingService } from './system-setting.service';
  * (@Global), AuthModule guards (RolesGuard/JwtAuthGuard), IdempotencyInterceptor (RedisService).
  */
 @Module({
-  imports: [AuthModule, IdentityModule],
+  imports: [AuthModule, IdentityModule, ListingModule],
   controllers: [ReferenceDataController, UserRolesController, AuditController, SystemSettingController],
   providers: [ReferenceDataService, AuditService, SystemSettingService, OptionalJwtGuard],
 })

@@ -78,6 +78,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
         animal_id: animalId,
         seller_id: sellerId,
         listing_type: 'sale',
+        market: 'pet', // D3: derived-market cache (pet species)
         title_localized: { en: 'Puppy', ru: 'Щенок' },
         description_localized: { en: '', ru: '' },
         price_cents: 5000,
@@ -211,7 +212,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
           return a.id;
         });
       const l = await prisma.listings.create({
-        data: { animal_id: animalId, seller_id: phoneOnlySeller, listing_type: 'sale', title_localized: { en: 'X', ru: 'X' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
+        data: { animal_id: animalId, seller_id: phoneOnlySeller, listing_type: 'sale', market: 'pet', title_localized: { en: 'X', ru: 'X' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
       });
       listings.push(l.id);
       const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
@@ -226,7 +227,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       await redis.client.del(`contact-reveal:pet:${noOptBuyer}`);
       const animalId = await newAnimal(silentSeller);
       const l = await prisma.listings.create({
-        data: { animal_id: animalId, seller_id: silentSeller, listing_type: 'sale', title_localized: { en: 'S', ru: 'С' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
+        data: { animal_id: animalId, seller_id: silentSeller, listing_type: 'sale', market: 'pet', title_localized: { en: 'S', ru: 'С' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
       });
       listings.push(l.id);
       const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${noOptTok}`).expect(200);

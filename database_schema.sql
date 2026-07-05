@@ -258,6 +258,14 @@ CREATE TABLE listings (
     -- cannot be backfilled (AUDIT3 data-analyst CRITICAL, GAP-TRACE-006). contact-show count is NOT
     -- denormalized here — it is durably sourced from the contact_reveals table (no second counter to drift).
     view_count BIGINT NOT NULL DEFAULT 0,
+    -- D3 derived-market cache (migration 0033; ADR-0018 §Amendment 2026-07-04, rule 6/7). Caches the
+    -- listing's DERIVED market — species.market reached via animal→species. Written in-tx at listing
+    -- create (listing.service) and recomputed on the rare admin species-market correction
+    -- (reference-data → ListingService.recomputeMarketForSpecies); read by the D8 queue/discovery list-path
+    -- with ZERO cross-aggregate joins. This is the DERIVATION cache, NOT the assigned market_scope tag
+    -- (ADR-0015 rule 7). NOT NULL: animal_id is mandatory and species.market is NOT NULL, so a listing's
+    -- market is always resolvable. (Migration 0033 adds it nullable, backfills from the join, then SET NOT NULL.)
+    market VARCHAR(9) NOT NULL,
     -- Lifecycle state machine (spec docs/specs/statemachines/listing_state_machine.md)
     status VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
         CHECK (status IN ('DRAFT', 'PENDING_MODERATION', 'ACTIVE', 'EXPIRED', 'SOLD', 'DEACTIVATED')),
@@ -283,6 +291,8 @@ CREATE TABLE listings (
     -- D1 (migration 0031): the view counter is monotonic — never negative. DB-level guarantee, not a
     -- service-only assumption; the increment path is SET view_count = view_count + 1 (race-safe).
     CONSTRAINT chk_listings_view_count_nonneg CHECK (view_count >= 0),
+    -- D3 (migration 0033): the derived-market cache mirrors species.market's domain (ADR-0002 hard split).
+    CONSTRAINT chk_listings_market CHECK (market IN ('pet', 'livestock')),
     -- For organizational listings: either organization_id or branch_id must be set (or both)
     -- For personal listings: both organization_id and branch_id must be NULL
     CONSTRAINT chk_listing_ownership CHECK (
@@ -328,6 +338,9 @@ CREATE INDEX idx_listings_type_active ON listings(listing_type, is_active) WHERE
 CREATE INDEX idx_listings_price ON listings(price_cents) WHERE price_cents IS NOT NULL;
 CREATE INDEX idx_listings_status ON listings(status);
 CREATE INDEX idx_listings_moderation_status ON listings(moderation_status);
+-- D3 (migration 0033): serves market-scoped discovery (market + status='ACTIVE') and future queue faceting
+-- by market for the D8 list-path; market alone is too low-cardinality to index usefully.
+CREATE INDEX IF NOT EXISTS idx_listings_market_status ON listings(market, status);
 -- At most one ACTIVE listing of a given type per animal (prevents duplicate active listings;
 -- still allows e.g. an active 'sale' and an active 'stud_service' on the same animal)
 CREATE UNIQUE INDEX uq_active_listing_per_type ON listings(animal_id, listing_type) WHERE status = 'ACTIVE';

@@ -141,6 +141,7 @@ CREATE TABLE listings (
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     view_count BIGINT NOT NULL DEFAULT 0, -- D1 (migration 0031): denormalized detail-view counter; best-effort +1 on public GET /listings/{id}, Redis-deduped per (viewer, listing). Funnel-top signal (AUDIT3, GAP-TRACE-006). CHECK (view_count >= 0). contact-show is sourced from contact_reveals, not denormalized here.
+    market VARCHAR(9) NOT NULL, -- D3 (migration 0033; ADR-0018 §Amendment): DERIVED market cache (species.market via animal→species). Written in-tx at create, recomputed on admin species-market fix; read by the D8 queue/discovery list-path with no cross-aggregate joins. Derivation, NOT the assigned market_scope tag (ADR-0015 rule 7). CHECK (market IN ('pet','livestock')).
     location_point GEOGRAPHY(POINT, 4326),
     search_radius_m INTEGER,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -163,6 +164,12 @@ CREATE TABLE listings (
   inflate it, seller self-views excluded. It is the one analytics signal whose history cannot be
   backfilled (AUDIT3), hence captured first. Contact-show count is NOT denormalized here — it is derived
   from the `contact_reveals` table.
+- `market` (migration 0033, D3; ADR-0018 §Amendment) is a denormalised cache of the listing's DERIVED
+  market — `species.market` reached via animal→species. It is written in-tx at listing create and
+  recomputed on the rare admin species-market correction, so the D8 queue/discovery list-path can read it
+  with zero cross-aggregate joins (breaking the ADR-0018 circularity). It is the derivation cache, NOT the
+  assigned `market_scope` tag (ADR-0015 rule 7). `NOT NULL` — species.market is NOT NULL and animal_id is
+  mandatory, so a listing's market is always resolvable.
 - Geospatial position for radius search
 - Various listing types through a CHECK constraint. The set is `sale, breeding, show, adoption,
   stud_service, leasing` (migration 0021). `leasing` is **form now / behaviour Фаза 2** (B3): the

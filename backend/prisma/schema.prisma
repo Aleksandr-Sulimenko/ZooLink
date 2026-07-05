@@ -307,6 +307,7 @@ model listings {
   lock_expires_at                   DateTime?             @db.Timestamptz(6)
   escalated_at                      DateTime?             @db.Timestamptz(6)
   view_count                        BigInt                @default(0)
+  market                            String                @db.VarChar(9)
   contact_reveals                   contact_reveals[]
   conversations                     conversations[]
   favorites                         favorites[]
@@ -322,6 +323,7 @@ model listings {
   @@index([moderation_status], map: "idx_listings_moderation_status")
   @@index([seller_id], map: "idx_listings_seller")
   @@index([status], map: "idx_listings_status")
+  @@index([market, status], map: "idx_listings_market_status")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

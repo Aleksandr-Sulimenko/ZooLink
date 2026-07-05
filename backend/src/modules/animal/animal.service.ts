@@ -60,6 +60,13 @@ export interface AnimalOwnershipSummary {
   id: string;
   owner_id: string | null;
   organization_id: string | null;
+  /**
+   * The animal's DERIVED market (ADR-0002), reached via species.market. Callers cache it on write
+   * (e.g. ListingService writes `listings.market` at create — ADR-0018 §Amendment D3). This is the
+   * derivation, NOT the assigned `market_scope` tag (ADR-0015 rule 7). species.market is NOT NULL, so
+   * this is always resolvable for an existing animal.
+   */
+  market: 'pet' | 'livestock';
 }
 
 /** ISO-11784/85 microchip = exactly 15 digits (spec line 109, service-validated). */
@@ -372,15 +379,39 @@ export class AnimalService {
   async getOwnedAnimalForActor(actor: AuthPrincipal, animalId: string): Promise<AnimalOwnershipSummary> {
     const animal = await this.prisma.animals.findUnique({
       where: { id: animalId },
-      select: { id: true, owner_id: true, organization_id: true },
+      // species.market is joined so a caller (ListingService, ADR-0018 §Amendment D3) can cache the
+      // DERIVED market at write without reading species itself. Nested select stays inside the Animal
+      // aggregate — no `FROM animals JOIN species` in sibling modules (keeps the D8 grep-gate green).
+      select: { id: true, owner_id: true, organization_id: true, species: { select: { market: true } } },
     });
     if (!animal) throw new NotFoundException({ message: 'Animal not found', code: 'NOT_FOUND' });
     await this.assertActsAsOwner(actor, animal);
-    return animal;
+    return {
+      id: animal.id,
+      owner_id: animal.owner_id,
+      organization_id: animal.organization_id,
+      // species.market is CHECK-constrained to pet|livestock (schema); narrow losslessly.
+      market: animal.species?.market === 'livestock' ? 'livestock' : 'pet',
+    };
+  }
+
+  /**
+   * ADR-0018 §Amendment D3 — the animal-side half of the derived-`market` recompute. Returns the ids of
+   * every animal of `speciesId` so the owning ListingService can recompute its `listings.market` cache
+   * when an admin corrects that species' market. Reads only the `animals` table (this aggregate); the
+   * `listings` write stays inside ListingService. MVP-scale: a plain id list; a set-based join would be
+   * cheaper at very large species counts (noted for Phase-2 if a species ever grows huge).
+   */
+  async animalIdsForSpecies(speciesId: number): Promise<string[]> {
+    const rows = await this.prisma.animals.findMany({ where: { species_id: speciesId }, select: { id: true } });
+    return rows.map((r) => r.id);
   }
 
   /** The owner/org-admin/ADMIN ownership predicate behind getOwnedAnimalForActor (single source of truth). */
-  private async assertActsAsOwner(actor: AuthPrincipal, animal: AnimalOwnershipSummary): Promise<void> {
+  private async assertActsAsOwner(
+    actor: AuthPrincipal,
+    animal: Pick<AnimalOwnershipSummary, 'owner_id' | 'organization_id'>,
+  ): Promise<void> {
     if (actor.role === 'ADMIN') return;
     if (animal.owner_id && animal.owner_id === actor.userId) return;
     if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;

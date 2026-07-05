@@ -84,6 +84,7 @@ describe('RetentionService (D2, live PG)', () => {
         animal_id: animal.id,
         seller_id: sellerId,
         listing_type: 'sale',
+        market: 'pet', // D3: species has no market override → defaults to 'pet'
         status,
         // ACTIVE requires moderation_status=APPROVED (approval-gate trigger).
         moderation_status: status === 'ACTIVE' ? 'APPROVED' : 'PENDING',

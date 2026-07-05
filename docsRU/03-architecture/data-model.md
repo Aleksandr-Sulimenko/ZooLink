@@ -141,6 +141,7 @@ CREATE TABLE listings (
     currency CHAR(3) DEFAULT 'RUB',
     quantity INTEGER DEFAULT 1,
     view_count BIGINT NOT NULL DEFAULT 0, -- D1 (миграция 0031): денормализованный счётчик просмотров карточки; best-effort +1 на публичном GET /listings/{id}, дедуп в Redis по (viewer, listing). Сигнал вершины воронки (AUDIT3, GAP-TRACE-006). CHECK (view_count >= 0). Показ контактов — из contact_reveals, здесь не денормализуется.
+    market VARCHAR(9) NOT NULL, -- D3 (миграция 0033; ADR-0018 §Amendment): кэш ВЫВОДИМОГО рынка (species.market через animal→species). Пишется в той же транзакции при создании, пересчитывается при админ-правке рынка вида; читается D8 в списочном пути очереди/поиска без кросс-агрегатных JOIN. Это кэш деривации, НЕ назначаемый тег market_scope (ADR-0015 rule 7). CHECK (market IN ('pet','livestock')).
     location_point GEOGRAPHY(POINT, 4326),
     search_radius_m INTEGER,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -163,6 +164,12 @@ CREATE TABLE listings (
   страницы не накручивает), просмотры самого продавца исключаются. Это единственный аналитический
   сигнал, чью историю нельзя восстановить задним числом (AUDIT3), поэтому закладывается первым. Счётчик
   показов контактов здесь НЕ денормализуется — он выводится из таблицы `contact_reveals`.
+- `market` (миграция 0033, D3; ADR-0018 §Amendment) — денормализованный кэш ВЫВОДИМОГО рынка объявления:
+  `species.market`, достигаемый через animal→species. Пишется в той же транзакции при создании объявления
+  и пересчитывается при редкой админ-правке рынка вида, чтобы списочный путь очереди/поиска (D8) читал его
+  без кросс-агрегатных JOIN (разрывая цикличность ADR-0018). Это кэш деривации, НЕ назначаемый тег
+  `market_scope` (ADR-0015 rule 7). `NOT NULL` — species.market NOT NULL и animal_id обязателен, поэтому
+  рынок объявления всегда выводим.
 - Геопространственная позиция для поиска по радиусу
 - Различные типы объявлений через ограничение CHECK. Набор — `sale, breeding, show, adoption,
   stud_service, leasing` (миграция 0021). `leasing` — **форма сейчас / поведение Фаза 2** (B3):

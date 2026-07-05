@@ -11,6 +11,7 @@ import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
+import { ListingService } from '../listing/listing.service';
 import {
   type CreateReferenceDataDto,
   type Dataset,
@@ -80,6 +81,10 @@ export class ReferenceDataService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    // ADR-0018 §Amendment D3: when an admin corrects a species' market, the derived `listings.market`
+    // cache must be recomputed. The listings write stays inside the Listing aggregate — we call its
+    // public recompute method rather than writing another aggregate's table from here (ADR-0018 rule 1).
+    private readonly listings: ListingService,
   ) {}
 
   /** Prisma delegate for the dataset (typed as the shared lookup CRUD surface). */
@@ -316,6 +321,18 @@ export class ReferenceDataService {
       },
       afterData: { dataset, id, ...data },
     });
+    // ADR-0018 §Amendment D3: a species' market is a source for the derived `listings.market` cache.
+    // When it actually changes, recompute the cache on every listing of that species (rare admin path).
+    if (
+      dataset === 'species' &&
+      dto.market !== undefined &&
+      (dto.market === 'pet' || dto.market === 'livestock') &&
+      dto.market !== existing.market
+    ) {
+      const affected = await this.listings.recomputeMarketForSpecies(id, dto.market);
+      this.logger.log(`Species ${id} market ${existing.market ?? 'unknown'}→${dto.market}: recomputed ${affected} listing cache row(s)`);
+    }
+
     this.logger.log(`Reference data updated ${dataset}#${id} by ${actor.userId}`);
     return { entry: this.toEntry(row, true, DEFAULT_LANG), etag: weakEtag(`${dataset}:${row.id}`, row.updated_at) };
   }

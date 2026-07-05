@@ -61,6 +61,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
         animal_id: animal.id,
         seller_id: sellerId,
         listing_type: 'sale',
+        market: speciesId === liveSp ? 'livestock' : 'pet', // D3: derived-market cache mirrors species
         title_localized: { en: opts.titleEn ?? 'GeoListing', ru: 'Объявление' },
         status: 'ACTIVE',
         moderation_status: 'APPROVED',
@@ -143,7 +144,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
     });
     animals.push(withBreed.id);
     const l = await prisma.listings.create({
-      data: { animal_id: withBreed.id, seller_id: sellerId, listing_type: 'sale', title_localized: { en: 'Breed', ru: 'П' }, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true, price_cents: 5000, lat: C_LAT, lng: C_LNG },
+      data: { animal_id: withBreed.id, seller_id: sellerId, listing_type: 'sale', market: 'pet', title_localized: { en: 'Breed', ru: 'П' }, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true, price_cents: 5000, lat: C_LAT, lng: C_LNG },
     });
     listingIds.push(l.id);
     const res = await request(server()).get(`/v1/listings?market=pet&species_id=${petSp}&breed_id=${petBreed}&limit=100`).expect(200);
