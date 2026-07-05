@@ -164,7 +164,13 @@ function setup(opts: SetupOpts = {}) {
   // isOrgAdmin backs create/mutate authz; orgAdminIds backs listScope.
   const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
-  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
+  const isPartyOrOrgAdmin = jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
+    if (pid && pid === uid) return true;
+    if (org && (await isOrgAdmin(uid, org)) === true) return true;
+    return false;
+  });
+  const orgMembership = { isOrgAdmin, orgAdminIds, isPartyOrOrgAdmin } as unknown as OrgMembershipService;
   // ADR-0018: ListingService now obtains the animal + ownership decision from AnimalService.
   // The mock replays the real owner/org-admin/ADMIN predicate (parity with the removed
   // loadAnimal/assertOwnsAnimal) so the L-2 behaviour tests exercise the delegation end-to-end.
@@ -711,7 +717,16 @@ describe('ListingService', () => {
       expect(decrypt).toHaveBeenCalledWith('+79990001122'); // ADR-0019: decrypt at reveal
       expect(publish).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ eventType: 'ContactReveal.Created', payload: expect.objectContaining({ viewerId: OTHER, sellerId: SELLER }) }),
+        expect.objectContaining({
+          eventType: 'ContactReveal.Created',
+          schemaVersion: 2, // D5: shape bumped for the polymorphic subject
+          payload: expect.objectContaining({
+            viewerId: OTHER,
+            sellerId: SELLER,
+            offeringType: 'ANIMAL_LISTING', // D5 polymorphic subject
+            offeringId: LISTING,
+          }),
+        }),
       );
     });
 
@@ -813,7 +828,16 @@ describe('ListingService', () => {
       );
       expect(publish).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ eventType: 'Listing.Sold', payload: expect.objectContaining({ listingId: LISTING, sellerId: SELLER }) }),
+        expect.objectContaining({
+          eventType: 'Listing.Sold',
+          schemaVersion: 2, // D5: shape bumped for the polymorphic subject
+          payload: expect.objectContaining({
+            listingId: LISTING,
+            sellerId: SELLER,
+            offeringType: 'ANIMAL_LISTING', // D5 polymorphic subject
+            offeringId: LISTING,
+          }),
+        }),
       );
       expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'listing.marked_sold' }), expect.anything());
     });

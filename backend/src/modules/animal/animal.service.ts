@@ -413,8 +413,7 @@ export class AnimalService {
     animal: Pick<AnimalOwnershipSummary, 'owner_id' | 'organization_id'>,
   ): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, animal.owner_id, animal.organization_id)) return;
     throw new ForbiddenException({ message: 'You do not own this animal', code: 'FORBIDDEN' });
   }
 

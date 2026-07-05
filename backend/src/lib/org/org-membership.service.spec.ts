@@ -58,3 +58,29 @@ describe('OrgMembershipService.orgAdminIds', () => {
     await expect(svc.orgAdminIds(USER)).resolves.toEqual([]);
   });
 });
+
+describe('OrgMembershipService.isPartyOrOrgAdmin (D4 — consolidated owner/party predicate)', () => {
+  it('is true when the user IS the row principal — WITHOUT hitting the DB (party short-circuit)', async () => {
+    const findFirst = jest.fn();
+    const svc = makeSvc(findFirst, jest.fn());
+    await expect(svc.isPartyOrOrgAdmin(USER, USER, null)).resolves.toBe(true);
+    expect(findFirst).not.toHaveBeenCalled(); // no org lookup when the party already matches
+  });
+
+  it('is true when the user is an ACTIVE OWNER of the row org', async () => {
+    const svc = makeSvc(jest.fn().mockResolvedValue({ id: 'm1' }), jest.fn());
+    await expect(svc.isPartyOrOrgAdmin(USER, 'someone-else', ORG)).resolves.toBe(true);
+  });
+
+  it('is false for a non-party, non-org-admin actor (404-no-leak floor)', async () => {
+    const svc = makeSvc(jest.fn().mockResolvedValue(null), jest.fn());
+    await expect(svc.isPartyOrOrgAdmin(USER, 'someone-else', ORG)).resolves.toBe(false);
+  });
+
+  it('is false when there is neither a party match nor an org to check', async () => {
+    const findFirst = jest.fn();
+    const svc = makeSvc(findFirst, jest.fn());
+    await expect(svc.isPartyOrOrgAdmin(USER, null, null)).resolves.toBe(false);
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+});

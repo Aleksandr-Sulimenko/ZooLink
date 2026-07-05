@@ -15,6 +15,27 @@ import { PrismaService } from '../db/prisma.service';
 export class OrgMembershipService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * The canonical object-level "acts as owner" predicate: true when `userId` is the row's own
+   * principal (`principalId` — an animal's `owner_id`, a listing's `seller_id`, or a transfer
+   * party) OR an ACTIVE OWNER of the row's `organizationId`. This is the single source of the
+   * `X === actor.userId || (org && isOrgAdmin(actor, org))` idiom that was copy-pasted across the
+   * animal / listing / moderation / transfer services (ADR-0018 §Amendment D4, dedup — security
+   * AUDIT3 FC-1: "copy-pasted authz, one WILL get it wrong"). Operator-scope shortcuts (ADMIN /
+   * MODERATOR) stay at the call site because they vary per surface; the party/org-admin core is
+   * here, defined once. Agent-as-principal (ADR-0006): keyed on `userId`, so an AGENT principal
+   * resolves identically — no human assumption.
+   */
+  async isPartyOrOrgAdmin(
+    userId: string,
+    principalId: string | null | undefined,
+    organizationId: string | null | undefined,
+  ): Promise<boolean> {
+    if (principalId && principalId === userId) return true;
+    if (organizationId && (await this.isOrgAdmin(userId, organizationId))) return true;
+    return false;
+  }
+
   /** True when `userId` is an ACTIVE OWNER of `organizationId` (the org-admin scope). */
   async isOrgAdmin(userId: string, organizationId: string): Promise<boolean> {
     const membership = await this.prisma.organization_users.findFirst({

@@ -553,24 +553,21 @@ export class TransferService {
   /** INV-1: caller is the animal's current owner (owner_id==actor) or an org-admin of its owning org. */
   private async assertIsCurrentOwner(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, animal.owner_id, animal.organization_id)) return;
     throw new ForbiddenException({ message: 'Only the current owner may initiate a transfer', code: 'FORBIDDEN' });
   }
 
   /** INV-8: caller is the named recipient (to_user_id==actor) or an org-admin of the to-org. */
   private async assertIsRecipient(actor: AuthPrincipal, row: TransferRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (row.to_user_id && row.to_user_id === actor.userId) return;
-    if (row.to_organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.to_organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, row.to_user_id, row.to_organization_id)) return;
     throw new ForbiddenException({ message: 'Only the named recipient may accept or decline', code: 'FORBIDDEN' });
   }
 
   /** INV-9: caller is the initiator (from_user_id==actor) or an org-admin of the from-org. */
   private async assertIsInitiator(actor: AuthPrincipal, row: TransferRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (row.from_user_id && row.from_user_id === actor.userId) return;
-    if (row.from_organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.from_organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, row.from_user_id, row.from_organization_id)) return;
     throw new ForbiddenException({ message: 'Only the initiator may cancel', code: 'FORBIDDEN' });
   }
 
@@ -587,8 +584,7 @@ export class TransferService {
   /** Ownership-history read visibility: current owner / owning-org admin / MODERATOR / ADMIN. */
   private async assertCanViewAnimal(actor: AuthPrincipal, animal: AnimalOwnerRow): Promise<void> {
     if (actor.role === 'MODERATOR' || actor.role === 'ADMIN') return;
-    if (animal.owner_id && animal.owner_id === actor.userId) return;
-    if (animal.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, animal.organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, animal.owner_id, animal.organization_id)) return;
     throw new ForbiddenException({ message: 'Not permitted to view this animal’s ownership history', code: 'FORBIDDEN' });
   }
 

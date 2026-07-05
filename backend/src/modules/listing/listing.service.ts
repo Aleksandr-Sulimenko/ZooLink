@@ -45,6 +45,15 @@ const MIN_LISTING_PRICE = 0;
 /** States from which an owner soft-withdraw is allowed (L-8); terminal states reject with 409. */
 const WITHDRAWABLE: ReadonlySet<ListingStatus> = new Set(['DRAFT', 'PENDING_MODERATION', 'ACTIVE']);
 
+/**
+ * Polymorphic value-event subject (ADR-0018 §Amendment D5 / ADR-0014 OfferingRef seam). Every
+ * value-signal event (`Listing.Sold`, `ContactReveal.Created`) now carries `offeringType`/`offeringId`
+ * so a future analytics funnel spans all offering subtypes, not just animal listings. Today the only
+ * subtype is `ANIMAL_LISTING`, whose `offeringId` == the listing id. Mirrors the D2 saved-search seam
+ * literal; centralise into a shared OfferingType module when the second subtype lands (D10).
+ */
+const OFFERING_TYPE_ANIMAL_LISTING = 'ANIMAL_LISTING' as const;
+
 // ── Contact-reveal rate limit (spec 16 §"Rate limiting"; ADR-0002 per-market, ФЗ-152 minimisation) ──
 /** Reveals per hour per viewer on the pet marketplace. */
 const PET_REVEAL_LIMIT_PER_HOUR = 10;
@@ -583,10 +592,18 @@ export class ListingService {
           aggregateType: 'Listing',
           aggregateId: id,
           eventType: 'ContactReveal.Created',
-          schemaVersion: 1,
+          // v2 (D5): +offeringType/+offeringId polymorphic subject. Additive; the NotificationConsumer
+          // does not subscribe to this eventType (registry allow-list), so the bump breaks no consumer.
+          schemaVersion: 2,
           market,
           occurredAt: revealedAt,
-          payload: { listingId: id, viewerId: actor.userId, sellerId: listing.seller_id },
+          payload: {
+            listingId: id,
+            viewerId: actor.userId,
+            sellerId: listing.seller_id,
+            offeringType: OFFERING_TYPE_ANIMAL_LISTING,
+            offeringId: id,
+          },
         });
       });
     } catch (err) {
@@ -680,10 +697,17 @@ export class ListingService {
           aggregateType: 'Listing',
           aggregateId: id,
           eventType: 'Listing.Sold',
-          schemaVersion: 1,
+          // v2 (D5): +offeringType/+offeringId polymorphic subject. Additive; no consumer subscribes
+          // to Listing.Sold (registry allow-list), so the bump breaks no consumer.
+          schemaVersion: 2,
           market,
           occurredAt: soldAt,
-          payload: { listingId: id, sellerId: existing.seller_id },
+          payload: {
+            listingId: id,
+            sellerId: existing.seller_id,
+            offeringType: OFFERING_TYPE_ANIMAL_LISTING,
+            offeringId: id,
+          },
         });
         return (await tx.listings.findUnique({ where: { id } })) as unknown as ListingRow;
       }),
@@ -1087,8 +1111,7 @@ export class ListingService {
   /** L-3: mutate only by the listing's seller or an org-admin of its org. ADMIN = operator scope. */
   private async assertCanMutate(actor: AuthPrincipal, row: ListingRow): Promise<void> {
     if (actor.role === 'ADMIN') return;
-    if (row.seller_id === actor.userId) return;
-    if (row.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.organization_id))) return;
+    if (await this.orgMembership.isPartyOrOrgAdmin(actor.userId, row.seller_id, row.organization_id)) return;
     throw new ForbiddenException({ message: 'Operation not permitted', code: 'FORBIDDEN' });
   }
 
@@ -1096,9 +1119,7 @@ export class ListingService {
   private async canSeeNonActive(actor: AuthPrincipal | undefined, row: ListingRow): Promise<boolean> {
     if (!actor) return false;
     if (actor.role === 'ADMIN' || actor.role === 'MODERATOR') return true;
-    if (row.seller_id === actor.userId) return true;
-    if (row.organization_id && (await this.orgMembership.isOrgAdmin(actor.userId, row.organization_id))) return true;
-    return false;
+    return this.orgMembership.isPartyOrOrgAdmin(actor.userId, row.seller_id, row.organization_id);
   }
 
   private async assertOrgAdmin(actor: AuthPrincipal, organizationId: string): Promise<void> {

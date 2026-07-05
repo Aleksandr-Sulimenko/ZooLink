@@ -505,7 +505,7 @@ export class ModerationService {
 
     // M-12: owner (seller or org-admin) OR MODERATOR/ADMIN. Non-owner USER → 403 (no detail leak).
     const isOperator = actor.role === 'MODERATOR' || actor.role === 'ADMIN';
-    const isOwner = listing.seller_id === actor.userId || (listing.organization_id ? await this.orgMembership.isOrgAdmin(actor.userId, listing.organization_id) : false);
+    const isOwner = await this.orgMembership.isPartyOrOrgAdmin(actor.userId, listing.seller_id, listing.organization_id);
     if (!isOperator && !isOwner) {
       throw new ForbiddenException({ message: 'Not permitted to view this listing’s moderation result', code: 'FORBIDDEN' });
     }

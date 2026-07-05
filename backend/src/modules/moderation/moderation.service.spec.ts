@@ -116,9 +116,16 @@ function setup(opts: SetupOpts = {}) {
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
   const toggles = { isEnabled: jest.fn().mockResolvedValue(opts.agentEnabled ?? false) } as unknown as FeatureToggleService;
+  const orgIsAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgMembership = {
-    isOrgAdmin: jest.fn().mockResolvedValue(opts.orgAdmin ?? false),
+    isOrgAdmin: orgIsAdmin,
     orgAdminIds: jest.fn().mockResolvedValue([]),
+    // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
+    isPartyOrOrgAdmin: jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
+      if (pid && pid === uid) return true;
+      if (org && (await orgIsAdmin(uid, org)) === true) return true;
+      return false;
+    }),
   } as unknown as OrgMembershipService;
   const publish = jest.fn().mockResolvedValue(undefined);
   const outbox = { publish } as unknown as OutboxService;

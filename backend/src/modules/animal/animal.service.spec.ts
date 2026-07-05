@@ -82,7 +82,13 @@ function setup(opts: { animal?: Record<string, unknown> | null; orgAdmin?: boole
   // isOrgAdmin backs create/mutate authz; orgAdminIds backs listScope.
   const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
-  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
+  const isPartyOrOrgAdmin = jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
+    if (pid && pid === uid) return true;
+    if (org && (await isOrgAdmin(uid, org)) === true) return true;
+    return false;
+  });
+  const orgMembership = { isOrgAdmin, orgAdminIds, isPartyOrOrgAdmin } as unknown as OrgMembershipService;
   const svc = new AnimalService(prisma, audit, new AbilityFactory(), orgMembership);
   return { svc, animals, create, update, record, orgAdminIds };
 }

@@ -47,12 +47,12 @@ status: "Approved"
 | `Moderation.Escalated` | Listing | moderation **SLA-job** (worker) | entityId, market, waitingSeconds, slaState | **notification (уведомить ADMIN)**. Emit-only в 4c (admin fan-out — это notification-consumer). Job **никогда** не меняет `status`/`moderation_status` — элемент остаётся PENDING_MODERATION (M-13). **Идемпотентно:** эмитится **один раз** на просроченный элемент (маркер `listings.escalated_at`, ставится в той же tx, что и outbox-запись); сбрасывается при re-enqueue (M-14/4d). |
 | `Listing.Activated` | Listing | listing (→ACTIVE) | listing_id, seller_id | search-index (опубликовать), notification |
 | `Listing.Expired` | Listing | worker (истёк срок) | listing_id, seller_id | search-index (убрать), **notification** |
-| `Listing.Sold` | Listing | listing (владелец отметил продано, MVP) | listing_id, seller_id | search-index (убрать), notification |
+| `Listing.Sold` | Listing | listing (владелец отметил продано, MVP) | listing_id, seller_id, **offeringType, offeringId** (v2) | search-index (убрать), notification |
 | `Listing.Deactivated` | Listing | listing/moderation | listing_id, reason | search-index (убрать), notification (если удалил модератор) |
 | `User.Registered` | User | identity | user_id | notification (welcome/verify — SMS инлайн) |
 | `ContentReport.Filed` | ContentReport | moderation | report_id, entity_type, entity_id | moderation (в очередь) |
 | `ContentReport.Actioned` | ContentReport | moderation | report_id, target, action | listing (деактивировать цель), **notification (репортёру+владельцу)** |
-| `ContactReveal.Created` | Listing | contact | listing_id, viewer_id | analytics/counter (rate-limit + статистика владельца) |
+| `ContactReveal.Created` | Listing | contact | listing_id, viewer_id, seller_id, **offeringType, offeringId** (v2) | analytics/counter (rate-limit + статистика владельца) |
 | `OwnershipTransfer.Initiated` | OwnershipTransfer | animal/transfer (T1) | transferId, animalId, fromUserId, fromOrganizationId, toUserId, toOrganizationId | **notification (получателю)** |
 | `OwnershipTransfer.Accepted` | OwnershipTransfer | animal/transfer (T2) | (как выше) | **notification (инициатору)** |
 | `OwnershipTransfer.Declined` | OwnershipTransfer | animal/transfer (T3) | (как выше) | **notification (инициатору)** |
@@ -62,6 +62,8 @@ status: "Approved"
 
 > Producer/consumer — это **модули внутри монолита** (ADR-0009), не микросервисы. «Consumer» = in-process хендлер,
 > подписанный на ретранслированное событие.
+
+> **(round-N, нормативно — полиморфный субъект value-события, ADR-0018 §Amendment D5 / seam OfferingRef ADR-0014) ЧТО:** value-события `Listing.Sold` и `ContactReveal.Created` теперь несут в payload `offeringType` (enum, по умолчанию `ANIMAL_LISTING`) и `offeringId` (id субъекта; == `listing_id` для `ANIMAL_LISTING`), а их `schemaVersion` поднят **1 → 2** (изменение формы payload по §1). **ПОЧЕМУ:** аналитическая/маркетплейс-воронка должна со временем охватывать *все* подтипы offering (услуги, товары, экспертиза — ADR-0014), а не только листинги животных; без дискриминатора субъекта на value-событиях будущий тип offering был бы невидим воронке либо потребовал бы ломающего переписывания события. **ЧЕМ ЛУЧШЕ:** добавление чисто аддитивно (существующие consumer'ы продолжают читать `listingId`/`sellerId`); consumer нотификаций (ADR-0021) не подписан на эти два типа событий (его реестр — allow-list `OwnershipTransfer.*`), поэтому bump ничего не ломает; и это зеркалит seam OfferingRef из D2 на `favorites`/`saved_searches` — единая форма полиморфного субъекта на всей платформе, зарезервированная дёшево сейчас, а не мигрируемая под нагрузкой позже.
 
 ## 3. Матрица событие → нотификация
 Уведомления шлёт **модуль notification как consumer ретранслированного события** (не прямыми вызовами).

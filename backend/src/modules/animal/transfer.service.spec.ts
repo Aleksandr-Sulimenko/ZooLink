@@ -130,7 +130,13 @@ function setup(opts: SetupOpts = {}) {
   // isOrgAdmin backs party-side org authz; orgAdminIds backs the org branch of list scope.
   const isOrgAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
   const orgAdminIds = jest.fn().mockResolvedValue([] as string[]);
-  const orgMembership = { isOrgAdmin, orgAdminIds } as unknown as OrgMembershipService;
+  // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
+  const isPartyOrOrgAdmin = jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
+    if (pid && pid === uid) return true;
+    if (org && (await isOrgAdmin(uid, org)) === true) return true;
+    return false;
+  });
+  const orgMembership = { isOrgAdmin, orgAdminIds, isPartyOrOrgAdmin } as unknown as OrgMembershipService;
   // Redis rate-limit mock: INCR returns a controllable count so a test can force the 429 branch.
   const incr = jest.fn().mockResolvedValue(1);
   const expire = jest.fn().mockResolvedValue(1);

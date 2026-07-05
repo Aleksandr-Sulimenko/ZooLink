@@ -48,12 +48,12 @@ notification flow.
 | `Moderation.Escalated` | Listing | moderation **SLA job** (worker) | entityId, market, waitingSeconds, slaState | **notification (notify ADMIN)**. Emit-only in 4c (admin fan-out is the notification consumer). The job **never** mutates `status`/`moderation_status` — item stays PENDING_MODERATION (M-13). **Idempotent:** emitted **once** per overdue item (`listings.escalated_at` marker, set in the same tx as the outbox write); reset on re-enqueue (M-14/4d). |
 | `Listing.Activated` | Listing | listing module (→ACTIVE) | listing_id, seller_id | search-index (publish), notification (notify owner) |
 | `Listing.Expired` | Listing | worker (duration elapsed) | listing_id, seller_id | search-index (remove), **notification (notify owner)** |
-| `Listing.Sold` | Listing | listing module (owner marks sold, MVP) | listing_id, seller_id | search-index (remove), notification (notify owner) |
+| `Listing.Sold` | Listing | listing module (owner marks sold, MVP) | listing_id, seller_id, **offeringType, offeringId** (v2) | search-index (remove), notification (notify owner) |
 | `Listing.Deactivated` | Listing | listing/moderation module | listing_id, reason | search-index (remove), notification (if moderator-removed) |
 | `User.Registered` | User | identity module | user_id | notification (welcome/verify — SMS handled inline) |
 | `ContentReport.Filed` | ContentReport | moderation module | report_id, entity_type, entity_id | moderation (enqueue) |
 | `ContentReport.Actioned` | ContentReport | moderation module | report_id, target, action | listing (deactivate target), **notification (notify reporter+owner)** |
-| `ContactReveal.Created` | Listing | contact module | listing_id, viewer_id | analytics/counter (rate-limit + owner stats) |
+| `ContactReveal.Created` | Listing | contact module | listing_id, viewer_id, seller_id, **offeringType, offeringId** (v2) | analytics/counter (rate-limit + owner stats) |
 | `OwnershipTransfer.Initiated` | OwnershipTransfer | animal/transfer module (T1) | transferId, animalId, fromUserId, fromOrganizationId, toUserId, toOrganizationId | **notification (notify to-party)** |
 | `OwnershipTransfer.Accepted` | OwnershipTransfer | animal/transfer module (T2) | (as above) | **notification (notify from-party / initiator)** |
 | `OwnershipTransfer.Declined` | OwnershipTransfer | animal/transfer module (T3) | (as above) | **notification (notify from-party / initiator)** |
@@ -63,6 +63,8 @@ notification flow.
 
 > Producers/consumers are **modules within the monolith** (ADR-0009), not microservices. "Consumer" = an
 > in-process handler subscribed to the relayed event.
+
+> **(round-N, normative — polymorphic value-event subject, ADR-0018 §Amendment D5 / ADR-0014 OfferingRef seam) WHAT:** the value-signal events `Listing.Sold` and `ContactReveal.Created` now carry `offeringType` (enum, default `ANIMAL_LISTING`) and `offeringId` (the subject id; == `listing_id` for `ANIMAL_LISTING`) in their payload, and their `schemaVersion` is bumped **1 → 2** (payload-shape change per §1). **WHY:** the analytics/marketplace funnel must eventually span *all* offering subtypes (services, goods, expertise — ADR-0014), not just animal listings; without a subject discriminator on the value events, a later offering type would either be invisible to the funnel or force a breaking event rewrite. **WHY-BETTER:** the addition is purely additive (existing consumers keep reading `listingId`/`sellerId`); the notification consumer (ADR-0021) does not subscribe to these two event types (its registry is an allow-list of `OwnershipTransfer.*`), so the bump breaks nothing; and it mirrors the D2 OfferingRef seam already on `favorites`/`saved_searches` — one consistent polymorphic subject shape across the platform, reserved cheaply now rather than migrated under load later.
 
 ## 3. Event → notification matrix
 Notifications are sent by the **notification module as a consumer of the relayed event** (not by direct calls).
