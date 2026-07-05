@@ -32,9 +32,19 @@ interface SavedSearchRow {
   lat: number | null;
   lng: number | null;
   radius_m: number | null;
+  offering_type: string;
+  offering_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
+
+/**
+ * OfferingRef seam (ADR-0014 §Amendment 2026-07-04 rule 11, migration 0032). A saved search targets an
+ * offering CATEGORY, not one offering: `offering_type` is the discriminator (only ANIMAL_LISTING today,
+ * DB CHECK-guarded) and `offering_id` stays NULL (a search is a query). Written as a constant here so the
+ * shape exists from day one; behaviour is listing-only and unchanged.
+ */
+const OFFERING_TYPE_ANIMAL_LISTING = 'ANIMAL_LISTING' as const;
 
 /**
  * Saved-search lifecycle — save / list / delete (geo-search-api.yaml `/saved-searches`; spec 07
@@ -71,6 +81,10 @@ export class SavedSearchService {
       lat: dto.lat ?? null,
       lng: dto.lng ?? null,
       radius_m: dto.radiusM ?? null,
+      // OfferingRef seam (0032): listing-only form. offering_type is DB-CHECK-limited to ANIMAL_LISTING;
+      // offering_id stays NULL — a saved search is a query, not a reference to one offering.
+      offering_type: OFFERING_TYPE_ANIMAL_LISTING,
+      offering_id: null,
     };
 
     const row = await this.runWrite(() => this.prisma.saved_searches.create({ data })) as unknown as SavedSearchRow;
@@ -233,6 +247,8 @@ export class SavedSearchService {
       lat: row.lat,
       lng: row.lng,
       radiusM: row.radius_m,
+      offeringType: row.offering_type,
+      offeringId: row.offering_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

@@ -3,6 +3,7 @@
 **Status**: Accepted
 **Date**: 2026-07-01
 **Ratified by owner**: 2026-07-01 (Q1 — accepted jointly with [ADR-0014](0014-offering-supertype-polymorphic-seam.md))
+**Owner reconfirm**: 2026-07-05 (Wave-D) — the assigned `market_scope ∈ {pet, livestock, both}` tag for species-less offerings is reaffirmed (`both` = one offering surfaced in both market contexts; regulated cross-market scope stays coupled to ADR-0016 verification).
 **Amends**: [ADR-0002](0002-hard-split-markets.md) — **clarifies and refines its scope; does NOT supersede or rewrite it.** ADR-0002 stays Accepted and authoritative for animal listings.
 **Relates to**: [ADR-0014](0014-offering-supertype-polymorphic-seam.md) (accepted jointly — see Q1), [ADR-0016](0016-provider-model.md).
 **Source vision**: `docsRU/01-discovery/future-features.md` §B (4th bullet).

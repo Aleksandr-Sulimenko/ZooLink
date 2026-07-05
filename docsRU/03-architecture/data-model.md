@@ -351,6 +351,23 @@ admin CRUD. Pet-side soft-tags `temperament_tags`/`health_flags` сознате�
 `listings.lat`/`listings.lng` — основное хранилище для MVP (Haversine + bounding box), с опциональным
 PostGIS `location_point`.
 
+### Шов OfferingRef — `favorites` и `saved_searches` (ADR-0014, миграция 0032)
+
+Обе таблицы `favorites` и `saved_searches` несут полиморфную ссылку на предложение
+`(offering_type VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING', offering_id UUID)`, чтобы будущие
+предложения без вида животного (услуги, товары) **не потребовали переписывания** этих таблиц и их
+публичного контракта (ADR-0014 §Amendment 2026-07-04 правило 11 — *форма сейчас, необратимо при
+откладывании*). Сегодня поведение — только листинги: `CHECK (offering_type IN ('ANIMAL_LISTING'))`
+на каждой таблице (словарь `IN(...)` расширяется аддитивной миграцией, когда появится подтип).
+`offering_id` — **NOT NULL** на `favorites` (правдивый полиморфный указатель, backfill из `listing_id`;
+сегодня `offering_id == listing_id`) и **NULLABLE** на `saved_searches` (поиск — это *запрос*, а не
+ссылка на одно предложение: `offering_type` служит дискриминатором, `offering_id` остаётся NULL).
+На `offering_id` **нет FK**: цель полиморфна по таблицам-подтипам (анти-god-table, ADR-0014); для случая
+ANIMAL_LISTING ссылочную целостность обеспечивает существующий FK `listing_id`. Индекс
+`idx_favorites_offering (offering_type, offering_id)` поддерживает будущий запрос «кто добавил это
+предложение в избранное». Субъект value-события (`Sold`/`ContactReveal`/просмотр) становится
+`(offering_type, offering_id)` в слайсе D5; контроллер favorites (D11) строится по этому контракту.
+
 ## Механизмы расширяемости
 
 ### JSONB колонки

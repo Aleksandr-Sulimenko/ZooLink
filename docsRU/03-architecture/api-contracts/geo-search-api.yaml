@@ -298,6 +298,21 @@ components:
           description: >-
             Радиус в метрах (1км..100км, зеркалит /geo-search radius_m). Согласованность SS-4:
             присутствует (non-null) тогда и только тогда, когда присутствуют lat и lng; null, когда точки нет.
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: >-
+            Шов OfferingRef (ADR-0014 §Amendment 2026-07-04 правило 11 — форма сейчас, миграция 0032).
+            Категория предложения, на которую нацелен сохранённый поиск. Сегодня только ANIMAL_LISTING;
+            расширяется аддитивно при появлении подтипа предложения без вида (услуга/товар), контракт не ломается.
+        offeringId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Всегда null для сохранённого поиска — поиск это ЗАПРОС, а не ссылка на одно предложение.
+            Присутствует для симметрии с OfferingRef в favorites; дискриминатором служит offeringType.
         createdAt:
           type: string
           format: date-time
@@ -312,6 +327,13 @@ components:
           type: string
           maxLength: 100
           nullable: true
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: >-
+            Категория OfferingRef (ADR-0014, миграция 0032). Необязательно; по умолчанию ANIMAL_LISTING
+            (единственное допустимое значение сегодня). offeringId НЕ принимается — сохранённый поиск не ссылается на одно предложение.
         filters:
           allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
           description: >-

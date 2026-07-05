@@ -130,7 +130,7 @@ Fixes the AUDIT3 forward-compat findings: **ADR-0018 circularity** (3 join sites
 | **multi-role** | `user_roles(user_id, role)` junction; `users.role` stays primary (ADR-0022) | dormant; MVP authz reads `users.role` | **D6** | **0034** |
 | **geo_anchor** | reconcile the two near-me endpoints to one geo contract; reserve `geo_anchor` as discovery key | point-now (lat/lng exist); PostGIS gated/deferred | **D7** | none |
 | **marketOf refactor** | queue-CTE + both `marketOf` read `listings.market`; drop all 3 `animals⋈species` joins; flip ADR-0018 Accepted | grep-gate green (0 raw joins outside AnimalService) | **D8** | none |
-| **monetization_type** | spec-only reservation of `{lead-gen,subscription,take-rate,none}` on the offering contract | born with subtype; no physical table now | **D9** | deferred |
+| **monetization_type** | spec-only reservation of `{lead-gen,subscription,take-rate,none}` on the offering contract | **SPEC-ONLY** (owner 2026-07-05); monetization *model* deferred to explicit owner discussion (win-win, soft-start); born with subtype, no physical table now | **D9** | deferred |
 | **market_scope (assigned) + discovery read-model** | assigned `{pet,livestock,both}` tag + materialised projection table | **DEFERRED** to first species-less subtype; queue/discovery use `listings.market` cache until then | **D10** | deferred |
 | **favorites controller** | build against the D2 OfferingRef contract | — | **D11** | none |
 
@@ -154,3 +154,5 @@ Migrations consumed: **0032** (D2), **0033** (D3), **0034** (D6). All else code 
 3. **`monetization_type` form:** confirm the enum and whether the read-model envelope must carry it now (North-star funnel) or wait for the subtype.
 4. **Derived `market` cache (D3):** confirm the controlled denormalisation (still derived, just cached) is acceptable vs strict always-join — it carries derived `market`, not the assigned `market_scope`, so ADR-0015 rule 7 holds.
 5. **ADR-0018 flip → Accepted:** confirm the 2026-07-04 flip (low-risk, reaffirms 0004).
+
+**Resolved 2026-07-05 (owner, «по рекомендациям»):** (1) multi-role = **junction-with-primary** (ADR-0022 OD-A) + self-claim = **free non-regulated roles, regulated gated by ADR-0016 tier** (OD-B) → **ADR-0022 Accepted**; (2) species-less `market_scope` = assigned **`{pet,livestock,both}`**, `both` = one offering in both contexts (ADR-0015) — **confirmed**; (3) `monetization_type` = **SPEC-ONLY**, monetization model deferred to explicit owner discussion (win-win, soft-start) — not built now; (4) derived-`market` cache (D3) accepted (still derived, cached; not the assigned tag — ADR-0015 rule 7 holds); (5) **ADR-0018 flip → Accepted confirmed**.

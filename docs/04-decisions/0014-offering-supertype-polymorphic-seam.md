@@ -123,6 +123,8 @@ Adopt **Option 2**. ZooLink models a **logical Offering supertype** realised as 
 
 **WHY-BETTER** — Resolves the ambiguity without pulling any Phase-2 behaviour into MVP: only rows that accumulate now (favorites/saved_searches/events) get the polymorphic shape now; everything born with a future subtype waits for that subtype. rule 2 stands (the *reference shape* ships now); the Implementation-Notes "not now" applies to the *subtype tables and read-model*, not to the reference shape. The moderation **decision** ledger is already `(entity_type, entity_id)`-shaped; only the enum vocabulary (`LISTING` vs `ANIMAL_LISTING`) is reconciled when the queue is made polymorphic (with the subtype).
 
+**Owner ratification 2026-07-05** — the form-now split (rule 11) is confirmed «по рекомендациям». **`monetization_type` is reserved SPEC-ONLY**: only the field's shape (`lead-gen | subscription | take-rate | none`) is reserved on the offering contract; the monetization **model** is deferred to an explicit owner discussion (win-win, soft-start) and is **not** built now. This qualifies rule 9 and the "Defer" bullet above.
+
 ## Implementation Notes (for backend / alpha-analyst when the side is built — not now)
 - Form-now migration (separate task, backend): polymorphic `(offering_type, offering_id)` on `favorites` + `saved_searches`; polymorphic moderation subject; discovery read-model table + `offering_type` enum (`ANIMAL_LISTING` only); `monetization_type` + `geo_anchor` columns on the offering side. Each behind the rule "form now, behaviour gated."
 - alpha-analyst writes the polymorphic discovery + moderation **contract** (object-level authz, 404-no-leak, `market_scope` filter, read-model envelope) before any subtype code.

@@ -80,6 +80,9 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
     expect(res.body.userId).toBe(aliceId); // server-derived owner
     expect(res.body.filters).toEqual({ market: 'pet', species_id: 1 }); // stored verbatim
     expect(res.body.radiusM).toBe(5000);
+    // OfferingRef seam (ADR-0014, migration 0032): listing-only form surfaces end-to-end.
+    expect(res.body.offeringType).toBe('ANIMAL_LISTING');
+    expect(res.body.offeringId).toBeNull();
     track(res);
 
     const list = await request(server()).get('/v1/saved-searches?limit=100').set('Authorization', `Bearer ${aliceTok}`).expect(200);

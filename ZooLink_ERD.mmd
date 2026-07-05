@@ -381,8 +381,10 @@ erDiagram
         UUID id PK
         UUID user_id FK
         UUID listing_id FK
+        VARCHAR_30 offering_type
+        UUID offering_id
         TIMESTAMPTZ created_at
-        %% UK (user_id, listing_id)
+        %% UK (user_id, listing_id); OfferingRef seam ADR-0014 (offering_type,offering_id), migration 0032; no FK (polymorphic)
     }
     saved_searches {
         UUID id PK
@@ -392,8 +394,11 @@ erDiagram
         DOUBLE lat
         DOUBLE lng
         INTEGER radius_m
+        VARCHAR_30 offering_type
+        UUID offering_id
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+        %% OfferingRef seam ADR-0014 (migration 0032); offering_id NULL (a search is not one offering)
     }
     content_reports {
         UUID id PK

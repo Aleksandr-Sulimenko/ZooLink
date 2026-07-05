@@ -1,6 +1,6 @@
 # ADR-0018: Cross-aggregate access rule — route animal reads through AnimalService (reaffirm ADR-0004)
 
-**Status**: Accepted — 2026-07-04 (form resolved: the breach is 3 sites, not 1, and is fixed in **two ordered parts** — see §Decision / §Implementation Notes; low-risk, reaffirms ADR-0004). Owner-nod folded into the Wave-D kickoff (surfaced as a confirm item, not silently assumed). Supersedes its earlier "Proposed — awaiting owner nod (2026-07-01)".
+**Status**: Accepted — 2026-07-04 (form resolved: the breach is 3 sites, not 1, and is fixed in **two ordered parts** — see §Decision / §Implementation Notes; low-risk, reaffirms ADR-0004). Owner-nod folded into the Wave-D kickoff (surfaced as a confirm item, not silently assumed); **owner explicitly confirmed the flip 2026-07-05**. Supersedes its earlier "Proposed — awaiting owner nod (2026-07-01)".
 **Date**: 2026-07-01 (accepted 2026-07-04)
 **Amends**: [ADR-0004](0004-animal-as-aggregate.md) — **reaffirms and operationalises its aggregate boundary; does NOT supersede it.** ADR-0004's decision stands; this ADR fixes the code that drifted from it and makes the boundary an enforceable, reviewable rule.
 **Relates to**: [ADR-0014](0014-offering-supertype-polymorphic-seam.md) (this is a **prerequisite** — the polymorphic seam must sit on clean aggregate boundaries), [ADR-0009](0009-mvp-vs-target-architecture.md).

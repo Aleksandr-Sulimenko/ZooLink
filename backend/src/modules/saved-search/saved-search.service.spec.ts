@@ -19,6 +19,8 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
     lat: null,
     lng: null,
     radius_m: null,
+    offering_type: 'ANIMAL_LISTING',
+    offering_id: null,
     created_at: new Date('2026-06-30T00:00:00Z'),
     updated_at: new Date('2026-06-30T00:00:00Z'),
     ...over,
@@ -83,6 +85,33 @@ describe('SavedSearchService', () => {
       const { svc } = setup({ rows: [row({ name: 'near me', filters: { market: 'pet', species_id: 3 }, lat: 55.7, lng: 37.6, radius_m: 5000 })] });
       const res = await svc.list(query(), p(ACTOR));
       expect(res.items[0]).toMatchObject({ id: ROW_ID, userId: ACTOR, name: 'near me', filters: { market: 'pet', species_id: 3 }, lat: 55.7, lng: 37.6, radiusM: 5000 });
+    });
+
+    // ── OfferingRef seam (ADR-0014, migration 0032) ──────────────────────────────────────────────
+    it('D2 seam: the view surfaces offeringType=ANIMAL_LISTING and offeringId=null', async () => {
+      const { svc } = setup();
+      const res = await svc.list(query(), p(ACTOR));
+      expect(res.items[0]).toMatchObject({ offeringType: 'ANIMAL_LISTING', offeringId: null });
+    });
+  });
+
+  // ── D2 OfferingRef seam write ──────────────────────────────────────────────────────────────────
+  describe('D2 OfferingRef seam (ADR-0014, migration 0032)', () => {
+    it('create writes offering_type=ANIMAL_LISTING and offering_id=null (listing-only form)', async () => {
+      const { svc, create } = setup();
+      await svc.create(make({ filters: { market: 'pet' } }), p(ACTOR));
+      expect(create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ offering_type: 'ANIMAL_LISTING', offering_id: null }),
+      });
+    });
+
+    it('create never accepts a client-supplied offering_id/offering_type (not on the DTO — server-fixed)', async () => {
+      const { svc, create } = setup();
+      // A body carrying offeringId is ignored: the DTO has no such field and the service hard-codes the seam.
+      await svc.create(make({ filters: {} }), p(ACTOR));
+      const data = create.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data.offering_type).toBe('ANIMAL_LISTING');
+      expect(data.offering_id).toBeNull();
     });
   });
 

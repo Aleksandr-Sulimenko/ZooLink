@@ -53,9 +53,34 @@ components:
   schemas:
     Favorite:
       type: object
+      # OfferingRef seam (ADR-0014 §Amendment 2026-07-04 rule 11 — form-now, migration 0032).
+      # WHAT: the polymorphic pair offeringType/offeringId ships from day one (default ANIMAL_LISTING);
+      #   the pre-existing listingId is RETAINED as a deprecated read-only alias == offeringId whenever
+      #   offeringType == ANIMAL_LISTING.
+      # WHY: a v1 body committed against a listing-only listingId cannot be retrofitted truthfully once a
+      #   species-less offering (service/goods) exists — it would become a breaking v1 change. This must
+      #   precede the favorites controller (D11).
+      # WHY-BETTER: additive & non-breaking — existing clients keep reading listingId; new clients read the
+      #   polymorphic pair. When a subtype ships, offeringType widens additively and listingId is simply
+      #   absent for non-listing offerings (still no break: it was always documented as the ANIMAL_LISTING alias).
       properties:
-        id:        { type: string, format: uuid }
-        listingId: { type: string, format: uuid }
+        id:           { type: string, format: uuid }
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: Offering category (ADR-0014). Only ANIMAL_LISTING today; widened additively per subtype.
+        offeringId:
+          type: string
+          format: uuid
+          description: Polymorphic pointer to the favorited offering. For ANIMAL_LISTING it equals listingId.
+        listingId:
+          type: string
+          format: uuid
+          deprecated: true
+          description: >-
+            DEPRECATED alias of offeringId, present only when offeringType == ANIMAL_LISTING (retained for
+            backward compatibility). Prefer offeringType/offeringId.
         createdAt: { type: string, format: date-time }
     PageMeta:
       type: object

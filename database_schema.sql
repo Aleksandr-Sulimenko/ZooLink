@@ -359,11 +359,18 @@ CREATE TABLE favorites (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+    -- OfferingRef seam (ADR-0014 form-now, migration 0032): polymorphic pointer to any offering.
+    -- No FK (target is polymorphic across subtype tables; anti-god-table). Today == listing_id.
+    offering_type VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING',
+    offering_id UUID NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_favorite_user_listing UNIQUE (user_id, listing_id)
+    CONSTRAINT uq_favorite_user_listing UNIQUE (user_id, listing_id),
+    -- Extensible: a later migration widens the IN(...) vocabulary when a subtype ships.
+    CONSTRAINT chk_favorites_offering_type CHECK (offering_type IN ('ANIMAL_LISTING'))
 );
 CREATE INDEX idx_favorites_user ON favorites(user_id);
 CREATE INDEX idx_favorites_listing ON favorites(listing_id);
+CREATE INDEX idx_favorites_offering ON favorites(offering_type, offering_id);
 
 -- ========== Saved Searches (MVP; alerts deferred to Phase 2 — UC-GS-03) ==========
 CREATE TABLE saved_searches (
@@ -374,11 +381,17 @@ CREATE TABLE saved_searches (
     lat DOUBLE PRECISION,
     lng DOUBLE PRECISION,
     radius_m INTEGER,
+    -- OfferingRef seam (ADR-0014 form-now, migration 0032): which offering CATEGORY this saved search
+    -- targets. `offering_id` stays NULL — a search is a query, not a reference to one offering; the
+    -- discriminator lets a future "saved search over services" be told apart from one over animal listings.
+    offering_type VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING',
+    offering_id UUID,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_saved_searches_latlng CHECK (
         (lat IS NULL AND lng IS NULL) OR (lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
-    )
+    ),
+    CONSTRAINT chk_saved_searches_offering_type CHECK (offering_type IN ('ANIMAL_LISTING'))
 );
 CREATE INDEX idx_saved_searches_user ON saved_searches(user_id);
 

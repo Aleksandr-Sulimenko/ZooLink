@@ -54,9 +54,34 @@ components:
   schemas:
     Favorite:
       type: object
+      # Шов OfferingRef (ADR-0014 §Amendment 2026-07-04 правило 11 — форма сейчас, миграция 0032).
+      # WHAT: полиморфная пара offeringType/offeringId поставляется с первого дня (default ANIMAL_LISTING);
+      #   прежнее поле listingId СОХРАНЕНО как устаревший (deprecated) read-only алиас == offeringId, когда
+      #   offeringType == ANIMAL_LISTING.
+      # WHY: тело v1, зафиксированное на listing-only listingId, нельзя ретрофитнуть правдиво, когда появится
+      #   предложение без вида (услуга/товар) — это стало бы ломающим изменением v1. Должно предшествовать
+      #   контроллеру favorites (D11).
+      # WHY-BETTER: аддитивно и не ломает — старые клиенты продолжают читать listingId; новые читают
+      #   полиморфную пару. При появлении подтипа offeringType расширяется аддитивно, а listingId просто
+      #   отсутствует для не-листинговых предложений (тоже без слома: он всегда документировался как алиас ANIMAL_LISTING).
       properties:
-        id:        { type: string, format: uuid }
-        listingId: { type: string, format: uuid }
+        id:           { type: string, format: uuid }
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: Категория предложения (ADR-0014). Сегодня только ANIMAL_LISTING; расширяется аддитивно по подтипам.
+        offeringId:
+          type: string
+          format: uuid
+          description: Полиморфный указатель на добавленное в избранное предложение. Для ANIMAL_LISTING равен listingId.
+        listingId:
+          type: string
+          format: uuid
+          deprecated: true
+          description: >-
+            УСТАРЕВШИЙ алиас offeringId, присутствует только когда offeringType == ANIMAL_LISTING (сохранён
+            для обратной совместимости). Предпочтительно offeringType/offeringId.
         createdAt: { type: string, format: date-time }
     PageMeta:
       type: object

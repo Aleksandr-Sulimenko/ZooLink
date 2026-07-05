@@ -348,6 +348,23 @@ Scanned by the partial index `idx_listings_escalation_scan` on `(moderation_enqu
 status='PENDING_MODERATION' AND escalated_at IS NULL`. Geo: `listings.lat`/`listings.lng` are the
 MVP-primary storage (Haversine + bounding box), with optional PostGIS `location_point`.
 
+### OfferingRef seam — `favorites` & `saved_searches` (ADR-0014, migration 0032)
+
+Both `favorites` and `saved_searches` carry a polymorphic offering reference
+`(offering_type VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING', offering_id UUID)` so that future
+species-less offerings (services, goods) need **no rewrite** of these tables or their public contract
+(ADR-0014 §Amendment 2026-07-04 rule 11 — *form-now, irreversible-if-deferred*). Today behaviour is
+listing-only: `CHECK (offering_type IN ('ANIMAL_LISTING'))` on each table (the `IN(...)` vocabulary is
+widened additively by a later migration when a subtype ships). `offering_id` is **NOT NULL** on
+`favorites` (the truthful polymorphic pointer, backfilled from `listing_id`; today `offering_id ==
+listing_id`) and **NULLABLE** on `saved_searches` (a search is a *query*, not a reference to one
+offering — `offering_type` is the discriminator, `offering_id` stays NULL). There is **no FK** on
+`offering_id`: the target is polymorphic across per-subtype tables (anti-god-table, ADR-0014); for the
+ANIMAL_LISTING case referential integrity rides the existing `listing_id` FK. Index
+`idx_favorites_offering (offering_type, offering_id)` supports the future "who favorited this offering"
+lookup. The value-event subject (`Sold`/`ContactReveal`/view) becomes `(offering_type, offering_id)`
+in slice D5; the favorites controller (D11) builds against this contract.
+
 ## Extensibility Mechanisms
 
 ### JSONB Columns

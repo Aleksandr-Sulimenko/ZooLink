@@ -233,16 +233,19 @@ model digital_assets {
 }
 
 model favorites {
-  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  user_id    String   @db.Uuid
-  listing_id String   @db.Uuid
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  listings   listings @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id            String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id       String   @db.Uuid
+  listing_id    String   @db.Uuid
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  offering_type String   @default("ANIMAL_LISTING") @db.VarChar(30)
+  offering_id   String   @db.Uuid
+  listings      listings @relation(fields: [listing_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([user_id, listing_id], map: "uq_favorite_user_listing")
   @@index([listing_id], map: "idx_favorites_listing")
   @@index([user_id], map: "idx_favorites_user")
+  @@index([offering_type, offering_id], map: "idx_favorites_offering")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -588,16 +591,18 @@ model refunds {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model saved_searches {
-  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  user_id    String   @db.Uuid
-  name       String?  @db.VarChar(100)
-  filters    Json     @default("{}")
-  lat        Float?
-  lng        Float?
-  radius_m   Int?
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  updated_at DateTime @default(now()) @db.Timestamptz(6)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id            String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id       String   @db.Uuid
+  name          String?  @db.VarChar(100)
+  filters       Json     @default("{}")
+  lat           Float?
+  lng           Float?
+  radius_m      Int?
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+  offering_type String   @default("ANIMAL_LISTING") @db.VarChar(30)
+  offering_id   String?  @db.Uuid
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([user_id], map: "idx_saved_searches_user")
 }

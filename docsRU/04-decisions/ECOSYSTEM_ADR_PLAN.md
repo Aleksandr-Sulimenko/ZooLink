@@ -113,3 +113,46 @@
 - **devops**: pinning региона ADR-0017 + CI guardrail + фикс deployment-спеки; storage-level шифрование ADR-0019.
 - **security + legal**: risk-матрица верификации ADR-0016; sign-off at-rest launch-floor ADR-0019; review carve-out ст.12 ADR-0017.
 - **alpha-analyst**: контракт полиморфных discovery+moderation (ADR-0014), контракт provider+верификации (ADR-0016), Gherkin фильтра `market_scope` (ADR-0015) — когда строится сторона.
+
+---
+
+## Wave D — план швов и упорядочивание (architect, 2026-07-04)
+
+Чинит forward-compat находки AUDIT3: **циркулярность ADR-0018** (3 сайта джойна, CTE очереди недекомпозируем → разрешено split'ом из двух частей, см. ADR-0018 §Amendment 2026-07-04) и **тайминговое самопротиворечие ADR-0014** (разрешено ADR-0014 §Amendment 2026-07-04 rule 11). D1 (views-capture, миграция 0031) сделан. Миграции строго последовательны с **0032**.
+
+### Шов → форма → D-слайс → миграция?
+| Шов | Форма (колонка / таблица) | Default / gate | D-слайс | Миграция? |
+|---|---|---|---|---|
+| **OfferingRef** | `offering_type VARCHAR` + `offering_id UUID` на `favorites` **и** `saved_searches`; контракт `offeringType`/`offeringId`; словарь субъекта модерации реконсилируется позже | `offering_type` default+`CHECK IN ('ANIMAL_LISTING')` (аддитивно) — ведёт себя listing-only | **D2** | **0032** |
+| **производный кэш `market`** | `listings.market VARCHAR(9) CHECK IN ('pet','livestock')`, вычисляется in-tx из `species.market`, бэкфилл, пересчёт на admin-исправлении вида | чистый read-кэш — без изменения поведения; **не** назначенный тег `market_scope` | **D3** | **0033** |
+| **accessor AnimalService** | публичный `getOwnedAnimalForActor` + консолидация `isOrgAdmin` | code-only; 404-no-leak; паритет поведения | **D4** | нет |
+| **субъект value-события** | payload события `offeringType`/`offeringId` на Sold/ContactReveal/view | `ANIMAL_LISTING`; воронка охватывает предложения | **D5** | нет |
+| **мультироль** | junction `user_roles(user_id, role)`; `users.role` остаётся primary (ADR-0022) | спит; authz MVP читает `users.role` | **D6** | **0034** |
+| **geo_anchor** | реконсилировать два near-me endpoint'а в один geo-контракт; зарезервировать `geo_anchor` как ключ discovery | point-now (lat/lng есть); PostGIS gated/отложен | **D7** | нет |
+| **рефакторинг marketOf** | CTE очереди + обе `marketOf` читают `listings.market`; убрать все 3 джойна `animals⋈species`; флип ADR-0018 Accepted | grep-gate зелёный (0 сырых джойнов вне AnimalService) | **D8** | нет |
+| **monetization_type** | spec-only резерв `{lead-gen,subscription,take-rate,none}` на контракте предложения | **SPEC-ONLY** (владелец 2026-07-05); *модель* монетизации отложена до явного обсуждения с владельцем (win-win, soft-start); рождается с подтипом, физической таблицы сейчас нет | **D9** | отложено |
+| **market_scope (назначенный) + discovery read-model** | назначенный тег `{pet,livestock,both}` + материализованная проекционная таблица | **ОТЛОЖЕНО** до первого подтипа без вида; очередь/discovery используют кэш `listings.market` до тех пор | **D10** | отложено |
+| **контроллер favorites** | строить против контракта OfferingRef из D2 | — | **D11** | нет |
+
+### Исполнимый порядок (зависимости соблюдены)
+1. **D2** — шов OfferingRef (0014 form-now, миграция **0032**) → разблокирует D11.
+2. **D3** — производная колонка-кэш `market` (cycle-breaker 0018, миграция **0033**) → разблокирует list-path D8.
+3. **D4** — accessor AnimalService + консолидация `isOrgAdmin` (0018 Part-1, code-only) — *истинная* предпосылка 0014.
+4. **D5** — полиморфный субъект value-события (code-only).
+5. **D6** — junction `user_roles` (ADR-0022, миграция **0034**).
+6. **D7** — реконсиляция geo_anchor / near-me (контракт/code-only).
+7. **D8** — рефакторинг marketOf завершён (code-only; нужны D3+D4); **флип ADR-0018 → Accepted сделан**; добавить CI grep-gate.
+8. **D9** — spec-резерв `monetization_type` (alpha-analyst; doc-only).
+9. **D10** — discovery read-model + назначенный `market_scope`: **ОТЛОЖЕНО** до первого подтипа без вида (alpha-analyst пишет только заглушку контракта).
+10. **D11** — сборка контроллера favorites (нужен D2) + тесты.
+
+Потребляемые миграции: **0032** (D2), **0033** (D3), **0034** (D6). Всё прочее — код / контракт / отложено.
+
+### Решения владельца к вынесению
+1. **Модель мультироли (ADR-0022):** junction-with-primary vs `roles TEXT[]`; и политика self-claim (свободные нерегулируемые роли, регулируемые гейтятся тиром ADR-0016?).
+2. **`market_scope` для предложений без вида:** подтвердить назначенный `{pet,livestock,both}` с `both` = одно предложение в обоих контекстах (ADR-0015), и сцепку с верификацией для регулируемых категорий.
+3. **Форма `monetization_type`:** подтвердить enum и должен ли envelope read-model нести его сейчас (воронка North-star) или ждать подтип.
+4. **Производный кэш `market` (D3):** подтвердить, что контролируемая денормализация (по-прежнему производна, просто кэширована) приемлема vs строгий always-join — она несёт производный `market`, а не назначенный `market_scope`, поэтому rule 7 ADR-0015 держится.
+5. **Флип ADR-0018 → Accepted:** подтвердить флип 2026-07-04 (низкий риск, подтверждает 0004).
+
+**Разрешено 2026-07-05 (владелец, «по рекомендациям»):** (1) мультироль = **junction-with-primary** (ADR-0022 OD-A) + self-claim = **свободные нерегулируемые роли, регулируемые гейтятся тиром ADR-0016** (OD-B) → **ADR-0022 Accepted**; (2) `market_scope` без вида = назначенный **`{pet,livestock,both}`**, `both` = одно предложение в обоих контекстах (ADR-0015) — **подтверждено**; (3) `monetization_type` = **SPEC-ONLY**, модель монетизации отложена до явного обсуждения с владельцем (win-win, soft-start) — не строится сейчас; (4) производный кэш `market` (D3) принят (по-прежнему производный, кэширован; не назначенный тег — rule 7 ADR-0015 держится); (5) **флип ADR-0018 → Accepted подтверждён**.

@@ -168,6 +168,10 @@ export interface SavedSearchView {
   lat: number | null;
   lng: number | null;
   radiusM: number | null;
+  /** OfferingRef seam (ADR-0014, migration 0032). Offering category — ANIMAL_LISTING only today. */
+  offeringType: string;
+  /** Always null for a saved search (a search is a query, not a reference to one offering). */
+  offeringId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

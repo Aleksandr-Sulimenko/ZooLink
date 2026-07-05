@@ -3,6 +3,7 @@
 **Status**: Accepted
 **Date**: 2026-07-01
 **Ratified by owner**: 2026-07-01 (Q1 — принято совместно с [ADR-0014](0014-offering-supertype-polymorphic-seam.md))
+**Owner reconfirm**: 2026-07-05 (Wave-D) — назначенный тег `market_scope ∈ {pet, livestock, both}` для предложений без вида подтверждён (`both` = одно предложение, показываемое в обоих рыночных контекстах; регулируемый кросс-рыночный scope остаётся сцеплен с верификацией ADR-0016).
 **Amends**: [ADR-0002](0002-hard-split-markets.md) — **уточняет и сужает его scope; НЕ supersedes и НЕ переписывает.** ADR-0002 остаётся Accepted и авторитетным для объявлений о животных.
 **Relates to**: [ADR-0014](0014-offering-supertype-polymorphic-seam.md) (принято совместно — см. Q1), [ADR-0016](0016-provider-model.md).
 **Source vision**: `docsRU/01-discovery/future-features.md` §B (4-й буллет).

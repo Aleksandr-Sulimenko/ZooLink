@@ -298,6 +298,21 @@ components:
           description: >-
             Radius in meters (1km..100km, mirrors /geo-search radius_m). SS-4 coherence:
             present (non-null) iff lat & lng are present; null iff no point.
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: >-
+            OfferingRef seam (ADR-0014 §Amendment 2026-07-04 rule 11 — form-now, migration 0032). The
+            offering CATEGORY this saved search targets. Only ANIMAL_LISTING today; widened additively
+            when a species-less-offering subtype (service/goods) ships, so this contract never breaks.
+        offeringId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Always null for a saved search — a search is a QUERY, not a reference to one offering.
+            Present for symmetry with the favorites OfferingRef; offeringType is the discriminator.
         createdAt:
           type: string
           format: date-time
@@ -312,6 +327,13 @@ components:
           type: string
           maxLength: 100
           nullable: true
+        offeringType:
+          type: string
+          enum: [ANIMAL_LISTING]
+          default: ANIMAL_LISTING
+          description: >-
+            OfferingRef category (ADR-0014, migration 0032). Optional; defaults to ANIMAL_LISTING (the only
+            admissible value today). offeringId is NOT accepted — a saved search never references one offering.
         filters:
           allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
           description: >-
