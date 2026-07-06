@@ -219,6 +219,17 @@ erDiagram
         %% UK (organization_id, user_id)
     }
 
+    %% Multi-role junction (ADR-0022, migration 0034) — DORMANT: users.role stays the sole authz source
+    user_roles {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR_20 role
+        UUID actor_id FK
+        VARCHAR_10 actor_principal_type
+        TIMESTAMPTZ created_at
+        %% UK (user_id, role)
+    }
+
     %% Marketplace/Listings Domain
     listings {
         UUID id PK
@@ -539,6 +550,7 @@ erDiagram
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"
     users ||..o{ organization_users : "member of"
+    users ||..o{ user_roles : "holds roles (ADR-0022, dormant)"
     organizations ||..o{ branches : "has"
     branches }o..|| cities : "located in"
     listings }o..|| organizations : "linked to (optional)"

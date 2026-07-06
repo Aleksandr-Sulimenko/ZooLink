@@ -713,6 +713,8 @@ model users {
   service_credentials                                                 service_credentials[]
   species_species_created_byTousers                                   species[]                  @relation("species_created_byTousers")
   species_species_updated_byTousers                                   species[]                  @relation("species_updated_byTousers")
+  user_roles_user_roles_actor_idTousers                               user_roles[]               @relation("user_roles_actor_idTousers")
+  user_roles_user_roles_user_idTousers                                user_roles[]               @relation("user_roles_user_idTousers")
   cities                                                              cities?                    @relation(fields: [city_id], references: [id], onUpdate: NoAction)
   supported_languages                                                 supported_languages        @relation(fields: [preferred_language], references: [code], onUpdate: NoAction)
 
@@ -812,4 +814,20 @@ model consents {
   users_consents_user_idTousers  users    @relation("consents_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([user_id, consent_type, created_at(sort: Desc)], map: "idx_consents_current")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model user_roles {
+  id                               String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id                          String   @db.Uuid
+  role                             String   @db.VarChar(20)
+  actor_id                         String?  @db.Uuid
+  actor_principal_type             String   @default("HUMAN") @db.VarChar(10)
+  created_at                       DateTime @default(now()) @db.Timestamptz(6)
+  users_user_roles_actor_idTousers users?   @relation("user_roles_actor_idTousers", fields: [actor_id], references: [id], onUpdate: NoAction)
+  users_user_roles_user_idTousers  users    @relation("user_roles_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, role], map: "uq_user_roles_user_role")
+  @@index([user_id], map: "idx_user_roles_user")
 }

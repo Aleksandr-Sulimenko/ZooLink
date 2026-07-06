@@ -151,6 +151,24 @@ ALTER TABLE organization_users
     ADD CONSTRAINT fk_organization_users_user
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT;
 
+-- Multi-role junction (ADR-0022, migration 0034) — one account, many roles (owner + groomer +
+-- seller…). DORMANT in MVP: users.role stays the primary/authoritative authz source (rule 2); no
+-- authz code reads this table (a row grants nothing). Self-claim/revoke/authz-read semantics land
+-- with the first role-gated offering slice (rule 5). Role is orthogonal to principal_type (ADR-0011).
+CREATE TABLE user_roles (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role                 VARCHAR(20) NOT NULL,
+    -- ADR-0006/0011: who granted this role (may be an AI agent). NULL actor = system/backfill grant.
+    actor_id             UUID REFERENCES users(id) ON DELETE SET NULL,
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
+    created_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_user_roles_role CHECK (role IN ('USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER')),
+    CONSTRAINT chk_user_roles_actor_ptype CHECK (actor_principal_type IN ('HUMAN', 'AGENT')),
+    CONSTRAINT uq_user_roles_user_role UNIQUE (user_id, role)
+);
+CREATE INDEX idx_user_roles_user ON user_roles(user_id);
+
 -- ========== Animal Domain ==========
 CREATE TABLE animals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

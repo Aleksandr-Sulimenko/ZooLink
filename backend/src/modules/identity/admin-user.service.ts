@@ -113,7 +113,18 @@ export class AdminUserService {
       return toUserProfile(user, this.crypto.decrypt(user.email)); // no-op, no session churn
     }
 
-    const updated = await this.prisma.users.update({ where: { id: userId }, data: { role: dto.role } });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.users.update({ where: { id: userId }, data: { role: dto.role } });
+      // ADR-0022: keep the DORMANT multi-role junction consistent with the new primary role
+      // (so it does not go stale). Additive grant only — revoke/claim/authz-read semantics land
+      // with the first role-gated offering slice (rule 5). Idempotent via UNIQUE(user_id, role).
+      // Grants NOTHING: authz still reads users.role exclusively (rule 2).
+      await tx.user_roles.createMany({
+        data: [{ user_id: userId, role: dto.role, actor_id: actor.userId, actor_principal_type: actor.principalType }],
+        skipDuplicates: true,
+      });
+      return u;
+    });
     await this.auth.logout(userId); // revoke all families — token role claim is now stale
     await this.audit.record({
       actorId: actor.userId,

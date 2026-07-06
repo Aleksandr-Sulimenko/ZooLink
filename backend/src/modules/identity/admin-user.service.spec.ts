@@ -34,13 +34,19 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const findMany = jest.fn().mockResolvedValue([baseUser]);
   const count = jest.fn().mockResolvedValue(1);
   const updateMany = jest.fn().mockResolvedValue({ count: 1 });
-  const txUpdate = jest.fn().mockResolvedValue({ ...baseUser });
-  const tx = { users: { update: txUpdate }, notification_logs: { updateMany } };
+  const txUpdate = jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...baseUser, ...data }));
+  const createMany = jest.fn().mockResolvedValue({ count: 1 });
+  const tx = {
+    users: { update: txUpdate },
+    user_roles: { createMany },
+    notification_logs: { updateMany },
+  };
   const $transaction = jest
     .fn()
     .mockImplementation((cb: (t: typeof tx) => unknown) => cb(tx));
   const prisma = {
     users: { findUnique, update, findMany, count },
+    user_roles: { createMany },
     notification_logs: { updateMany },
     $transaction,
   } as unknown as PrismaService;
@@ -52,15 +58,15 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const crypto = new CryptoService(config);
   return {
     svc: new AdminUserService(prisma, config, audit, auth, crypto),
-    findUnique, update, findMany, count, updateMany, txUpdate, $transaction, record, logout, crypto,
+    findUnique, update, findMany, count, updateMany, txUpdate, createMany, $transaction, record, logout, crypto,
   };
 }
 
 describe('AdminUserService.setRole', () => {
   it('changes the role, revokes sessions, and audits before/after', async () => {
-    const { svc, update, logout, record } = setup();
+    const { svc, txUpdate, logout, record } = setup();
     const res = await svc.setRole(admin, 'u1', { role: 'BREEDER' });
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { role: 'BREEDER' } }));
+    expect(txUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: { role: 'BREEDER' } }));
     expect(logout).toHaveBeenCalledWith('u1');
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'identity.role_changed', beforeData: { role: 'USER' }, afterData: { role: 'BREEDER' } }),
@@ -68,10 +74,23 @@ describe('AdminUserService.setRole', () => {
     expect(res.role).toBe('BREEDER');
   });
 
-  it('is a no-op (no session churn) when the role is unchanged', async () => {
-    const { svc, update, logout } = setup();
+  // ADR-0022: the primary-role change syncs the DORMANT multi-role junction in the SAME
+  // transaction (additive grant, idempotent via skipDuplicates), with the ADMIN actor snapshot.
+  it('mirrors the new primary role into the user_roles junction in-tx (sync-on-write)', async () => {
+    const { svc, createMany, $transaction } = setup();
+    await svc.setRole(admin, 'u1', { role: 'BREEDER' });
+    expect($transaction).toHaveBeenCalledTimes(1);
+    expect(createMany).toHaveBeenCalledWith({
+      data: [{ user_id: 'u1', role: 'BREEDER', actor_id: 'admin-1', actor_principal_type: 'HUMAN' }],
+      skipDuplicates: true,
+    });
+  });
+
+  it('is a no-op (no session churn, no junction write) when the role is unchanged', async () => {
+    const { svc, txUpdate, createMany, logout } = setup();
     await svc.setRole(admin, 'u1', { role: 'USER' });
-    expect(update).not.toHaveBeenCalled();
+    expect(txUpdate).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
     expect(logout).not.toHaveBeenCalled();
   });
 

@@ -50,7 +50,9 @@ This model supports all bounded contexts of the ZooLink system:
 ### Identity Context
 - `users` - the core user entity
 - Relationships with authentication providers via dedicated columns
-- Roles and access rights
+- Roles and access rights (`users.role` is the single authoritative/primary role)
+- `user_roles` - multi-role junction (ADR-0022, migration 0034), **dormant** in MVP: reserves the
+  one-account-many-roles seam while `users.role` stays the sole authz source (see below)
 
 ### Organization Context
 - `organizations` - organizations and companies
@@ -253,6 +255,7 @@ irreversible artifact). See the MFA correction in `nfr/security.md`.
 9. `users.city_id → cities.id` (user's city for geo-search)
 10. `organization_users.organization_id → organizations.id`
 11. `organization_users.user_id → users.id`
+12. `user_roles.user_id → users.id` (ON DELETE CASCADE) and `user_roles.actor_id → users.id` (ON DELETE SET NULL) — multi-role junction (ADR-0022)
 
 ### Integrity Constraints
 - **CHK_CONSTRAINT_ON_ANIMAL_OWNERSHIP:** An animal must have either an individual owner or be owned by an organization (not both and not neither)
@@ -371,6 +374,26 @@ ANIMAL_LISTING case referential integrity rides the existing `listing_id` FK. In
 `idx_favorites_offering (offering_type, offering_id)` supports the future "who favorited this offering"
 lookup. The value-event subject (`Sold`/`ContactReveal`/view) becomes `(offering_type, offering_id)`
 in slice D5; the favorites controller (D11) builds against this contract.
+
+### Multi-role junction — `user_roles` (ADR-0022, migration 0034)
+
+`user_roles(id, user_id, role, actor_id, actor_principal_type, created_at)` reserves the
+**one-account-many-roles** seam (comfort BR — one account is owner + groomer + goods-seller + buyer)
+so that when role-gated offering features multiply (ADR-0014/0016) there is **no simultaneous
+retrofit** of a single-valued `users.role` plus every authz read. `role` uses the 7-role canon
+(identical vocabulary to `users.role`); `UNIQUE(user_id, role)` (`uq_user_roles_user_role`);
+FK `user_id → users(id) ON DELETE CASCADE`; index `idx_user_roles_user`. The `actor_id` +
+`actor_principal_type` (HUMAN|AGENT) snapshot records **who granted** the role — a grant may be made
+by an AI agent (ADR-0006/0011); role is orthogonal to `principal_type` and to `role_in_org`.
+
+**Dormant in MVP (ADR-0022 rules 2 & 5):** `users.role` remains the single, authoritative
+**primary/default-active** role and the **sole authz source** — no code reads `user_roles` for
+authorization, so a row here **grants nothing**. Migration 0034 backfills one row per user from the
+current `users.role`; the existing admin role-change path keeps the junction consistent by an additive
+**sync-on-write** (idempotent grant in the same transaction). **Self-claim, revocation, and
+authz-reads of the junction are deliberately deferred** to the first slice that ships a role-gated
+offering feature (rule 5); a self-claimed *regulated* role is publish-gated by its ADR-0016
+verification tier (the claim alone grants nothing regulated).
 
 ## Extensibility Mechanisms
 
