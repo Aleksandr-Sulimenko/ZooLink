@@ -125,6 +125,32 @@ Adopt **Option 2**. ZooLink models a **logical Offering supertype** realised as 
 
 **Owner ratification 2026-07-05** — the form-now split (rule 11) is confirmed «по рекомендациям». **`monetization_type` is reserved SPEC-ONLY**: only the field's shape (`lead-gen | subscription | take-rate | none`) is reserved on the offering contract; the monetization **model** is deferred to an explicit owner discussion (win-win, soft-start) and is **not** built now. This qualifies rule 9 and the "Defer" bullet above.
 
+## Amendment 2026-07-05 (D9) — `monetization_type` enum: RESERVED FORM ONLY
+
+*Doc-only reservation (Wave-D slice **D9**, `ECOSYSTEM_ADR_PLAN.md §Wave D`). Resolves the ADR_PLAN open question "confirm the enum and whether the read-model envelope must carry it now" (Q3 = Variant A, owner 2026-07-05). Additive clarification — does not change or reopen the Accepted decision; it fixes the enum's canonical form and makes the SPEC-ONLY pledge normative.*
+
+**WHAT** — Fix the canonical form of the reserved offering-side field `monetization_type` as a **closed enum with exactly four values**:
+
+| Enum value | Meaning (reserved — no behaviour in MVP) |
+|---|---|
+| `LEAD_GEN` | Offering monetized by charging for qualified leads/contacts routed to the provider. |
+| `SUBSCRIPTION` | Offering tied to a recurring provider subscription (e.g. B2B plan, premium profile). |
+| `TAKE_RATE` | Offering monetized by a commission/take on the transaction it produces. |
+| `NONE` | Offering carries no monetization (the MVP default for every offering). |
+
+- **Canonical casing = SCREAMING_SNAKE_CASE** (`LEAD_GEN | SUBSCRIPTION | TAKE_RATE | NONE`), aligning with the project's other reserved discriminators (`offering_type=ANIMAL_LISTING`, `principal_type=HUMAN|AGENT`). The lowercase-hyphen spellings used illustratively in rule 9 and the 2026-07-05 ratification note (`lead-gen | subscription | take-rate | none`) are **the same enum**, not a second vocabulary; the SCREAMING_SNAKE form above is authoritative for any future DB/wire representation.
+- **Additive-only**, exactly like `offering_type` (rule 3): a value is never repurposed or removed; new monetization forms are appended.
+
+**RESERVED FORM ONLY — no column, no behaviour, no pricing in MVP.** This amendment reserves **only the enum's shape**. It does **NOT** create any physical column (no `offerings.monetization_type`, no `listings.monetization_type`), does **NOT** add the field to any read-model envelope or public contract, does **NOT** introduce any monetization behaviour, and does **NOT** define any price, take-rate percentage, subscription tier, or lead-gen fee. The discovery read-model envelope (rule 2 / ADR-0018) **MUST NOT** carry `monetization_type` yet — answering the ADR_PLAN open question: **wait for the subtype, do not add it to the envelope now.**
+
+**Monetization MODEL is deferred to an explicit owner discussion** (win-win lens, soft-start for user acquisition — see memory `zoolink-monetization-winwin-soft-start`). No paid `feature_toggle` (`payments`, `boosted_listings`, `premium_profiles`, `vet_leadgen`, `service_marketplace`, `goods_marketplace`) is flipped, and no pricing is designed, until that conversation happens.
+
+**Born-with-subtype.** The real, physical `monetization_type` field is created **together with the first paid offering surface / first species-less subtype** (`service_offerings`, `product_offerings`, …) that actually monetizes — **not before**. Consistent with the "Defer — born with the subtype" bullet of the 2026-07-04 Amendment: nothing accumulates now that a later additive migration cannot supply, so deferring the physical field forces **no** rewrite.
+
+**WHY** — The ADR_PLAN left the enum's exact vocabulary and read-model timing unconfirmed (line 154). Leaving it informal invites two divergent spellings and a premature envelope column. Pinning the four values + casing now (cost ≈ zero, doc-only) removes that ambiguity while keeping the strategic monetization decision fully open and unforced.
+
+**WHY-BETTER for the whole project** — Preserves the owner's monetization freedom (the model is a live strategic decision, not a schema fact) while eliminating future naming drift and an accidental "form implies behaviour" reading. It honours §5 cost-of-change (no irreversible piece is deferred — the physical field is additive), keeps the two markets and paid toggles untouched (ADR-0002 + gated-behaviour discipline), and gives finance/growth an unambiguous vocabulary to model against without committing the platform to any price.
+
 ## Implementation Notes (for backend / alpha-analyst when the side is built — not now)
 - Form-now migration (separate task, backend): polymorphic `(offering_type, offering_id)` on `favorites` + `saved_searches`; polymorphic moderation subject; discovery read-model table + `offering_type` enum (`ANIMAL_LISTING` only); `monetization_type` + `geo_anchor` columns on the offering side. Each behind the rule "form now, behaviour gated."
 - alpha-analyst writes the polymorphic discovery + moderation **contract** (object-level authz, 404-no-leak, `market_scope` filter, read-model envelope) before any subtype code.

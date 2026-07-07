@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { OrgMembershipService } from './org-membership.service';
 import type { PrismaService } from '../db/prisma.service';
 
@@ -82,5 +83,92 @@ describe('OrgMembershipService.isPartyOrOrgAdmin (D4 — consolidated owner/part
     const svc = makeSvc(findFirst, jest.fn());
     await expect(svc.isPartyOrOrgAdmin(USER, null, null)).resolves.toBe(false);
     expect(findFirst).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * D10 — the shared object-level READ-scope gate (the read counterpart of isPartyOrOrgAdmin). This is the
+ * single definition of "owner OR org-admin OR operator → visible; else 404-no-leak" that listing /
+ * moderation-owner-result / content-report read paths delegate to. Every branch is pinned here so a
+ * future offering object inherits proven behaviour instead of re-deriving it (AUDIT3 FC-1).
+ */
+describe('OrgMembershipService.isVisibleToActor (D10 — shared read-scope)', () => {
+  const target = { ownerId: 'owner-x', organizationId: ORG };
+
+  it('anonymous (no actor) is never visible — WITHOUT hitting the DB', async () => {
+    const findFirst = jest.fn();
+    const svc = makeSvc(findFirst, jest.fn());
+    await expect(svc.isVisibleToActor(undefined, target)).resolves.toBe(false);
+    await expect(svc.isVisibleToActor(null, target)).resolves.toBe(false);
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('the owning party is visible (party short-circuit, no DB)', async () => {
+    const findFirst = jest.fn();
+    const svc = makeSvc(findFirst, jest.fn());
+    await expect(
+      svc.isVisibleToActor({ userId: 'owner-x', role: 'USER' }, target),
+    ).resolves.toBe(true);
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('an org-admin of the owning org is visible', async () => {
+    const svc = makeSvc(jest.fn().mockResolvedValue({ id: 'm1' }), jest.fn());
+    await expect(
+      svc.isVisibleToActor({ userId: 'stranger', role: 'USER' }, target),
+    ).resolves.toBe(true);
+  });
+
+  it.each(['MODERATOR', 'ADMIN'])('a %s operator is visible without a party/org match (no DB)', async (role) => {
+    const findFirst = jest.fn();
+    const svc = makeSvc(findFirst, jest.fn());
+    await expect(svc.isVisibleToActor({ userId: 'stranger', role }, target)).resolves.toBe(true);
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('a stranger (non-party, non-org-admin, non-operator) is NOT visible', async () => {
+    const svc = makeSvc(jest.fn().mockResolvedValue(null), jest.fn());
+    await expect(
+      svc.isVisibleToActor({ userId: 'stranger', role: 'USER' }, target),
+    ).resolves.toBe(false);
+  });
+
+  it('operatorRead:false suppresses the operator widening (owner-only surface, e.g. SS-1)', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const svc = makeSvc(findFirst, jest.fn());
+    // A MODERATOR with no party/org match is NOT visible when operator widening is off.
+    await expect(
+      svc.isVisibleToActor({ userId: 'stranger', role: 'MODERATOR' }, target, { operatorRead: false }),
+    ).resolves.toBe(false);
+    // The owner is still visible.
+    await expect(
+      svc.isVisibleToActor({ userId: 'owner-x', role: 'USER' }, target, { operatorRead: false }),
+    ).resolves.toBe(true);
+  });
+});
+
+describe('OrgMembershipService.assertCanReadOrNotFound (D10 — 404-no-leak gate)', () => {
+  const target = { ownerId: 'owner-x', organizationId: ORG };
+  const notFound = { message: 'X not found', code: 'NOT_FOUND' };
+
+  it('is a no-op (resolves) when the actor may read', async () => {
+    const svc = makeSvc(jest.fn(), jest.fn());
+    await expect(
+      svc.assertCanReadOrNotFound({ userId: 'owner-x', role: 'USER' }, target, notFound),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws a byte-identical NotFoundException (never 403) for a stranger — existence oracle closed', async () => {
+    const svc = makeSvc(jest.fn().mockResolvedValue(null), jest.fn());
+    await expect(
+      svc.assertCanReadOrNotFound({ userId: 'stranger', role: 'USER' }, target, notFound),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('throws the same NotFoundException for an anonymous reader', async () => {
+    const svc = makeSvc(jest.fn(), jest.fn());
+    await expect(svc.assertCanReadOrNotFound(undefined, target, notFound)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });

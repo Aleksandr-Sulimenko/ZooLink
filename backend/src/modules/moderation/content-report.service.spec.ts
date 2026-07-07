@@ -1,6 +1,7 @@
 import { ConflictException, HttpException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ContentReportService } from './content-report.service';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import type { PrismaService } from '../../lib/db/prisma.service';
 import type { AuditLogService } from '../../lib/audit/audit-log.service';
 import { weakEtag } from '../../lib/http/etag.util';
@@ -60,7 +61,10 @@ function setup(opts: SetupOpts = {}) {
   } as unknown as PrismaService;
   const record = jest.fn().mockResolvedValue(undefined);
   const audit = { record } as unknown as AuditLogService;
-  const svc = new ContentReportService(prisma, audit);
+  // D10: real OrgMembershipService over the same prisma mock — content reports have no owning org, so
+  // `isVisibleToActor` resolves via the party-equality/operator branches without touching organization_users.
+  const orgMembership = new OrgMembershipService(prisma);
+  const svc = new ContentReportService(prisma, audit, orgMembership);
   return { svc, content_reports, crCreate, crUpdateMany, record };
 }
 

@@ -130,7 +130,7 @@
 | **мультироль** | junction `user_roles(user_id, role)`; `users.role` остаётся primary (ADR-0022) | спит; authz MVP читает `users.role` | **D6** | **0034** |
 | **geo_anchor** | реконсилировать два near-me endpoint'а в один geo-контракт; зарезервировать `geo_anchor` как ключ discovery | point-now (lat/lng есть); PostGIS gated/отложен | **D7** | нет |
 | **рефакторинг marketOf** | CTE очереди + обе `marketOf` читают `listings.market`; убрать все 3 джойна `animals⋈species`; флип ADR-0018 Accepted | grep-gate зелёный (0 сырых джойнов вне AnimalService) | **D8** | нет |
-| **monetization_type** | spec-only резерв `{lead-gen,subscription,take-rate,none}` на контракте предложения | **SPEC-ONLY** (владелец 2026-07-05); *модель* монетизации отложена до явного обсуждения с владельцем (win-win, soft-start); рождается с подтипом, физической таблицы сейчас нет | **D9** | отложено |
+| **monetization_type** | spec-only резерв `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` на контракте предложения | **SPEC-ONLY ГОТОВО** (ADR-0014 §Amendment 2026-07-05 (D9)); enum канонизирован SCREAMING_SNAKE, envelope read-model НЕ ДОЛЖЕН нести его сейчас, *модель* монетизации отложена до обсуждения с владельцем (win-win, soft-start), рождается с подтипом | **D9** | ✅ зарезервировано (только документация) |
 | **market_scope (назначенный) + discovery read-model** | назначенный тег `{pet,livestock,both}` + материализованная проекционная таблица | **ОТЛОЖЕНО** до первого подтипа без вида; очередь/discovery используют кэш `listings.market` до тех пор | **D10** | отложено |
 | **контроллер favorites** | строить против контракта OfferingRef из D2 | — | **D11** | нет |
 
@@ -142,7 +142,7 @@
 5. **D6** — junction `user_roles` (ADR-0022, миграция **0034**).
 6. **D7** — реконсиляция geo_anchor / near-me (контракт/code-only).
 7. **D8** — рефакторинг marketOf завершён (code-only; нужны D3+D4); **флип ADR-0018 → Accepted сделан**; добавить CI grep-gate.
-8. **D9** — spec-резерв `monetization_type` (alpha-analyst; doc-only).
+8. **D9** — spec-резерв `monetization_type` (alpha-analyst; doc-only). ✅ ГОТОВО (ADR-0014 §Amendment 2026-07-05 (D9)).
 9. **D10** — discovery read-model + назначенный `market_scope`: **ОТЛОЖЕНО** до первого подтипа без вида (alpha-analyst пишет только заглушку контракта).
 10. **D11** — сборка контроллера favorites (нужен D2) + тесты.
 
@@ -151,7 +151,7 @@
 ### Решения владельца к вынесению
 1. **Модель мультироли (ADR-0022):** junction-with-primary vs `roles TEXT[]`; и политика self-claim (свободные нерегулируемые роли, регулируемые гейтятся тиром ADR-0016?).
 2. **`market_scope` для предложений без вида:** подтвердить назначенный `{pet,livestock,both}` с `both` = одно предложение в обоих контекстах (ADR-0015), и сцепку с верификацией для регулируемых категорий.
-3. **Форма `monetization_type`:** подтвердить enum и должен ли envelope read-model нести его сейчас (воронка North-star) или ждать подтип.
+3. **Форма `monetization_type`:** ✅ РЕШЕНО (D9, ADR-0014 §Amendment 2026-07-05) — enum = `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` (каноническое SCREAMING_SNAKE); envelope read-model НЕ ДОЛЖЕН нести его сейчас — ждать подтип.
 4. **Производный кэш `market` (D3):** подтвердить, что контролируемая денормализация (по-прежнему производна, просто кэширована) приемлема vs строгий always-join — она несёт производный `market`, а не назначенный `market_scope`, поэтому rule 7 ADR-0015 держится.
 5. **Флип ADR-0018 → Accepted:** подтвердить флип 2026-07-04 (низкий риск, подтверждает 0004).
 

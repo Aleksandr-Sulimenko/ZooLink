@@ -118,15 +118,28 @@ function setup(opts: SetupOpts = {}) {
   const audit = { record } as unknown as AuditLogService;
   const toggles = { isEnabled: jest.fn().mockResolvedValue(opts.agentEnabled ?? false) } as unknown as FeatureToggleService;
   const orgIsAdmin = jest.fn().mockResolvedValue(opts.orgAdmin ?? false);
+  // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
+  const isPartyOrOrgAdmin = jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
+    if (pid && pid === uid) return true;
+    if (org && (await orgIsAdmin(uid, org)) === true) return true;
+    return false;
+  });
   const orgMembership = {
     isOrgAdmin: orgIsAdmin,
     orgAdminIds: jest.fn().mockResolvedValue([]),
-    // D4: the party-or-org-admin predicate composes the mocked isOrgAdmin (parity with the real service).
-    isPartyOrOrgAdmin: jest.fn(async (uid: string, pid?: string | null, org?: string | null): Promise<boolean> => {
-      if (pid && pid === uid) return true;
-      if (org && (await orgIsAdmin(uid, org)) === true) return true;
-      return false;
-    }),
+    isPartyOrOrgAdmin,
+    // D10: the shared read-scope predicate composes isPartyOrOrgAdmin (parity with the real service).
+    isVisibleToActor: jest.fn(
+      async (
+        actor: { userId: string; role: string } | null | undefined,
+        target: { ownerId?: string | null; organizationId?: string | null },
+        o: { operatorRead?: boolean } = {},
+      ): Promise<boolean> => {
+        if (!actor) return false;
+        if ((o.operatorRead ?? true) && (actor.role === 'MODERATOR' || actor.role === 'ADMIN')) return true;
+        return isPartyOrOrgAdmin(actor.userId, target.ownerId, target.organizationId);
+      },
+    ),
   } as unknown as OrgMembershipService;
   const publish = jest.fn().mockResolvedValue(undefined);
   const outbox = { publish } as unknown as OutboxService;

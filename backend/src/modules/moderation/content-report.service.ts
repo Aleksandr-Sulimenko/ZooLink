@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
+import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal, PrincipalType } from '../../lib/auth/principal';
@@ -50,6 +51,7 @@ export class ContentReportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly orgMembership: OrgMembershipService,
   ) {}
 
   // ── File a report (CR-1/CR-2/CR-3/CR-11) ─────────────────────────────────────────────────────
@@ -124,11 +126,14 @@ export class ContentReportService {
   // ── Get one (object-scoped, CR-5 — non-owner USER → 404 no-leak) ─────────────────────────────
   async getById(id: string, actor: AuthPrincipal): Promise<{ report: ContentReportView; etag: string }> {
     const row = await this.findRow(id);
-    const isOperator = actor.role === 'MODERATOR' || actor.role === 'ADMIN';
-    if (!isOperator && row.reporter_id !== actor.userId) {
-      // 404, not 403 — don't leak existence (CR-5).
-      throw new NotFoundException({ message: 'Content report not found', code: 'NOT_FOUND' });
-    }
+    // CR-5: 404-no-leak read gate. D10: the shared read-scope helper (byte-parity — a report has no
+    // owning org, so `isPartyOrOrgAdmin(actor, reporter_id, null)` reduces to `reporter_id === actor`,
+    // plus MOD/ADMIN operator widening, exactly the old `isOperator || reporter===actor` test).
+    await this.orgMembership.assertCanReadOrNotFound(
+      actor,
+      { ownerId: row.reporter_id, organizationId: null },
+      { message: 'Content report not found', code: 'NOT_FOUND' },
+    );
     const principalTypes = await this.resolvePrincipalTypes([row]);
     return { report: this.toView(row, principalTypes), etag: this.etag(row) };
   }

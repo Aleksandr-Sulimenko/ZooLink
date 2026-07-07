@@ -130,7 +130,7 @@ Fixes the AUDIT3 forward-compat findings: **ADR-0018 circularity** (3 join sites
 | **multi-role** | `user_roles(user_id, role)` junction; `users.role` stays primary (ADR-0022) | dormant; MVP authz reads `users.role` | **D6** | **0034** |
 | **geo_anchor** | reconcile the two near-me endpoints to one geo contract; reserve `geo_anchor` as discovery key | point-now (lat/lng exist); PostGIS gated/deferred | **D7** | none |
 | **marketOf refactor** | queue-CTE + both `marketOf` read `listings.market`; drop all 3 `animals⋈species` joins; flip ADR-0018 Accepted | grep-gate green (0 raw joins outside AnimalService) | **D8** | none |
-| **monetization_type** | spec-only reservation of `{lead-gen,subscription,take-rate,none}` on the offering contract | **SPEC-ONLY** (owner 2026-07-05); monetization *model* deferred to explicit owner discussion (win-win, soft-start); born with subtype, no physical table now | **D9** | deferred |
+| **monetization_type** | spec-only reservation of `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` on the offering contract | **SPEC-ONLY DONE** (ADR-0014 §Amendment 2026-07-05 (D9)); enum canonicalised SCREAMING_SNAKE, read-model envelope MUST NOT carry it yet, monetization *model* deferred to owner discussion (win-win, soft-start), born with subtype | **D9** | ✅ reserved (doc-only) |
 | **market_scope (assigned) + discovery read-model** | assigned `{pet,livestock,both}` tag + materialised projection table | **DEFERRED** to first species-less subtype; queue/discovery use `listings.market` cache until then | **D10** | deferred |
 | **favorites controller** | build against the D2 OfferingRef contract | — | **D11** | none |
 
@@ -142,7 +142,7 @@ Fixes the AUDIT3 forward-compat findings: **ADR-0018 circularity** (3 join sites
 5. **D6** — `user_roles` junction (ADR-0022, migration **0034**).
 6. **D7** — geo_anchor / near-me reconciliation (contract/code-only).
 7. **D8** — marketOf refactor complete (code-only; needs D3+D4); **flip ADR-0018 → Accepted done**; add CI grep-gate.
-8. **D9** — `monetization_type` spec reservation (alpha-analyst; doc-only).
+8. **D9** — `monetization_type` spec reservation (alpha-analyst; doc-only). ✅ DONE (ADR-0014 §Amendment 2026-07-05 (D9)).
 9. **D10** — discovery read-model + assigned `market_scope`: **DEFERRED** to first species-less subtype (alpha-analyst writes the contract stub only).
 10. **D11** — favorites controller build (needs D2) + tests.
 
@@ -151,7 +151,7 @@ Migrations consumed: **0032** (D2), **0033** (D3), **0034** (D6). All else code 
 ### Owner decisions to surface
 1. **Multi-role model (ADR-0022):** junction-with-primary vs `roles TEXT[]`; and self-claim policy (free non-regulated roles, ADR-0016-tier-gated regulated roles?).
 2. **`market_scope` for species-less offerings:** confirm assigned `{pet,livestock,both}` with `both` = one offering in both contexts (ADR-0015), and the verification coupling for regulated categories.
-3. **`monetization_type` form:** confirm the enum and whether the read-model envelope must carry it now (North-star funnel) or wait for the subtype.
+3. **`monetization_type` form:** ✅ RESOLVED (D9, ADR-0014 §Amendment 2026-07-05) — enum = `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` (SCREAMING_SNAKE canonical); read-model envelope MUST NOT carry it now — wait for the subtype.
 4. **Derived `market` cache (D3):** confirm the controlled denormalisation (still derived, just cached) is acceptable vs strict always-join — it carries derived `market`, not the assigned `market_scope`, so ADR-0015 rule 7 holds.
 5. **ADR-0018 flip → Accepted:** confirm the 2026-07-04 flip (low-risk, reaffirms 0004).
 

@@ -510,9 +510,14 @@ export class ModerationService {
     if (!listing) throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
 
     // M-12: owner (seller or org-admin) OR MODERATOR/ADMIN. Non-owner USER → 403 (no detail leak).
-    const isOperator = actor.role === 'MODERATOR' || actor.role === 'ADMIN';
-    const isOwner = await this.orgMembership.isPartyOrOrgAdmin(actor.userId, listing.seller_id, listing.organization_id);
-    if (!isOperator && !isOwner) {
+    // D10: reuse the shared read-scope predicate for the boolean; M-12 keeps its 403 (not the helper's
+    // 404 default) because the surface leaks no detail and the listing existence is already known to
+    // the caller (byte-parity: !isVisibleToActor === old !isOperator && !isOwner).
+    const canView = await this.orgMembership.isVisibleToActor(actor, {
+      ownerId: listing.seller_id,
+      organizationId: listing.organization_id,
+    });
+    if (!canView) {
       throw new ForbiddenException({ message: 'Not permitted to view this listing’s moderation result', code: 'FORBIDDEN' });
     }
 

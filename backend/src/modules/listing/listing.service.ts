@@ -1118,11 +1118,17 @@ export class ListingService {
     throw new ForbiddenException({ message: 'Operation not permitted', code: 'FORBIDDEN' });
   }
 
-  /** Can the caller see a non-ACTIVE listing (L-5)? owner/seller, org-admin, MODERATOR, or ADMIN. */
+  /**
+   * Can the caller see a non-ACTIVE listing (L-5)? owner/seller, org-admin, MODERATOR, or ADMIN.
+   * D10: delegates to the shared read-scope predicate (`OrgMembershipService.isVisibleToActor`) so
+   * this listing surface and every other offering object share one definition of read visibility
+   * (byte-parity: anonymous→false; MOD/ADMIN→true; else party-or-org-admin).
+   */
   private async canSeeNonActive(actor: AuthPrincipal | undefined, row: ListingRow): Promise<boolean> {
-    if (!actor) return false;
-    if (actor.role === 'ADMIN' || actor.role === 'MODERATOR') return true;
-    return this.orgMembership.isPartyOrOrgAdmin(actor.userId, row.seller_id, row.organization_id);
+    return this.orgMembership.isVisibleToActor(actor, {
+      ownerId: row.seller_id,
+      organizationId: row.organization_id,
+    });
   }
 
   private async assertOrgAdmin(actor: AuthPrincipal, organizationId: string): Promise<void> {

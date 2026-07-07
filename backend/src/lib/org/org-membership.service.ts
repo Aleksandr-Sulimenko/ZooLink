@@ -1,5 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../db/prisma.service';
+
+/**
+ * The minimal actor shape the read-scope gate needs (a structural subset of `AuthPrincipal`, kept
+ * local so `lib/org` does not depend on `lib/auth`). `undefined`/`null` = an anonymous reader.
+ */
+export interface ReadScopeActor {
+  userId: string;
+  role: string;
+}
+
+/** The owning-party pointer of a read target: its principal owner id + owning-org id (either may be null). */
+export interface ReadScopeTarget {
+  ownerId: string | null | undefined;
+  organizationId: string | null | undefined;
+}
 
 /**
  * Shared organization-membership lookups. Extracted (audit 2026-06-30 MAJOR) from the four domain
@@ -34,6 +49,49 @@ export class OrgMembershipService {
     if (principalId && principalId === userId) return true;
     if (organizationId && (await this.isOrgAdmin(userId, organizationId))) return true;
     return false;
+  }
+
+  /**
+   * The object-level READ-visibility predicate — the read-scope counterpart of {@link isPartyOrOrgAdmin}
+   * (which is the *mutate* predicate, D4). An object is visible to `actor` when:
+   *   - the actor is the target's party or an ACTIVE org-admin of its owning org (`isPartyOrOrgAdmin`), OR
+   *   - `operatorRead` (default true) and the actor is a `MODERATOR`/`ADMIN` operator.
+   * An anonymous reader (`actor` null/undefined) is never visible. This is the single definition of the
+   * `anonymous→false; operator→true; else party-or-org-admin` idiom that was copy-pasted as
+   * `listing.canSeeNonActive`, `moderation.getOwnerResult`'s `isOperator||isOwner`, and
+   * `content-report.getById`'s `isOperator||reporter===actor` (security AUDIT3 FC-1: each new offering
+   * object re-derived read-scope by hand and one WILL diverge — animal already did). Pass
+   * `operatorRead:false` for a surface with NO operator widening (e.g. an owner-only saved query).
+   * Agent-as-principal (ADR-0006): keyed on `userId`/`role`, so an AGENT principal resolves identically.
+   */
+  async isVisibleToActor(
+    actor: ReadScopeActor | null | undefined,
+    target: ReadScopeTarget,
+    opts: { operatorRead?: boolean } = {},
+  ): Promise<boolean> {
+    if (!actor) return false;
+    const operatorRead = opts.operatorRead ?? true;
+    if (operatorRead && (actor.role === 'MODERATOR' || actor.role === 'ADMIN')) return true;
+    return this.isPartyOrOrgAdmin(actor.userId, target.ownerId, target.organizationId);
+  }
+
+  /**
+   * The shared 404-no-leak READ gate the audit (AUDIT3 FC-1) asked for as the DEFAULT for every
+   * offering object: assert `actor` may read `target`, else throw a **byte-identical** `NotFoundException`
+   * — never a 403 — so the endpoint cannot be used as an existence oracle over ids. Callers pass the
+   * exact `{message, code}` their contract specifies (kept at the call site so each surface's error body
+   * is unchanged). A surface that intentionally diverges (e.g. moderation's M-12 403) uses
+   * {@link isVisibleToActor} directly and throws its own status.
+   */
+  async assertCanReadOrNotFound(
+    actor: ReadScopeActor | null | undefined,
+    target: ReadScopeTarget,
+    notFound: { message: string; code: string },
+    opts: { operatorRead?: boolean } = {},
+  ): Promise<void> {
+    if (!(await this.isVisibleToActor(actor, target, opts))) {
+      throw new NotFoundException(notFound);
+    }
   }
 
   /** True when `userId` is an ACTIVE OWNER of `organizationId` (the org-admin scope). */

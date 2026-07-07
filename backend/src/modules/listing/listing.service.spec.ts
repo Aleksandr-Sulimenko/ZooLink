@@ -170,7 +170,19 @@ function setup(opts: SetupOpts = {}) {
     if (org && (await isOrgAdmin(uid, org)) === true) return true;
     return false;
   });
-  const orgMembership = { isOrgAdmin, orgAdminIds, isPartyOrOrgAdmin } as unknown as OrgMembershipService;
+  // D10: the shared read-scope predicate composes the mocked isPartyOrOrgAdmin (parity with the real service).
+  const isVisibleToActor = jest.fn(
+    async (
+      actor: { userId: string; role: string } | null | undefined,
+      target: { ownerId?: string | null; organizationId?: string | null },
+      o: { operatorRead?: boolean } = {},
+    ): Promise<boolean> => {
+      if (!actor) return false;
+      if ((o.operatorRead ?? true) && (actor.role === 'MODERATOR' || actor.role === 'ADMIN')) return true;
+      return isPartyOrOrgAdmin(actor.userId, target.ownerId, target.organizationId);
+    },
+  );
+  const orgMembership = { isOrgAdmin, orgAdminIds, isPartyOrOrgAdmin, isVisibleToActor } as unknown as OrgMembershipService;
   // ADR-0018: ListingService now obtains the animal + ownership decision from AnimalService.
   // The mock replays the real owner/org-admin/ADMIN predicate (parity with the removed
   // loadAnimal/assertOwnsAnimal) so the L-2 behaviour tests exercise the delegation end-to-end.
