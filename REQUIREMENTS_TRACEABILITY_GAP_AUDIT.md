@@ -23,7 +23,7 @@ scope: "docs/00-project-brief.md + docs/02-requirements/** ↔ docs/specs/** + a
 ## Легенда
 - ❌ **Uncovered** — требование/идея не имеет реализующего артефакта и не затрекано явно.
 - ⚠️ **Contradiction** — требование описано, но конфликтует со спекой/контрактом/схемой/ADR.
-- BR-ID — по `docs/specs/traceability Matrix.md`.
+- BR-ID — по `docs/specs/traceability-matrix.md`.
 
 ---
 

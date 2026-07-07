@@ -227,6 +227,6 @@ This specification addresses the following Non-Functional Requirements:
 ## Related Documents
 
 - [Performance Specification](performance_specification.md)
-- [Traceability Matrix](traceability%20Matrix.md)
+- [Traceability Matrix](traceability-matrix.md)
 - [Implementation Roadmap](10-implementation-roadmap.md)
 - 🌐 RU mirror: [docsRU/specs/09-testing-strategy.md](../../docsRU/specs/09-testing-strategy.md)

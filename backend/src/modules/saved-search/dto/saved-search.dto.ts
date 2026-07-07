@@ -11,6 +11,9 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { MARKETS as SAVED_SEARCH_MARKETS, type Market as SavedSearchMarket } from '../../../lib/market/market.const';
+
+export { SAVED_SEARCH_MARKETS, type SavedSearchMarket };
 
 /**
  * Saved-search Domain DTOs (geo-search-api.yaml v1.1.0 `/saved-searches`, spec 07 round-5, SS-1..SS-6).
@@ -28,10 +31,6 @@ import {
  * likewise validated in the service (422 RADIUS_OUT_OF_RANGE / GEO_PARAMS_INCOMPLETE, SS-4), mirroring
  * the listing Slice-2 `parseGeo` precedent — the contract assigns specific 422 codes, not an edge 400.
  */
-
-/** Market scope (ADR-0002 hard split). Mirrors the /geo-search `market` enum. */
-export const SAVED_SEARCH_MARKETS = ['pet', 'livestock'] as const;
-export type SavedSearchMarket = (typeof SAVED_SEARCH_MARKETS)[number];
 
 /**
  * Mirrors the /geo-search listing_type enum for Phase-2 re-executability (spec 07 §157). `leasing`

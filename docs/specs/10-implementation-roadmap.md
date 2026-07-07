@@ -242,7 +242,7 @@ Each feature should meet the following before considered complete:
 
 ## Related Documents
 
-- [Traceability Matrix](traceability%20Matrix.md)
+- [Traceability Matrix](traceability-matrix.md)
 - [Testing Strategy](09-testing-strategy.md)
 - [Specs Index](README.md)
 - 🌐 RU mirror: [docsRU/specs/10-implementation-roadmap.md](../../docsRU/specs/10-implementation-roadmap.md)

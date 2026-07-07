@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
 import { AuditLogService } from '../../lib/audit/audit-log.service';
 import { FeatureToggleService } from '../../lib/feature-toggle/feature-toggle.service';
+import { ESCALATE_FACTOR, SLA_TARGET_SECONDS } from '../../lib/moderation/sla.const';
 import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import { OutboxService } from '../../lib/outbox/outbox.service';
 import { paginate, type Paginated } from '../../lib/pagination/page';
@@ -37,10 +38,7 @@ import {
 
 /** Claim lock TTL (spec 12 round-5 MOD_LOCK_TTL = 15 min). */
 const MOD_LOCK_TTL_MIN = 15;
-/** SLA targets in seconds (ADR-0003: pet <4h, livestock <6h). Config-owned; constants in MVP. */
-const SLA_TARGET_SECONDS: Record<Market, number> = { pet: 4 * 3600, livestock: 6 * 3600 };
-/** Beyond BREACH_FACTOR× the target the item is ESCALATED (to ADMIN; still PENDING — M-13, no auto-decide). */
-const ESCALATE_FACTOR = 2;
+/** SLA targets + escalation factor (single source: lib/moderation/sla.const — pet <4h, livestock <6h; ×2). */
 /** The feature gate for AGENT decisioning (off in MVP → an AGENT decision is 403). M-8. */
 const AGENT_MODERATION_TOGGLE = 'agent_moderation';
 

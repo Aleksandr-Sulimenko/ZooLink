@@ -118,7 +118,7 @@ ZooLink — это платформа для связи зоопарков, пр
 │       │   += listing_state_machine.md
 │       │   += ownership_transfer_state_machine.md
 │       │   └── user_state_machine.md
-│       └── traceability Matrix.md
+│       └── traceability-matrix.md
 ├── docsRU
 │   ├── 00-project-brief.md
 │   ├── 01-discovery
@@ -206,7 +206,7 @@ ZooLink — это платформа для связи зоопарков, пр
 │       │   += listing_state_machine.md
 │       │   += ownership_transfer_state_machine.md
 │       │   += user_state_machine.md
-│       └── traceability Matrix.md
+│       └── traceability-matrix.md
 ├── tests
 │   └── performance
 └── ZooLink_ERD.mmd

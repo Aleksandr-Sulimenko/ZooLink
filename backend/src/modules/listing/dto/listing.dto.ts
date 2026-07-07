@@ -17,7 +17,12 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { LocalizedStringDto } from '../../../lib/http/localized-string.dto';
+import { toBool } from '../../../lib/http/transforms';
+import { MARKETS, type Market } from '../../../lib/market/market.const';
 import type { OwnerModerationResultView } from '../../moderation/dto/moderation.dto';
+
+export { LocalizedStringDto, MARKETS, type Market };
 
 /**
  * Listing Domain DTOs (listings-api.yaml, Slice 1). camelCase wire bodies (API_CONVENTIONS §0); the
@@ -32,30 +37,12 @@ import type { OwnerModerationResultView } from '../../moderation/dto/moderation.
 export const LISTING_TYPES = ['sale', 'breeding', 'show', 'adoption', 'stud_service', 'leasing'] as const;
 export type ListingType = (typeof LISTING_TYPES)[number];
 
-/** Markets (ADR-0002 hard split). The market filter joins via the animal's species. */
-export const MARKETS = ['pet', 'livestock'] as const;
-export type Market = (typeof MARKETS)[number];
 
 /** Lifecycle states (read-only on the wire; server-set). */
 export type ListingStatus = 'DRAFT' | 'PENDING_MODERATION' | 'ACTIVE' | 'EXPIRED' | 'SOLD' | 'DEACTIVATED';
 export type ModerationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CHANGES_REQUESTED';
 
 const CURRENCY = /^[A-Z]{3}$/;
-
-/** LocalizedString {en, ru} (API_CONVENTIONS §6). */
-export class LocalizedStringDto {
-  @ApiPropertyOptional({ description: 'English text' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  en?: string;
-
-  @ApiPropertyOptional({ description: 'Russian text' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  ru?: string;
-}
 
 export class ListingCreateDto {
   @ApiProperty({ format: 'uuid', description: 'Animal being listed (actor must own it, L-2)' })
@@ -222,13 +209,6 @@ export class ListingPhotoCreateDto {
   @IsInt()
   @Min(0)
   orderIndex?: number;
-}
-
-function toBool({ value }: { value: unknown }): unknown {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return value;
 }
 
 /** List query (listings-api.yaml listListings). snake_case query params per §12. */

@@ -245,7 +245,7 @@ status: "Approved"
 
 ## Связанные документы
 
-- [Матрица трассируемости](traceability%20Matrix.md)
+- [Матрица трассируемости](traceability-matrix.md)
 - [Стратегия тестирования](09-testing-strategy.md)
 - [Индекс спецификаций](README.md)
 - 🌐 EN-зеркало: [docs/specs/10-implementation-roadmap.md](../../docs/specs/10-implementation-roadmap.md)

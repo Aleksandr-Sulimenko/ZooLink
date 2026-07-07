@@ -2,14 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import type { Role } from '../../../lib/auth/principal';
-
-/** Parse the string query value 'true'/'false' into a real boolean (class-transformer's Boolean() is unsafe). */
-function toBool({ value }: { value: unknown }): unknown {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return value; // leave anything else to @IsBoolean to reject
-}
+import { toBool } from '../../../lib/http/transforms';
 
 /** 7-role canon (rbac-matrix.md; mirrors users.role CHECK). */
 export const ROLES = ['USER', 'MODERATOR', 'ADMIN', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER'] as const;

@@ -1,4 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { isURL } from 'class-validator';
+import { AVATAR_URL_OPTS } from '../dto/identity.dto';
 import {
   OAuthVerificationError,
   type OAuthIdentity,
@@ -66,10 +68,17 @@ export class TelegramOAuthAdapter implements OAuthProvider {
     }
 
     const fullName = [data.first_name, data.last_name].filter(Boolean).join(' ').trim() || null;
+    // Avatar host-guard (AUDIT3 security.md B2 tail): Telegram's `photo_url` is attacker-influencable
+    // upstream, and a stored `javascript:`/`data:`/http avatar renders as stored-XSS / SSRF the moment
+    // an operator or SPA surface shows it (ADR-0006 operators are agents/humans). Validate it against the
+    // SAME https-only allowlist the profile DTOs use (`AVATAR_URL_OPTS`); a value that fails is dropped
+    // to null rather than persisted — a legit Telegram CDN URL is always https, so login is unaffected.
+    const photoUrl = data.photo_url ?? null;
+    const avatarUrl = photoUrl && isURL(photoUrl, AVATAR_URL_OPTS) ? photoUrl : null;
     return {
       providerId: String(data.id),
       fullName: fullName ?? data.username ?? null,
-      avatarUrl: data.photo_url ?? null,
+      avatarUrl,
     };
   }
 }

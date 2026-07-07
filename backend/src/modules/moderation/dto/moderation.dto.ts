@@ -2,6 +2,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import type { PrincipalType } from '../../../lib/auth/principal';
+import { toBool } from '../../../lib/http/transforms';
+import { MARKETS, type Market } from '../../../lib/market/market.const';
+
+export { MARKETS, type Market };
 
 /**
  * Moderation Domain DTOs (moderation-api.yaml, Admin Slice 4a; ADR-0003 pre-moderation, ADR-0006/0011
@@ -24,22 +28,12 @@ export type SlaState = (typeof SLA_STATES)[number];
 export const LOCK_STATES = ['FREE', 'CLAIMED_BY_ME', 'CLAIMED_BY_OTHER', 'LOCK_EXPIRED'] as const;
 export type LockState = (typeof LOCK_STATES)[number];
 
-export const MARKETS = ['pet', 'livestock'] as const;
-export type Market = (typeof MARKETS)[number];
-
 /** action→decision map (verb→state). */
 export const ACTION_TO_DECISION: Record<ModerationAction, ModerationDecisionValue> = {
   APPROVE: 'APPROVED',
   REJECT: 'REJECTED',
   REQUEST_CHANGES: 'CHANGES_REQUESTED',
 };
-
-function toBool({ value }: { value: unknown }): unknown {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return value;
-}
 
 /** GET /moderation/queue filters. */
 export class ModerationQueueQueryDto {

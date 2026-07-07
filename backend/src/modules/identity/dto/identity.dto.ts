@@ -26,7 +26,7 @@ const E164 = /^\+?[1-9]\d{7,14}$/;
  * relative and http URLs (400 VALIDATION_ERROR). Enforces the `format: uri` the contract declares
  * (OpenAPI `format` is documentation-only — class-validator is the runtime gate).
  */
-const AVATAR_URL_OPTS = { protocols: ['https'], require_protocol: true };
+export const AVATAR_URL_OPTS = { protocols: ['https'], require_protocol: true };
 
 export class RegisterPhoneDto {
   @ApiProperty({ description: 'Phone number in E.164 format', example: '+79991234567' })

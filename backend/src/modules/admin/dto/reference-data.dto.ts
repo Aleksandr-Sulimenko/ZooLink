@@ -14,6 +14,8 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { toBool } from '../../../lib/http/transforms';
+import { MARKETS, type Market } from '../../../lib/market/market.const';
 
 /**
  * The managed lookup datasets (admin-api.yaml). species/breeds/cities are the A2 core (round-9);
@@ -31,23 +33,13 @@ export const DATASETS = [
 ] as const;
 export type Dataset = (typeof DATASETS)[number];
 
-const MARKETS = ['pet', 'livestock'] as const;
 const CODE = /^[a-z0-9_]+$/;
-
-/**
- * Parse a string query value 'true'/'false' into a real boolean. class-transformer's `Type(() => Boolean)`
- * is unsafe for query strings (`Boolean("false") === true`), which silently inverted `includeInactive=false`.
- */
-function toBool({ value }: { value: unknown }): unknown {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return value; // leave anything else to @IsBoolean to reject
-}
 
 /**
  * LocalizedString {en, ru} (API_CONVENTIONS §6). Backed by the name_localized JSONB column
  * (migration 0018). Both locales are editable by an admin; at least one must be non-empty.
+ * NOTE: intentionally NOT the shared `lib/http/localized-string.dto` — this admin variant is a
+ * stricter, distinct contract (both locales REQUIRED, max 100), so it stays local (Wave F).
  */
 export class LocalizedStringDto {
   @ApiProperty({ maxLength: 100, description: 'English display name' })
@@ -119,7 +111,7 @@ export class CreateReferenceDataDto {
   @ApiPropertyOptional({ enum: MARKETS, description: 'Market (species only; default pet)' })
   @IsOptional()
   @IsIn(MARKETS)
-  market?: (typeof MARKETS)[number];
+  market?: Market;
 
   @ApiPropertyOptional({ default: 0, description: 'Display ordering within the dataset (ascending)' })
   @IsOptional()
@@ -147,7 +139,7 @@ export class UpdateReferenceDataDto {
   @ApiPropertyOptional({ enum: MARKETS, description: 'Market (species only)' })
   @IsOptional()
   @IsIn(MARKETS)
-  market?: (typeof MARKETS)[number];
+  market?: Market;
 
   @ApiPropertyOptional({ description: 'Display ordering within the dataset (ascending)' })
   @IsOptional()

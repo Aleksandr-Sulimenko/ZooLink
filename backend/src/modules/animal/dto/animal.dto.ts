@@ -14,6 +14,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { LocalizedStringDto } from '../../../lib/http/localized-string.dto';
+import { toBool } from '../../../lib/http/transforms';
+
+export { LocalizedStringDto };
 
 /**
  * Animal Domain DTOs (animals-api.yaml). camelCase wire bodies (API_CONVENTIONS §0); the service
@@ -31,21 +35,6 @@ import {
 
 export const ANIMAL_SEXES = ['Male', 'Female'] as const;
 export type AnimalSex = (typeof ANIMAL_SEXES)[number];
-
-/** LocalizedString {en, ru} (API_CONVENTIONS §6). Backed by *_localized JSONB columns. */
-export class LocalizedStringDto {
-  @ApiPropertyOptional({ description: 'English text' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  en?: string;
-
-  @ApiPropertyOptional({ description: 'Russian text' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  ru?: string;
-}
 
 /** One health-record item (spec line 103: {type, date, note, vet?}). Shape-checked at the service. */
 export class HealthRecordDto {
@@ -253,14 +242,6 @@ export class AnimalUpdateDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
-}
-
-/** Parse a string query value 'true'/'false' into a real boolean (Boolean('false') === true is unsafe). */
-function toBool({ value }: { value: unknown }): unknown {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return value;
 }
 
 /** List filters (animals-api.yaml listAnimals). Query params are snake_case per the contract. */

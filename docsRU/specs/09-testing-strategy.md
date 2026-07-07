@@ -226,6 +226,6 @@ status: "Approved"
 ## Связанные документы
 
 - [Спецификация производительности](performance_specification.md)
-- [Матрица трассируемости](traceability%20Matrix.md)
+- [Матрица трассируемости](traceability-matrix.md)
 - [Дорожная карта реализации](10-implementation-roadmap.md)
 - 🌐 EN-зеркало: [docs/specs/09-testing-strategy.md](../../docs/specs/09-testing-strategy.md)

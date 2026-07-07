@@ -45,4 +45,31 @@ describe('TelegramOAuthAdapter', () => {
   it('rejects non-JSON input', async () => {
     await expect(adapter.verify({ code: 'not-json' })).rejects.toBeInstanceOf(OAuthVerificationError);
   });
+
+  it('passes a valid https photo_url through as the avatar', async () => {
+    const code = signedPayload({ id: 5, auth_date: now, photo_url: 'https://cdn.telegram.org/a.jpg' });
+    const identity = await adapter.verify({ code });
+    expect(identity.avatarUrl).toBe('https://cdn.telegram.org/a.jpg');
+  });
+
+  it('drops a hostile photo_url to null (avatar host-guard, AUDIT3 security B2 tail)', async () => {
+    // Even a correctly-signed payload must not persist a javascript:/data:/http avatar (stored-XSS/SSRF).
+    for (const bad of [
+      'javascript:alert(1)',
+      'data:text/html,<script>1</script>',
+      'http://cdn.telegram.org/a.jpg', // non-https rejected
+      '//evil/x.jpg', // protocol-relative
+      'not a url',
+    ]) {
+      const code = signedPayload({ id: 5, auth_date: now, photo_url: bad });
+      const identity = await adapter.verify({ code });
+      expect(identity.avatarUrl).toBeNull();
+    }
+  });
+
+  it('leaves avatar null when no photo_url is present', async () => {
+    const code = signedPayload({ id: 5, auth_date: now });
+    const identity = await adapter.verify({ code });
+    expect(identity.avatarUrl).toBeNull();
+  });
 });

@@ -1,14 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../db/prisma.service';
+import { ESCALATE_FACTOR, SLA_TARGET_SECONDS } from '../moderation/sla.const';
 import { OutboxService } from '../outbox/outbox.service';
-
-/**
- * SLA targets in seconds (ADR-0003: pet <4h, livestock <6h business-hours). Config-owned; constants in
- * MVP — kept in lock-step with the 4a queue's SLA_TARGET_SECONDS (modules/moderation/moderation.service).
- */
-const SLA_TARGET_SECONDS: Record<'pet' | 'livestock', number> = { pet: 4 * 3600, livestock: 6 * 3600 };
-/** Beyond this multiple of the target an overdue item is ESCALATED (the slaState the queue derives). */
-const ESCALATE_FACTOR = 2;
 
 interface OverdueRow {
   id: string;
