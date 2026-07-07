@@ -266,6 +266,61 @@ describe('Listings Slice 1 (e2e)', () => {
     await request(server()).delete(`/v1/listings/${id}/photos/${photoId}`).set('Authorization', `Bearer ${sellerTok}`).expect(204);
   });
 
+  // ── AUDIT2/3 gap-closers (all GREEN today; these lock the behaviour so a widen can't slip through) ──
+  it('WRITE_ROLES RBAC: USER-tier VET/GROOMER inherit USER → 201; the MODERATOR operator is NOT in the write set → 403', async () => {
+    // Corrects an AUDIT2/3 premise: the RolesGuard grants USER-tier roles (USER/BREEDER/FARMER/
+    // VETERINARIAN/GROOMER) the base USER permission (roles.guard.ts USER_TIER, rbac-matrix.md), and
+    // WRITE_ROLES contains 'USER' — so VET/GROOMER CAN create a listing (201), they are NOT 403. The real
+    // no-widen guard is the MODERATOR operator: not USER-tier, not in WRITE_ROLES → 403 (L-3, "MODERATOR dropped").
+    const vet = await prisma.users.create({ data: { full_name: 'LVet', role: 'VETERINARIAN', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
+    const groomer = await prisma.users.create({ data: { full_name: 'LGroomer', role: 'GROOMER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
+    const mkAnimal = (owner: string) =>
+      prisma.animals.create({ data: { owner_id: owner, species_id: speciesId, breed_id: breedId, nickname_localized: { en: 'V', ru: 'В' }, sex: 'Male', date_of_birth: new Date('2021-01-01T00:00:00Z') } });
+    try {
+      const [vetTok, groomerTok] = await Promise.all([devToken(vet.id), devToken(groomer.id)]);
+      const vetAnimal = await mkAnimal(vet.id);
+      const groomerAnimal = await mkAnimal(groomer.id);
+      // USER-tier inheritance: a VET/GROOMER who owns the animal CAN list it.
+      track(await create(vetTok, baseBody({ animalId: vetAnimal.id })).expect(201));
+      track(await create(groomerTok, baseBody({ animalId: groomerAnimal.id })).expect(201));
+      // The MODERATOR operator is excluded from WRITE_ROLES → the @Roles guard fires before validation → 403.
+      const modDenied = await create(modTok, baseBody({ animalId: vetAnimal.id })).expect(403);
+      expect(modDenied.body.code).toBe('FORBIDDEN');
+    } finally {
+      await prisma.listings.deleteMany({ where: { seller_id: { in: [vet.id, groomer.id] } } }).catch(() => undefined);
+      await prisma.animals.deleteMany({ where: { owner_id: { in: [vet.id, groomer.id] } } }).catch(() => undefined);
+      await prisma.users.deleteMany({ where: { id: { in: [vet.id, groomer.id] } } }).catch(() => undefined);
+    }
+  });
+
+  it('add-photo IDOR: a non-owner adding a photo to a seller DRAFT → 403 (mirrors the delete-photo L-3 negative)', async () => {
+    const animalId = await newAnimal(sellerId);
+    const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+    await request(server())
+      .post(`/v1/listings/${id}/photos`)
+      .set('Authorization', `Bearer ${otherTok}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ url: `http://localhost:9000/${randomUUID()}.jpg` })
+      .expect(403);
+    // Nothing was written.
+    expect(await prisma.listing_photos.count({ where: { listing_id: id } })).toBe(0);
+  });
+
+  it('add-photo own-media host: a URL off the S3/MinIO allowlist → 422 VALIDATION_ERROR (SSRF / moderation-swap defence, AUDIT3)', async () => {
+    const animalId = await newAnimal(sellerId);
+    const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+    const res = await request(server())
+      .post(`/v1/listings/${id}/photos`)
+      .set('Authorization', `Bearer ${sellerTok}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ url: `http://evil.example.com/${randomUUID()}.jpg` })
+      .expect(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(await prisma.listing_photos.count({ where: { listing_id: id } })).toBe(0);
+    // The allowlist is not a blanket block: an own-host URL still succeeds.
+    await addPhoto(sellerTok, id).expect(201);
+  });
+
   it('DELETE soft-withdraws → DEACTIVATED; a second withdraw → 409; L-3 non-owner → 403', async () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
