@@ -56,22 +56,25 @@ export class ModerationEscalationService {
    * per-market threshold (escalate iff `> target`, the ESCALATED boundary). Parameterized raw SQL; the
    * threshold compares the queue clock (`moderation_enqueued_at`) against `now()` per market.
    * Uses idx_listings_escalation_scan (partial on the status + escalated_at IS NULL predicate).
+   *
+   * Market (ADR-0002 pet vs livestock) is read from the derived `listings.market` cache (D3, NOT NULL) —
+   * NOT re-derived via a raw `animals ⋈ species` join. This is the ADR-0018 Part-2 (D8) de-coupling:
+   * every market reader reads the cache, so the scan touches only `listings` (byte-parity, since D3 keeps
+   * the cache == species.market). Enforced by scripts/check-no-raw-market-join.sh (now covers lib/scheduler).
    */
   private async findOverdue(): Promise<OverdueRow[]> {
     const petTarget = SLA_TARGET_SECONDS.pet * ESCALATE_FACTOR;
     const liveTarget = SLA_TARGET_SECONDS.livestock * ESCALATE_FACTOR;
     return this.prisma.$queryRaw<OverdueRow[]>`
       SELECT l.id,
-             s.market AS market,
+             l.market AS market,
              FLOOR(EXTRACT(EPOCH FROM (now() - l.moderation_enqueued_at)))::int AS waiting_seconds
       FROM listings l
-      JOIN animals a ON a.id = l.animal_id
-      JOIN species s ON s.id = a.species_id
       WHERE l.status = 'PENDING_MODERATION'
         AND l.escalated_at IS NULL
         AND l.moderation_enqueued_at IS NOT NULL
         AND EXTRACT(EPOCH FROM (now() - l.moderation_enqueued_at)) >
-            (CASE WHEN s.market = 'livestock' THEN ${liveTarget} ELSE ${petTarget} END)
+            (CASE WHEN l.market = 'livestock' THEN ${liveTarget} ELSE ${petTarget} END)
       ORDER BY l.moderation_enqueued_at ASC`;
   }
 

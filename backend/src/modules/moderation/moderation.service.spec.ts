@@ -39,6 +39,7 @@ function listingRow(over: Record<string, unknown> = {}): Record<string, unknown>
     assigned_to: null,
     locked_at: null,
     lock_expires_at: null,
+    market: 'pet', // D8: loadListing now selects the derived market cache; the event reads listing.market.
     ...over,
   };
 }

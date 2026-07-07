@@ -175,6 +175,17 @@ jobs:
       - name: RF data-residency check (fail-on-non-RF-region)
         run: bash scripts/check-rf-residency.sh
 
+  # Market de-coupling gate (ADR-0018 Part-2 / Wave D8). BLOCKING: fails if any listing/moderation
+  # read-path re-derives a listing's market with a raw `animals ⋈ species` join instead of reading the
+  # derived `listings.market` cache (D3) — the sole cross-aggregate access point is AnimalService.
+  # Documented exceptions are tagged inline with `grep-allow-market-join` (non-market projection only).
+  market-decoupling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No raw market-join in listing/moderation (ADR-0018 D8)
+        run: bash scripts/check-no-raw-market-join.sh
+
   security:
     runs-on: ubuntu-latest
     steps:

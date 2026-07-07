@@ -793,9 +793,8 @@ describe('ListingService', () => {
     });
 
     it('pet market: the 11th reveal within the hour → 429 + Retry-After (spec 16); the over-limit attempt logs nothing', async () => {
-      const { svc, queryRaw, crCreate } = setup({ listing: active() });
-      queryRaw.mockReset();
-      queryRaw.mockResolvedValue([{ market: 'pet' }]); // marketOf → pet on every call
+      // D8: market now comes from the derived `listings.market` cache on the loaded row, not a marketOf join.
+      const { svc, crCreate } = setup({ listing: active({ market: 'pet' }) });
       for (let i = 0; i < 10; i++) await svc.revealContact(LISTING, p(OTHER));
       const err = await svc.revealContact(LISTING, p(OTHER)).catch((e: unknown) => e);
       expect((err as HttpException).getStatus()).toBe(429);
@@ -804,9 +803,8 @@ describe('ListingService', () => {
     });
 
     it('livestock market: the 6th reveal within the hour → 429 (stricter 5/h limit, ADR-0002)', async () => {
-      const { svc, queryRaw } = setup({ listing: active() });
-      queryRaw.mockReset();
-      queryRaw.mockResolvedValue([{ market: 'livestock' }]);
+      // D8: stricter livestock bucket is selected from the cached `listings.market`, not a marketOf join.
+      const { svc } = setup({ listing: active({ market: 'livestock' }) });
       for (let i = 0; i < 5; i++) await svc.revealContact(LISTING, p(OTHER));
       const err = await svc.revealContact(LISTING, p(OTHER)).catch((e: unknown) => e);
       expect((err as HttpException).getStatus()).toBe(429);

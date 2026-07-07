@@ -138,6 +138,26 @@ describe('Listings Slice 2 — search (e2e)', () => {
     expect(ids(live)).not.toContain(petL);
   });
 
+  // ── D8/ADR-0018 Part-2: the market read is sourced from the derived listings.market cache ─────────
+  // `animals.species_id` is immutable (DB trigger), so a listing's market cannot legitimately drift by
+  // an animal swap — the only drift vector is the rare admin species.market correction, whose effect on
+  // existing listings is applied by the D3 recompute hook (a cache, momentarily stale is accepted). This
+  // test forces a cache/species disagreement to PROVE reads now come from `l.market`, not a live species
+  // join: under the pre-D8 join code the listing would still read as pet; under D8 it follows the cache.
+  it('D8: a market read follows the cached listings.market column, not a live animals⋈species join', async () => {
+    const petL = await seedActive(petSp, { titleEn: 'CacheSrc' });
+    // Seeded consistent with its pet species.
+    expect(ids(await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200))).toContain(petL);
+
+    // Force the cache to disagree with the (still pet) species. A join-based read would keep it 'pet'.
+    await prisma.listings.update({ where: { id: petL }, data: { market: 'livestock' } });
+
+    const asPet = await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200);
+    expect(ids(asPet)).not.toContain(petL); // dropped from pet — the read is l.market, not s.market
+    const asLive = await request(server()).get(`/v1/listings?market=livestock&limit=100`).expect(200);
+    expect(ids(asLive)).toContain(petL); // surfaces under livestock, per the cache
+  });
+
   it('species_id + breed_id narrow within the market', async () => {
     const withBreed = await prisma.animals.create({
       data: { owner_id: sellerId, species_id: petSp, breed_id: petBreed, nickname_localized: { en: 'B', ru: 'Б' }, sex: 'Male', date_of_birth: new Date('2021-01-01T00:00:00Z') },

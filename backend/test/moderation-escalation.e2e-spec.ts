@@ -25,8 +25,12 @@ describe('ModerationEscalationService (Slice 4c-A, live PG)', () => {
   let petSp: number;
   let liveSp: number;
 
-  /** Seed a PENDING_MODERATION listing for `speciesId`, enqueued `hoursAgo` hours ago. */
-  const seedPending = async (speciesId: number, hoursAgo: number): Promise<string> => {
+  /**
+   * Seed a PENDING_MODERATION listing for `speciesId`, enqueued `hoursAgo` hours ago. `marketOverride`
+   * forces the `listings.market` cache to a value that MAY diverge from the species — used only to prove
+   * the scan reads the cache column, not a live species join (D8b); in normal operation D3 keeps them equal.
+   */
+  const seedPending = async (speciesId: number, hoursAgo: number, marketOverride?: 'pet' | 'livestock'): Promise<string> => {
     const animal = await prisma.animals.create({
       data: { owner_id: userId, species_id: speciesId, breed_text_localized: { en: 'm', ru: 'м' }, nickname_localized: { en: 'a', ru: 'а' }, sex: 'Male', date_of_birth: new Date('2022-01-01') },
     });
@@ -36,7 +40,7 @@ describe('ModerationEscalationService (Slice 4c-A, live PG)', () => {
         animal_id: animal.id,
         seller_id: userId,
         listing_type: 'sale',
-        market: speciesId === liveSp ? 'livestock' : 'pet', // D3: derived-market cache mirrors species
+        market: marketOverride ?? (speciesId === liveSp ? 'livestock' : 'pet'), // D3: derived-market cache mirrors species
         title_localized: { en: 't', ru: 'т' },
         status: 'PENDING_MODERATION',
         moderation_status: 'PENDING',
@@ -115,6 +119,18 @@ describe('ModerationEscalationService (Slice 4c-A, live PG)', () => {
     const live13 = await seedPending(liveSp, 13);
     await service.runOnce();
     expect(await eventsFor(live13)).toHaveLength(1);
+  });
+
+  it('D8b: the SLA threshold + market tag follow the cached listings.market, NOT a live animals⋈species join', async () => {
+    // Force drift the cache to disagree with the species: livestock species, but market cache = 'pet'.
+    // - Reading l.market (pet, 8h threshold): 9h > 8h → ESCALATES, tag 'pet'.
+    // - A live animals⋈species join (livestock, 12h threshold) would say 9h < 12h → NOT escalate.
+    const id = await seedPending(liveSp, 9, 'pet');
+    await service.runOnce();
+    const events = await eventsFor(id);
+    expect(events).toHaveLength(1); // escalated → used the pet (cache) threshold, not the species one
+    const payload = events[0].payload as { market: string };
+    expect(payload.market).toBe('pet'); // tag came from l.market, not species.market ('livestock')
   });
 
   it('SLA-4: resetting escalated_at to NULL (the 4d re-enqueue contract) lets the item re-escalate', async () => {

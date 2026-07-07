@@ -56,6 +56,8 @@ interface ListingRow {
   assigned_to: string | null;
   locked_at: Date | null;
   lock_expires_at: Date | null;
+  /** D8 (ADR-0018 Part-2): derived market cache (D3), read instead of an animals⋈species probe. */
+  market: string;
 }
 
 /** One paginated queue row, with market + SLA/lock state computed SQL-side (M-13 read-only). */
@@ -169,10 +171,13 @@ export class ModerationService {
   }
 
   /**
-   * The PENDING_MODERATION base CTE with market (species join) and the M-13 read-only SLA/lock state
-   * computed SQL-side. `sla_state` mirrors {@link SLA_TARGET_SECONDS} × {@link ESCALATE_FACTOR}
-   * (pet <4h, livestock <6h; 2× → ESCALATED); `lock_state` is relative to the calling principal and
-   * `now()`. Shared by every getQueue sub-query so the page, total and tab counts stay consistent.
+   * The PENDING_MODERATION base CTE. `market` is read from the derived `listings.market` cache (D8/
+   * ADR-0018 Part-2) — no `species.market` join. The `animals⋈species` join survives ONLY to project
+   * `species.code` for display (`species_code`), NOT market — the single documented cross-aggregate
+   * exception carried by the D8 grep-gate marker. M-13 read-only SLA/lock state is computed SQL-side:
+   * `sla_state` mirrors {@link SLA_TARGET_SECONDS} × {@link ESCALATE_FACTOR} (pet <4h, livestock <6h;
+   * 2× → ESCALATED); `lock_state` is relative to the calling principal and `now()`. Shared by every
+   * getQueue sub-query so the page, total and tab counts stay consistent.
    */
   private queueBaseCte(actorUserId: string): Prisma.Sql {
     const petBreach = SLA_TARGET_SECONDS.pet;
@@ -184,11 +189,11 @@ export class ModerationService {
         SELECT l.id, l.animal_id, l.seller_id, l.organization_id, l.title_localized,
                l.status, l.moderation_status, l.moderation_enqueued_at,
                l.assigned_to, l.locked_at, l.lock_expires_at,
-               s.market AS market, s.code AS species_code,
+               l.market AS market, s.code AS species_code,
                GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - COALESCE(l.moderation_enqueued_at, l.locked_at, now())))))::int AS waiting_seconds
         FROM listings l
         JOIN animals a ON a.id = l.animal_id
-        JOIN species s ON s.id = a.species_id
+        JOIN species s ON s.id = a.species_id -- grep-allow-market-join: species_code display only; market is l.market (D8/ADR-0018)
         WHERE l.status = 'PENDING_MODERATION'
       ),
       q AS (
@@ -339,8 +344,9 @@ export class ModerationService {
 
     // The flip target (M-P0: APPROVE is the only path to ACTIVE; trigger is the backstop).
     const transition = this.transitionFor(dto.action);
-    // Market for the event envelope (ADR-0002) — resolved before the tx (immutable species join).
-    const market = await this.marketOf(listing.animal_id);
+    // Market for the event envelope (ADR-0002) — from the derived `listings.market` cache (D8/
+    // ADR-0018 Part-2) on the already-loaded row, not a live animals⋈species probe.
+    const market = listing.market as Market;
 
     const created = await this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
@@ -566,20 +572,15 @@ export class ModerationService {
       select: {
         id: true, animal_id: true, seller_id: true, organization_id: true, title_localized: true,
         status: true, moderation_status: true, moderation_enqueued_at: true,
-        assigned_to: true, locked_at: true, lock_expires_at: true,
+        assigned_to: true, locked_at: true, lock_expires_at: true, market: true,
       },
     })) as unknown as ListingRow | null;
     if (!row) throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
     return row;
   }
 
-  /** The market (ADR-0002) of a listing via its animal's species, or null if unresolved. */
-  private async marketOf(animalId: string): Promise<Market | null> {
-    const rows = await this.prisma.$queryRaw<{ market: string }[]>`
-      SELECT s.market FROM animals a JOIN species s ON s.id = a.species_id WHERE a.id = ${animalId}::uuid`;
-    const m = rows[0]?.market;
-    return m === 'pet' || m === 'livestock' ? m : null;
-  }
+  // D8 (ADR-0018 Part-2): the private `marketOf(animalId)` animals⋈species probe is gone — the market
+  // is read from the derived `listings.market` cache (D3) on the already-loaded row.
 
   private assertModeratable(row: ListingRow): void {
     if (row.status !== 'PENDING_MODERATION') {

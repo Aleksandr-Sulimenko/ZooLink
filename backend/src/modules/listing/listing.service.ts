@@ -578,7 +578,9 @@ export class ListingService {
       return { listingId: id, sellerId: listing.seller_id, sellerName, channels, revealedAt: existing.created_at, status: 'REVEALED' };
     }
 
-    const market = await this.marketOf(listing.animal_id);
+    // D8 (ADR-0018 Part-2): read the market from the derived `listings.market` cache (NOT NULL, D3),
+    // not a live animals⋈species join — the market-derivation cycle is broken, one cross-aggregate site.
+    const market = listing.market as Market;
     // Rate-limit gate — only a first, resolvable reveal consumes quota (empty/dedup paths never reach here).
     await this.enforceRevealRateLimit(actor.userId, market);
 
@@ -667,7 +669,7 @@ export class ListingService {
       throw new ConflictException({ message: 'Only an ACTIVE listing can be marked sold', code: 'LISTING_NOT_ACTIVE' });
     }
 
-    const market = await this.marketOf(existing.animal_id);
+    const market = existing.market as Market; // D8: from the `listings.market` cache, not a join.
     const soldAt = new Date();
     const row = await this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
@@ -754,8 +756,8 @@ export class ListingService {
    * D3 (ADR-0018 §Amendment) — recompute the derived `market` cache for every listing whose animal
    * belongs to `speciesId`, after an admin corrects that species' market (reference-data). Keeps the
    * cache consistent with its species source. The animal ids come from AnimalService (the owning
-   * aggregate); the write touches only the `listings` table — so no `FROM animals`/`JOIN species` lives
-   * in this module and the D8 grep-gate stays green. `market: { not }` makes the write a no-op when the
+   * aggregate); the write touches only the `listings` table — so no raw cross-aggregate market join
+   * lives in this module and the D8 grep-gate stays green. `market: { not }` makes the write a no-op when the
    * value is already correct (and the updated_at trigger only fires on actual row changes). Returns the
    * count of rows re-pointed.
    */
@@ -772,13 +774,8 @@ export class ListingService {
     return result.count;
   }
 
-  /** The market (ADR-0002) of a listing via its animal's species, or null if unresolved. */
-  private async marketOf(animalId: string): Promise<Market | null> {
-    const rows = await this.prisma.$queryRaw<{ market: string }[]>`
-      SELECT s.market FROM animals a JOIN species s ON s.id = a.species_id WHERE a.id = ${animalId}::uuid`;
-    const m = rows[0]?.market;
-    return m === 'pet' || m === 'livestock' ? m : null;
-  }
+  // D8 (ADR-0018 Part-2): the private `marketOf(animalId)` animals⋈species probe is gone — callers now
+  // read the derived `listings.market` cache (D3) directly off the already-loaded row. No round-trip, no join.
 
   // ── List & search (Slice 1 filters + Slice 2 market/geo/species/breed/sort) ──────────────────
   async list(query: ListingListQueryDto, actor: AuthPrincipal | undefined): Promise<Paginated<ListingView>> {
@@ -820,8 +817,8 @@ export class ListingService {
 
   /**
    * Slice-2 discovery path. Parameterized `$queryRaw` (Prisma.sql fragments — bound params only,
-   * ESLint-guarded, L2-15). The market filter (L2-1) is a MANDATORY AND-composed join clause
-   * `l.animal_id → a.species_id → s.market`, so it can only narrow, never widen across markets.
+   * ESLint-guarded, L2-15). The market filter (L2-1) is a MANDATORY AND-composed clause on the derived
+   * `listings.market` cache (D8/ADR-0018 Part-2 — no `species` join), so it can only narrow, never widen.
    * Geo applies the bbox prefilter (L2-8) + exact Haversine (L2-7) with NULL coords excluded (L2-9).
    */
   private async listDiscovery(
@@ -843,8 +840,10 @@ export class ListingService {
     if (query.price_min !== undefined) conds.push(Prisma.sql`l.price_cents >= ${query.price_min}`);
     if (query.price_max !== undefined) conds.push(Prisma.sql`l.price_cents <= ${query.price_max}`);
 
-    // L2-1: market — mandatory AND-composed species-join clause (narrow-only, never widen).
-    if (query.market !== undefined) conds.push(Prisma.sql`s.market = ${query.market}`);
+    // L2-1: market — mandatory AND-composed clause, now on the derived `listings.market` cache (D8/
+    // ADR-0018 Part-2), not `species.market` via a join. Still narrow-only (never widens): the cache is
+    // NOT NULL and equals species.market, so cross-market leakage remains impossible.
+    if (query.market !== undefined) conds.push(Prisma.sql`l.market = ${query.market}`);
     if (query.species_id !== undefined) conds.push(Prisma.sql`a.species_id = ${query.species_id}`);
     if (query.breed_id !== undefined) conds.push(Prisma.sql`a.breed_id = ${query.breed_id}`);
 
@@ -872,11 +871,15 @@ export class ListingService {
 
     const whereSql = conds.length ? Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}` : Prisma.empty;
 
+    // D8 (ADR-0018 Part-2): the `species` join is gone (market now reads `l.market`). The `animals`
+    // join survives ONLY to filter species_id/breed_id (animal columns, not market) and is added just
+    // when one of those filters is present — so a pure market/geo search touches only `listings`.
+    const needsAnimalJoin = query.species_id !== undefined || query.breed_id !== undefined;
+    const animalJoin = needsAnimalJoin ? Prisma.sql`JOIN animals a ON a.id = l.animal_id` : Prisma.empty;
     // The exact-distance filter (L2-7, ±100 m tolerance) wraps the bbox-prefiltered set.
     const fromSql = Prisma.sql`
       FROM listings l
-      JOIN animals a ON a.id = l.animal_id
-      JOIN species s ON s.id = a.species_id
+      ${animalJoin}
       ${whereSql}`;
     const havingSql = geo
       ? Prisma.sql`WHERE sub.distance_m <= ${geo.radiusM + BOUNDARY_TOLERANCE_M}`
