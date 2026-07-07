@@ -1,13 +1,18 @@
 openapi: 3.0.3
 info:
   title: ZooLink Geo-Search API
-  version: 1.1.0
+  version: 1.2.0
   description: >-
-    Radius search over listings (Haversine + bounding box on lat/lng; spec 07),
-    address geocoding proxy (Yandex.Maps), and saved searches (UC-GS-03,
-    saved_searches table). Proactive alerts on saved searches are Phase 2.
-    Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer auth with public opt-out (§2),
-    x-required-roles (§3), RFC7807 Problem errors (§4), {items, meta: PageMeta} pagination (§5).
+    Address geocoding proxy (Yandex.Maps) and saved searches (UC-GS-03, saved_searches table).
+    Proactive alerts on saved searches are Phase 2.
+    NEAR-ME CANON (spec 07 round-6 / Wave D D7): radius near-me search over listings is served by
+    the CANONICAL, LIVE `GET /v1/listings` discovery path (market + lat/lng/radius_km + sort=distance,
+    returning distanceM). The `/geo-search` path in THIS file is DEPRECATED — superseded by /listings,
+    has no controller (dead), retained only so the requirement is not silently dropped (planned removal
+    into a future dedicated geo domain, if ever built). `/geo/geocode` is PLANNED (not implemented).
+    Only `/saved-searches` here is LIVE. Conforms to API_CONVENTIONS.md: camelCase bodies (§0), bearer
+    auth with public opt-out (§2), x-required-roles (§3), RFC7807 Problem errors (§4), {items, meta:
+    PageMeta} pagination (§5).
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -16,12 +21,18 @@ security:
 paths:
   /geo-search:
     get:
-      summary: Radius search for listings near a point
+      summary: "[DEPRECATED — superseded by GET /v1/listings] Radius search for listings near a point"
       operationId: geoSearchListings
+      deprecated: true
       description: >-
-        Public (security opt-out). Returns ACTIVE listings within radiusM of (lat, lng), combinable
-        with standard listing filters. Results include distance from the point. Filter query params
-        stay snake_case (§12).
+        DEPRECATED / PLANNED-REMOVAL — NOT IMPLEMENTED (no controller). Superseded by the CANONICAL,
+        LIVE `GET /v1/listings` discovery path (spec 07 round-6 / Wave D D7): use `lat`/`lng`/`radius_km`
+        (1–100 km) + `market` + `sort=distance` there; it returns `distanceM`. This endpoint duplicated
+        that search with a different radius unit (`radius_m`) and `species:string`, and is kept only so
+        the requirement is not silently dropped (truth-hierarchy). Do NOT build a new client against it;
+        Phase-2 saved-search re-execution retargets to `/listings`, not here. May be removed or moved to
+        a future dedicated geo domain. (Historically: public security opt-out; ACTIVE listings within
+        radius_m of (lat,lng); snake_case filters §12.)
       security: []
       parameters:
         - in: query
@@ -69,9 +80,16 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /geo/geocode:
     get:
-      summary: Geocode an address to coordinates (Yandex.Maps proxy)
+      summary: "[PLANNED — not implemented] Geocode an address to coordinates (Yandex.Maps proxy)"
       operationId: geocodeAddress
-      description: Public (security opt-out).
+      deprecated: true
+      description: >-
+        PLANNED — NOT IMPLEMENTED (no controller). Address→coordinate geocoding is a future capability
+        (spec 07 "Out of Scope": geocoding handled by external Maps API), distinct from radius search —
+        it is neither a duplicate of the canonical `/listings` discovery nor live today. Reserved so the
+        requirement is tracked, not dropped (Wave D D7 / spec 07 round-6). `deprecated:true` flags "do not
+        build a client yet"; it becomes a real endpoint when the geocoding capability ships. Public
+        (security opt-out) when built.
       security: []
       parameters:
         - in: query

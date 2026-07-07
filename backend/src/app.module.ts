@@ -18,6 +18,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { AnimalModule } from './modules/animal/animal.module';
 import { ListingModule } from './modules/listing/listing.module';
 import { SavedSearchModule } from './modules/saved-search/saved-search.module';
+import { FavoriteModule } from './modules/favorite/favorite.module';
 import { ModerationModule } from './modules/moderation/moderation.module';
 import { HealthModule } from './health/health.module';
 
@@ -48,6 +49,7 @@ import { HealthModule } from './health/health.module';
     AnimalModule,
     ListingModule,
     SavedSearchModule,
+    FavoriteModule,
     ModerationModule,
     HealthModule,
   ],

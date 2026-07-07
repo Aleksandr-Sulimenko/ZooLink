@@ -719,6 +719,21 @@ export class ListingService {
     return { listing: this.toView(row), etag: this.etag(row) };
   }
 
+  /**
+   * D11 (favorites-api): assert the listing EXISTS and is VISIBLE to `actor` for the purpose of
+   * REFERENCING it (favoriting) — the GET /listings/{id} read rule (L-5) WITHOUT the view-capture
+   * side-effect: an ACTIVE listing is public; a non-ACTIVE one is owner/operator-only. A missing OR
+   * invisible listing raises an indistinguishable 404 (no-leak) — a user cannot favorite, and thereby
+   * probe the existence of, another user's DRAFT. Reuses the single read-visibility definition (D10)
+   * so favorites and every other offering surface agree on what a caller may see.
+   */
+  async assertVisibleToActor(id: string, actor: AuthPrincipal): Promise<void> {
+    const row = await this.findRow(id);
+    if (row.status !== 'ACTIVE' && !(await this.canSeeNonActive(actor, row))) {
+      throw new NotFoundException({ message: 'Listing not found', code: 'NOT_FOUND' });
+    }
+  }
+
   // ── Analytics (seller-owned — listings-api ListingAnalytics) ─────────────────────────────────
   /**
    * Seller-facing per-listing analytics. Owner-scoped: seller, org-admin, MODERATOR, or ADMIN

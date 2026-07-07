@@ -203,6 +203,72 @@ while `/geo-search` exposes `species:string`. When Phase-2 alerts/re-execution m
 migration 0021 added `leasing`, not yet a `/geo-search` value) must be handled by the mapping layer.
 This is recorded here per the truth-hierarchy "no requirement dropped silently" rule.
 
+## Near-me canon reconciliation + `geo_anchor` reservation (round-6, normative) — Wave D / D7
+
+> **WHAT:** (1) Declare **`GET /v1/listings`** (the Slice-2 discovery path — `market` + `lat`/`lng`/`radius_km` +
+> `sort=distance`, returning `distanceM`) the **single canonical near-me contract**. (2) Mark the **`/geo-search`**
+> endpoint (`geo-search-api.yaml`) **deprecated — superseded, planned-removal**: it duplicates the same radius search,
+> has **no controller** (`backend/src/modules/` has no geo module — grep-confirmed), and is retained only so the
+> requirement is not silently dropped. (3) Mark **`/geo/geocode`** **planned (not implemented)** — address→coordinate
+> geocoding is a future capability (spec §"Out of Scope": geocoding via external Maps API), distinct from radius search;
+> it is neither a duplicate nor live. (4) Point Phase-2 saved-search re-execution at the **canonical `/listings`** path,
+> not `/geo-search`. (5) Reserve **`geo_anchor`** as the offering-agnostic form of the search origin (see below). No
+> schema change, no code change to the live `/listings` path, no touch to the live `/saved-searches` contract.
+>
+> **WHY:** the corpus carried **two conflicting near-me contracts** — `/geo-search` (`radius_m`, 1000–100000 m,
+> `species:string`, dead yaml) and `/listings` discovery (`radius_km`, 1–100, `species_id:int`, LIVE in code). A
+> developer or a Phase-2 mapping layer could not tell which one is authoritative, and the saved-search spec (§159, §201)
+> still routes re-execution to the dead endpoint. Left unreconciled this forces a guess on the project's near-me surface.
+>
+> **WHY-BETTER-for-the-whole-project:** one authoritative discovery contract (no divergent radius unit / species type /
+> `listing_type=leasing` gap to keep in sync); the dead `/geo-search` is flagged, not deleted, so the business
+> requirement survives to a future dedicated geo domain if one is ever built; **reserving `geo_anchor` now** means the
+> future *find-nearby-for-services/goods* (ecosystem vision) extends the same discovery key across offering subtypes
+> **without an API rewrite** — the anti-rewrite phase rule applied to geo, mirroring the OfferingRef seam (ADR-0014).
+
+**Canon (normative):**
+
+| Concern | Canonical (LIVE) | Deprecated / Planned |
+|---|---|---|
+| Radius near-me search over listings | **`GET /v1/listings`** with `lat`,`lng`,`radius_km` (1–100), `market`, `sort=distance`, response `distanceM` | `GET /geo-search` (`radius_m`) — **deprecated, superseded, planned-removal; no controller (dead)** |
+| Address → coordinates | — (none in MVP) | `GET /geo/geocode` — **planned (not implemented)**; future external-Maps proxy |
+| Save/list/delete a search | **`/saved-searches`** (LIVE, SS-1..SS-6) — unchanged | — |
+
+**Unit reconciliation (Phase-2 mapping, documented — supersedes §159/§201 routing):** a saved search stores `radius_m`
+(meters); the canonical `/listings` path takes `radius_km`. Phase-2 re-execution/alerts MUST map the stored search to
+**`/listings`** params: `radius_km = round(radius_m / 1000)`, `species → species_id` (int lookup), and handle the
+`listing_type=leasing` value (present on `/listings`). The prior text that maps to `/geo-search` is retained above as the
+historical record but is **no longer the target** — the target is the canonical `/listings` path.
+
+### `geo_anchor` — offering-agnostic discovery-origin reservation (form-only; no implementation)
+
+`geo_anchor` is the **reserved abstraction for "where the searcher is looking"**, kept offering-agnostic so future
+find-nearby over **services / goods / expertise** (ecosystem vision) reuses one discovery key instead of re-deriving a
+per-offering geo API.
+
+- **Today's concrete form (the only implemented case):** a `geo_anchor` is a **point + radius** — the `lat`/`lng`/`radius_km`
+  triple already on `GET /v1/listings`. Nothing changes in the live contract; the current params ARE the point-form of
+  `geo_anchor`.
+- **Reserved future forms (deferred, gated — NOT built here):** a **named place / city-or-region polygon**, a provider
+  **service-area** (a seller/vet/groomer coverage zone), and a **PostGIS `geography`** backing store. These are Фаза 2+
+  per ADR-0009 (PostGIS is explicitly Target, not MVP) and remain deferred/gated — this section reserves only the
+  **shape and the name**, no column, no endpoint, no behaviour.
+- **Invariants that MUST hold when any richer form ships:**
+  - **G7-1 (market stays separated):** `geo_anchor` is offering-and-market-agnostic as a *location*, but discovery over
+    it MUST still AND-intersect the `market` filter (ADR-0002) — a geo anchor never widens or crosses markets.
+  - **G7-2 (one contract):** find-nearby for a new offering subtype extends the **canonical `/listings`-style**
+    discovery contract (or its offering-generalised successor) — it MUST NOT resurrect a parallel `/geo-search`-style
+    endpoint.
+  - **G7-3 (OfferingRef pairing):** when discovery spans offerings, the `geo_anchor` result carries the polymorphic
+    `offeringType`/`offeringId` (ADR-0014 OfferingRef, migration 0032) so one nearby-list can mix subtypes coherently.
+  - **G7-4 (form-now, behaviour-deferred):** reserving `geo_anchor` grants **nothing** at runtime today — the only live
+    behaviour is the existing point+radius on `/listings`. Richer anchors are behind future gates.
+
+> Cross-refs: seam table in `docs/04-decisions/ECOSYSTEM_ADR_PLAN.md` (Wave D / **D7**, migration = none);
+> `AUDIT3/architect.md` (geo_anchor RESERVE-NOW); OfferingRef `ADR-0014 §Amendment 2026-07-04`. A dedicated numbered
+> ADR for `geo_anchor` is **not** minted here (D7 is contract/code-only, no schema); if a future richer form proves
+> structural, escalate to **architect** for an ADR at that time.
+
 ## Related Documents
 
 - [Glossary](glossary.md)

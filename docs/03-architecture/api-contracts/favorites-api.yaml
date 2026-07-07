@@ -9,11 +9,19 @@ servers:
   - url: /api/v1
 security:
   - bearerAuth: []
+# x-required-roles drift-fix (D11, 2026-07-07):
+# WHAT: added VETERINARIAN & GROOMER to every operation's x-required-roles (was [USER, BREEDER, FARMER,
+#   MODERATOR, ADMIN]).
+# WHY: rbac-matrix.md:30,56 defines VETERINARIAN & GROOMER as "USER + extra capabilities"; favoriting is a
+#   strict subset of the basic USER action, so their omission was drift — the identical fix the sibling
+#   saved-search contract already applied. Without it those roles get a 403 on their own personal collection.
+# WHY-BETTER: aligns the contract with the RBAC source of truth and with the saved-search precedent (one
+#   consistent "USER + extra" role set across personal-collection surfaces); purely additive, no behaviour change.
 paths:
   /favorites:
     get:
       summary: List the current user's favorite listings
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - { in: query, name: page,  schema: { type: integer, default: 1, minimum: 1 } }
         - { in: query, name: limit, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
@@ -34,7 +42,7 @@ paths:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     post:
       summary: Add a listing to favorites (idempotent)
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         "201": { description: Added (or already present) }
         "401": { $ref: "#/components/responses/Problem" }
@@ -42,7 +50,7 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
     delete:
       summary: Remove a listing from favorites (idempotent)
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         "204": { description: Removed (or was absent) }
         "401": { $ref: "#/components/responses/Problem" }

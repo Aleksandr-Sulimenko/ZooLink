@@ -23,6 +23,17 @@ paths:
         bbox prefilter per `specs/07-geo-search-service.md`), species/breed filters, and a
         whitelisted sort. Filter/sort query params stay **snake_case** (§12).
 
+        **This is the CANONICAL near-me contract** (spec 07 round-6 / Wave D D7). The `/geo-search`
+        endpoint in `geo-search-api.yaml` is **deprecated — superseded by this path** (it duplicated
+        the same radius search, has no controller). Build near-me clients against `GET /v1/listings`.
+
+        **`geo_anchor` reservation (form-only, spec 07 round-6):** the `lat`/`lng`/`radius_km` triple is
+        the **point-form of a reserved offering-agnostic `geo_anchor`** (the search origin). Richer anchors
+        — named place / region polygon / provider service-area / PostGIS `geography` — are Фаза 2+ (ADR-0009)
+        and **deferred/gated**; the name+shape are reserved so future find-nearby over services/goods reuses
+        this discovery key **without an API rewrite** (pairs with the OfferingRef seam, ADR-0014). Nothing
+        changes at runtime today: `geo_anchor` grants nothing beyond the existing point+radius here.
+
         **`market` — conditional-required (ADR-0002 no-leak, see D2 note).** `market` is
         **required** on the public/discovery path: any anonymous read, AND any request that
         supplies geo params (`lat`/`lng`/`radius_km`). It MAY be omitted only for an

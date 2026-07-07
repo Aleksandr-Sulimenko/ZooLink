@@ -1,13 +1,17 @@
 openapi: 3.0.3
 info:
   title: ZooLink Geo-Search API
-  version: 1.1.0
+  version: 1.2.0
   description: >-
-    Поиск по радиусу среди объявлений (Haversine + bounding box по lat/lng; спека 07),
-    прокси геокодирования адресов (Yandex.Maps) и сохранённые поиски (UC-GS-03,
-    таблица saved_searches). Проактивные алерты по сохранённым поискам — Фаза 2.
-    Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth с public opt-out (§2),
-    x-required-roles (§3), ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5).
+    Прокси геокодирования адресов (Yandex.Maps) и сохранённые поиски (UC-GS-03, таблица saved_searches).
+    Проактивные алерты по сохранённым поискам — Фаза 2.
+    КАНОН near-me (спека 07 round-6 / Wave D D7): поиск объявлений по радиусу обслуживает КАНОНИЧЕСКИЙ,
+    ЖИВОЙ путь `GET /v1/listings` (discovery: market + lat/lng/radius_km + sort=distance, возвращает
+    distanceM). Путь `/geo-search` в ЭТОМ файле УСТАРЕЛ — заменён на /listings, не имеет контроллера
+    (мёртвый), сохранён лишь чтобы требование не потерять молча (плановое удаление в будущий выделенный
+    geo-домен, если он появится). `/geo/geocode` — ЗАПЛАНИРОВАН (не реализован). Живой здесь только
+    `/saved-searches`. Соответствует API_CONVENTIONS.md: camelCase-тела (§0), bearer-auth с public opt-out
+    (§2), x-required-roles (§3), ошибки RFC7807 Problem (§4), пагинация {items, meta: PageMeta} (§5).
 servers:
   - url: /api/v1
     description: ZooLink API v1
@@ -16,12 +20,18 @@ security:
 paths:
   /geo-search:
     get:
-      summary: Поиск объявлений по радиусу около точки
+      summary: "[УСТАРЕЛО — заменён на GET /v1/listings] Поиск объявлений по радиусу около точки"
       operationId: geoSearchListings
+      deprecated: true
       description: >-
-        Публично (security opt-out). Возвращает ACTIVE-объявления в пределах radiusM от (lat, lng),
-        комбинируется со стандартными фильтрами объявлений. Результаты включают расстояние от точки.
-        Query-параметры filter — snake_case (§12).
+        УСТАРЕЛО / ПЛАНОВОЕ УДАЛЕНИЕ — НЕ РЕАЛИЗОВАНО (нет контроллера). Заменён на КАНОНИЧЕСКИЙ, ЖИВОЙ
+        путь `GET /v1/listings` (спека 07 round-6 / Wave D D7): используйте там `lat`/`lng`/`radius_km`
+        (1–100 км) + `market` + `sort=distance`; он возвращает `distanceM`. Этот эндпоинт дублировал тот
+        же поиск с другой единицей радиуса (`radius_m`) и `species:string`, сохранён лишь чтобы не потерять
+        требование молча (truth-hierarchy). НЕ пишите новых клиентов под него; Phase-2 повтор сохранённого
+        поиска перенаправлен на `/listings`, не сюда. Может быть удалён или перенесён в будущий выделенный
+        geo-домен. (Исторически: публично, security opt-out; ACTIVE-объявления в пределах radius_m от
+        (lat,lng); фильтры snake_case §12.)
       security: []
       parameters:
         - in: query
@@ -69,9 +79,16 @@ paths:
         '500': { $ref: '#/components/responses/Problem' }
   /geo/geocode:
     get:
-      summary: Геокодировать адрес в координаты (прокси Yandex.Maps)
+      summary: "[ЗАПЛАНИРОВАН — не реализован] Геокодировать адрес в координаты (прокси Yandex.Maps)"
       operationId: geocodeAddress
-      description: Публично (security opt-out).
+      deprecated: true
+      description: >-
+        ЗАПЛАНИРОВАН — НЕ РЕАЛИЗОВАН (нет контроллера). Геокодирование адрес→координаты — будущая
+        возможность (спека 07 "Вне области": геокодирование через внешний Maps API), отличная от поиска по
+        радиусу — сегодня это ни дубликат канонического discovery `/listings`, ни живой эндпоинт. Зарезервирован,
+        чтобы требование отслеживалось, а не терялось (Wave D D7 / спека 07 round-6). `deprecated:true` означает
+        «пока не пишите клиента»; станет реальным эндпоинтом, когда возможность геокодирования появится. Публично
+        (security opt-out) — когда будет построен.
       security: []
       parameters:
         - in: query
