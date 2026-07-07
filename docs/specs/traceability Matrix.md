@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-lastUpdated: "2026-06-30"
+version: "1.4"
+lastUpdated: "2026-07-07"
 author: "System Analyst"
 status: "Approved"
 #
@@ -26,3 +26,32 @@ status: "Approved"
 | BR-015 | BACKLOG-015 | 15-api-gateway-domain.md | 16.1 | (see spec User Stories) | 0001-tech-stack.md | (cross-cutting; auth, rate limiting) | auth-api.yaml + gateway concerns across all contracts |
 | BR-016 | BACKLOG-016 | 03-pet-marketplace-domain.md, 07-geo-search-service.md | (MVP additions) | (favorites, saved searches, content reports) | 0003-pre-moderation-workflow.md | favorites, saved_searches, content_reports | geo-search-api.yaml (/saved-searches); favorites-api.yaml (GET /favorites, POST/DELETE /listings/{id}/favorite) |
 | BR-017 | BACKLOG-017 | 01-identity-domain.md, ADR-0006 | (AI-agent principals) | (principal HUMAN/AGENT) | 0006-ai-agents-operate-platform.md | users.principal_type, moderation_decisions.moderator_id, service_credentials (migration 0017) | auth-api.yaml; service_credentials — agent-service-auth FORM (hashed-secret by AGENT principal, rotatable/revocable, gated, not seeded in MVP) |
+
+## Implementation status — Waves A–D (as of 2026-07-07, HEAD `deb8b37`)
+
+The rows above are BR→spec anchors; the slices below record what has since been **built** against those BRs. Each carries its ADR and migration so the matrix stays a live contract, not a snapshot. (Doc-only summary; the per-migration meaning is authoritative in `ZooLink/CLAUDE.md`, DB = 37 tables, migrations 0001–0034.)
+
+| BR | Slice (Wave) | ADR / migration | Status |
+|----|--------------|-----------------|--------|
+| BR-001 | PII-at-rest crypto seam (email/phone encrypt + blind index) | ADR-0019 / 0028 | ✅ built |
+| BR-001 | Versioned consent-record model + contact-prefs default-OFF (ст.10.1) | ADR-0020 / 0029 | ✅ built |
+| BR-001 / BR-017 | `user_roles` multi-role junction (**dormant** — `users.role` stays sole authz source) | ADR-0022 / 0034 | ✅ form built, behaviour deferred |
+| BR-002 | Ownership transfer + recipient-minted **claim code** counterparty discovery | ADR-0013 / 0023 | ✅ built |
+| BR-002 / BR-013 | Ownership-transfer notification path (first real outbox consumer, IN_APP channel) | ADR-0021 / 0030 | ✅ built |
+| BR-003 / BR-004 | Listing **view-count** capture (GAP-TRACE-006 — the one irreversibly-lost signal) | 0031 | ✅ built |
+| BR-003 / BR-004 | **Contact-exchange** revival — `contact_reveals` dedup + billing-unit UNIQUE | ADR-0020 / 0029 | ✅ built |
+| BR-003 / BR-004 / BR-007 | **OfferingRef** polymorphic seam on favorites + saved_searches (`offering_type/offering_id`) | ADR-0014 / 0032 | ✅ form built (ANIMAL_LISTING only) |
+| BR-003 / BR-004 / BR-007 | **derived-`market` cache** — decouple discovery/moderation reads from `animals ⋈ species` | ADR-0018 / 0033 | ✅ built (Part-2 D8/D8b done) |
+| BR-007 | `geo_anchor` / near-me endpoint reconciliation (point-form; PostGIS gated) | ADR-0014 (D7) | ✅ reconciled |
+| BR-012 | Moderation SLA-escalation (`Moderation.Escalated`, pet-4h/livestock-6h) | 0024 | ✅ built |
+| BR-016 | Favorites controller (`GET /favorites`, `POST/DELETE /listings/{id}/favorite`) | 0032 (D11) | ✅ built |
+| (future) | `monetization_type` `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` spec reservation | ADR-0014 §Amendment (D9) | ⏸ spec-only, model deferred |
+
+### Ecosystem expansion (multi-sided platform vision) — where it is tracked
+
+The multi-sided ecosystem vision (services + goods + expertise + find-nearby) is **promoted beyond discovery**: the strategic writeup lives in `docs/01-discovery/future-features.md` §Ecosystem Expansion, and it is decomposed into a tracked ADR plan in **`docs/04-decisions/ECOSYSTEM_ADR_PLAN.md`** (ADR-0014 offering seam, ADR-0015 market_scope, ADR-0016 provider tier, ADR-0018 cross-aggregate rule, ADR-0022 multi-role). **Open for architect/alpha-analyst:** formal apex business-requirement rows (BR-018+) in this matrix and in `docs/02-requirements/business-requirements/` do not yet exist — the vision is tracked as ADRs, not yet as numbered BRs. This is a decision-tier gap flagged for **architect**, not a doc-keeper mechanical fix.
+
+### Known divergences — tracked, not yet reconciled
+
+- **D10 — animal read-scope authz asymmetry.** `animal.getById` applies a CASL **owner-only** guard, whereas the animal **list** scope admits an **org-admin** read. A user who can see an animal in a list may be refused on the by-id fetch. This is a **known behavioural divergence** surfaced in Wave D10 (shared read-scope authz point); it is recorded here as a tracked issue for **architect/security** to rule on (is org-admin by-id read intended?) — **not** a code change made in this doc sweep. No requirement is dropped: the safer (narrower) owner-only guard currently holds on the sensitive path.
+- **Contract server-URL vs runtime prefix.** All 13 OpenAPI contracts declare `servers: url: /api/v1`; the NestJS runtime uses URI versioning `/v1/*` with no `/api` prefix (`backend/src/main.ts`). This is a **cross-contract** canon question (intended reverse-proxy `/api` prefix, or align all 13 to `/v1`?) for **architect/backend** — deliberately **not** patched on a single contract, which would only break its parity with the other twelve.

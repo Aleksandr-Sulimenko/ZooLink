@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-lastUpdated: "2026-06-30"
+version: "1.4"
+lastUpdated: "2026-07-07"
 author: "Системный аналитик"
 status: "Approved"
 #
@@ -26,3 +26,32 @@ status: "Approved"
 | BR-015 | BACKLOG-015 | 15-api-gateway-domain.md | 16.1 | (см. User Stories спеки) | 0001-tech-stack.md | (сквозное; auth, rate limiting) | auth-api.yaml + gateway-аспекты во всех контрактах |
 | BR-016 | BACKLOG-016 | 03-pet-marketplace-domain.md, 07-geo-search-service.md | (MVP-добавления) | (избранное, сохранённые поиски, жалобы) | 0003-pre-moderation-workflow.md | favorites, saved_searches, content_reports | geo-search-api.yaml (/saved-searches); favorites-api.yaml (GET /favorites, POST/DELETE /listings/{id}/favorite) |
 | BR-017 | BACKLOG-017 | 01-identity-domain.md, ADR-0006 | (ИИ-агенты-принципалы) | (принципал HUMAN/AGENT) | 0006-ai-agents-operate-platform.md | users.principal_type, moderation_decisions.moderator_id, service_credentials (миграция 0017) | auth-api.yaml; service_credentials — ФОРМА service-auth агента (хэш-секрет принципала AGENT, ротация/отзыв, gated, не сидится в MVP) |
+
+## Статус реализации — Волны A–D (на 2026-07-07, HEAD `deb8b37`)
+
+Строки выше — якоря BR→спека; слайсы ниже фиксируют, что с тех пор **построено** против этих BR. Каждый несёт свой ADR и миграцию, чтобы матрица оставалась живым контрактом, а не снимком. (Doc-only сводка; per-migration значение авторитетно в `ZooLink/CLAUDE.md`, БД = 37 таблиц, миграции 0001–0034.)
+
+| BR | Слайс (Волна) | ADR / миграция | Статус |
+|----|---------------|----------------|--------|
+| BR-001 | Шов PII-at-rest crypto (шифрование email/phone + blind index) | ADR-0019 / 0028 | ✅ построено |
+| BR-001 | Версионированная модель записи согласия + default контакт-prefs OFF (ст.10.1) | ADR-0020 / 0029 | ✅ построено |
+| BR-001 / BR-017 | Junction мультиролей `user_roles` (**dormant** — `users.role` остаётся единственным источником authz) | ADR-0022 / 0034 | ✅ форма построена, поведение отложено |
+| BR-002 | Смена владельца + обнаружение контрагента через **claim code** (генерируется получателем) | ADR-0013 / 0023 | ✅ построено |
+| BR-002 / BR-013 | Путь уведомлений смены владельца (первый реальный outbox-consumer, канал IN_APP) | ADR-0021 / 0030 | ✅ построено |
+| BR-003 / BR-004 | Захват **view-count** объявления (GAP-TRACE-006 — единственный необратимо теряемый сигнал) | 0031 | ✅ построено |
+| BR-003 / BR-004 | Возрождение **contact-exchange** — dedup `contact_reveals` + UNIQUE единицы биллинга | ADR-0020 / 0029 | ✅ построено |
+| BR-003 / BR-004 / BR-007 | **OfferingRef** полиморфный шов на favorites + saved_searches (`offering_type/offering_id`) | ADR-0014 / 0032 | ✅ форма построена (только ANIMAL_LISTING) |
+| BR-003 / BR-004 / BR-007 | **derived-`market` cache** — развязка чтений discovery/модерации от `animals ⋈ species` | ADR-0018 / 0033 | ✅ построено (Part-2 D8/D8b done) |
+| BR-007 | Согласование `geo_anchor` / near-me эндпоинтов (точечная форма; PostGIS gated) | ADR-0014 (D7) | ✅ согласовано |
+| BR-012 | SLA-эскалация модерации (`Moderation.Escalated`, pet-4h/livestock-6h) | 0024 | ✅ построено |
+| BR-016 | Контроллер favorites (`GET /favorites`, `POST/DELETE /listings/{id}/favorite`) | 0032 (D11) | ✅ построено |
+| (future) | Резервирование спеки `monetization_type` `{LEAD_GEN,SUBSCRIPTION,TAKE_RATE,NONE}` | ADR-0014 §Amendment (D9) | ⏸ spec-only, модель отложена |
+
+### Экосистемное расширение (видение многосторонней платформы) — где отслеживается
+
+Видение многосторонней экосистемы (услуги + товары + экспертиза + find-nearby) **продвинуто за пределы discovery**: стратегический разбор живёт в `docs/01-discovery/future-features.md` §Ecosystem Expansion, и декомпозирован в отслеживаемый ADR-план в **`docs/04-decisions/ECOSYSTEM_ADR_PLAN.md`** (ADR-0014 offering seam, ADR-0015 market_scope, ADR-0016 provider tier, ADR-0018 cross-aggregate rule, ADR-0022 multi-role). **Открыто для architect/alpha-analyst:** формальных apex-строк бизнес-требований (BR-018+) в этой матрице и в `docs/02-requirements/business-requirements/` пока нет — видение отслеживается как ADR, ещё не как нумерованные BR. Это gap уровня decision-tier, помеченный для **architect**, а не механический фикс doc-keeper.
+
+### Известные расхождения — отслеживаются, ещё не согласованы
+
+- **D10 — асимметрия authz read-scope животного.** `animal.getById` применяет CASL-guard **только-владелец**, тогда как **list**-scope животного допускает чтение **org-admin**. Пользователь, видящий животное в списке, может получить отказ на by-id fetch. Это **известное поведенческое расхождение**, всплывшее в Волне D10 (общая точка authz read-scope); зафиксировано здесь как отслеживаемая проблема для решения **architect/security** (задумано ли org-admin by-id чтение?) — **не** изменение кода в этом doc-свипе. Ни одно требование не потеряно: более безопасный (узкий) guard только-владелец сейчас держится на чувствительном пути.
+- **Server-URL контрактов vs префикс runtime.** Все 13 OpenAPI-контрактов объявляют `servers: url: /api/v1`; NestJS-runtime использует URI-версионирование `/v1/*` без префикса `/api` (`backend/src/main.ts`). Это **кросс-контрактный** канон-вопрос (задуманный reverse-proxy префикс `/api` или выравнивание всех 13 на `/v1`?) для **architect/backend** — намеренно **не** пропатчено на одном контракте, что лишь сломало бы его паритет с остальными двенадцатью.

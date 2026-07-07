@@ -348,9 +348,12 @@ components:
           type: string
           enum: [ANIMAL_LISTING]
           default: ANIMAL_LISTING
+          readOnly: true
           description: >-
-            Категория OfferingRef (ADR-0014, миграция 0032). Необязательно; по умолчанию ANIMAL_LISTING
-            (единственное допустимое значение сегодня). offeringId НЕ принимается — сохранённый поиск не ссылается на одно предложение.
+            Категория OfferingRef (ADR-0014, миграция 0032). **Задаётся сервером / read-only** — сервер
+            жёстко ставит ANIMAL_LISTING (единственное допустимое значение сегодня); значение клиента
+            игнорируется, поэтому поле объявлено ради симметрии, а не для ввода. offeringId НЕ принимается —
+            сохранённый поиск не ссылается на одно предложение.
         filters:
           allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
           description: >-

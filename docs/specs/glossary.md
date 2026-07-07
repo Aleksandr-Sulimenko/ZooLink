@@ -217,6 +217,18 @@ A table where rows can only be inserted, never updated/deleted (enforced by trig
 **Outbox pattern**  
 Reliability pattern: domain events are written to `outbox_events` in the same transaction as the state change, then published asynchronously to external systems.
 
+**OfferingRef** (polymorphic offering reference)  
+The `(offering_type, offering_id)` pair carried by `favorites` and `saved_searches` (ADR-0014, migration 0032) so discovery/favorites/saved-search key on an **offering** rather than a listing-only FK. Today `offering_type` is constrained to `ANIMAL_LISTING` (== `listing_id`); it is an additive, anti-god-table seam with **no** FK (the target is polymorphic). On a saved search `offering_type` is the discriminator and `offering_id` stays NULL (a search is a query, not one offering).
+
+**derived-`market` cache**  
+`listings.market VARCHAR(9)` (`pet|livestock`, ADR-0018 Amendment / migration 0033) caching the **derived** market — `species.market` reached via the animal — so discovery / moderation / the SLA-escalation scan read market with **zero** cross-aggregate joins (Wave D8/D8b). It caches the *derived* market, **not** the assigned `market_scope` tag (ADR-0015 rule 7 holds). A repo-wide grep-gate (`check-no-raw-market-join.sh`) forbids raw `animals ⋈ species` market reads outside the animal aggregate.
+
+**geo_anchor** (geo-anchor, reserved)  
+A first-class, offering-agnostic **search origin** for find-nearby discovery. Today its point-form is the `lat`/`lng`(+`radius_km`) triple (listings-api spec 07 round-6, reconciled in Wave D7); richer anchors (service-area, PostGIS) are a reserved, gated later swap and grant nothing at runtime now.
+
+**monetization_type** (reserved, spec-only)  
+Per-offering revenue-model discriminator `{LEAD_GEN, SUBSCRIPTION, TAKE_RATE, NONE}` (SCREAMING_SNAKE), reserved on the offering contract so the model is switchable without a rewrite (ADR-0014 §Amendment 2026-07-05 / Wave D9). **Spec-only:** the read-model envelope MUST NOT carry it yet, and the monetization *model* itself is deferred to explicit owner discussion.
+
 **Haversine / Bounding box**  
 Geo-search math: the Haversine formula computes great-circle distance between two lat/lng points; a bounding-box pre-filter narrows candidates before the precise distance check (MVP-primary geo path; PostGIS optional).
 

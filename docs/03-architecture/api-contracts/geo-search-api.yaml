@@ -349,9 +349,12 @@ components:
           type: string
           enum: [ANIMAL_LISTING]
           default: ANIMAL_LISTING
+          readOnly: true
           description: >-
-            OfferingRef category (ADR-0014, migration 0032). Optional; defaults to ANIMAL_LISTING (the only
-            admissible value today). offeringId is NOT accepted — a saved search never references one offering.
+            OfferingRef category (ADR-0014, migration 0032). **Server-derived / read-only** — the server
+            hard-sets it to ANIMAL_LISTING (the only admissible value today); a client value is ignored, so
+            this is advertised for symmetry, not for input. offeringId is NOT accepted — a saved search never
+            references one offering.
         filters:
           allOf: [ { $ref: '#/components/schemas/SavedSearchFilters' } ]
           description: >-
