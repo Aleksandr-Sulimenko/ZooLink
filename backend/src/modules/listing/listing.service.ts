@@ -17,7 +17,7 @@ import { CryptoService } from '../../lib/crypto/crypto.service';
 import { OutboxService } from '../../lib/outbox/outbox.service';
 import { RedisService } from '../../lib/redis/redis.service';
 import { AppConfigService } from '../../config/app-config.service';
-import { isAllowedMediaUrl, s3HostFromEndpoint } from '../../lib/media/media-url';
+import { isAllowedMediaUrl, mediaAllowedHosts } from '../../lib/media/media-url';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
@@ -153,7 +153,7 @@ export class ListingService {
    * Rejecting here (422) is defence-in-depth on top of the DTO's structural @IsUrl.
    */
   private assertOwnMediaHost(url: string): void {
-    const allowed = [s3HostFromEndpoint(this.config.get('S3_ENDPOINT'))];
+    const allowed = mediaAllowedHosts(this.config.get('S3_ENDPOINT'), this.config.get('MEDIA_CDN_HOST'));
     if (!isAllowedMediaUrl(url, allowed)) {
       throw new UnprocessableEntityException({
         message: 'Photo URL must reference our own media storage',

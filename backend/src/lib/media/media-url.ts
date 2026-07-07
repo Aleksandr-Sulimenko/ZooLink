@@ -20,6 +20,20 @@ export function s3HostFromEndpoint(s3Endpoint: string): string {
 }
 
 /**
+ * The full set of hosts durable media may be served from: always the S3/MinIO origin
+ * (`s3HostFromEndpoint(s3Endpoint)`), plus the optional prod CDN host (`MEDIA_CDN_HOST`) placed in
+ * front of the bucket. `cdnHost` is a bare host (`cdn.zoolink.ru`), added verbatim; empty/whitespace is
+ * ignored, so the MVP default (no CDN) yields exactly the S3 host. Keeping the build here (not at the
+ * call site) keeps the allowlist rule unit-testable in isolation.
+ */
+export function mediaAllowedHosts(s3Endpoint: string, cdnHost?: string): string[] {
+  const hosts = [s3HostFromEndpoint(s3Endpoint)];
+  const cdn = cdnHost?.trim();
+  if (cdn) hosts.push(cdn);
+  return hosts;
+}
+
+/**
  * True iff `url` is a well-formed http(s) URL whose host is in `allowedHosts`. Rejects non-URLs,
  * non-http(s) schemes (javascript:/data:/file:), and any host outside the allowlist.
  */

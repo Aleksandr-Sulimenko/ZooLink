@@ -75,6 +75,14 @@ export const envSchema = z.object({
   // default is rejected in prod (must be pinned to an approved RF id) — the intended trap.
   S3_REGION: z.string().min(1).default('ru-central1'),
 
+  // Optional prod CDN host placed in FRONT of the S3/MinIO origin (e.g. a Yandex CDN / caching layer
+  // over the bucket). When set, its host is ADDED to the media-URL allowlist (lib/media/media-url.ts)
+  // alongside the S3_ENDPOINT host, so listing photos served from the CDN pass the own-storage check
+  // (AUDIT3 media host allowlist, Wave B2). HOST only (no scheme/path), e.g. `cdn.zoolink.ru`. Empty =
+  // no CDN (S3 host is the sole allowed origin — the MVP default). Shape-only here; the allowlist build
+  // lives in lib/media so the rule stays testable in isolation.
+  MEDIA_CDN_HOST: z.string().optional().default(''),
+
   // Auth / JWT — secrets must be long enough to be meaningful.
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
@@ -147,6 +155,16 @@ export const envSchema = z.object({
   YOOKASSA_SECRET_KEY: z.string().optional().default(''),
 
   // Observability.
+  // /metrics scrape credential (ops secret). MetricsGuard reads it per-request straight from
+  // process.env (defence-in-depth gate), so it is NOT consumed off the typed config surface — but its
+  // PRESENCE is boot-validated here: OPTIONAL in dev/test (MetricsGuard's internal-client fallback
+  // covers local/in-cluster scraping), REQUIRED (≥16 chars) in production — enforced in the
+  // validateEnv block below, same discipline as AGENT_SERVICE_SIGNING_SECRET. WHY prod-required:
+  // without a token, prod MetricsGuard falls back to trusting the source IP (req.ip); behind the Caddy
+  // reverse proxy every request's remote address looks internal/loopback, so /metrics (business volumes
+  // + route/label cardinality) would be effectively world-readable. Requiring the token in prod closes
+  // the D8-gate 🟡 (AUDIT3 security.md). If set anywhere, must be ≥16 (a too-short token is a boot error).
+  METRICS_TOKEN: z.string().min(16).optional().or(z.literal('')),
   SENTRY_DSN: z.string().optional().default(''),
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
@@ -192,6 +210,18 @@ export function validateEnv(config: Record<string, unknown>): Env {
   ) {
     throw new Error(
       'Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: required in production (min 32 chars)',
+    );
+  }
+  // /metrics gate hardening (AUDIT3 security.md, D8 🟡): in production METRICS_TOKEN MUST be set (≥16,
+  // shape-checked above). Without it MetricsGuard falls back to trusting req.ip — and behind the reverse
+  // proxy every client looks internal — so the scrape endpoint would be world-readable. Optional in
+  // dev/test (the internal-client fallback is fine there). Empty string is treated as "not set".
+  if (
+    parsed.data.NODE_ENV === 'production' &&
+    !parsed.data.METRICS_TOKEN
+  ) {
+    throw new Error(
+      'Invalid environment configuration:\n  - METRICS_TOKEN: required in production (min 16 chars) — else MetricsGuard trusts req.ip behind the proxy and /metrics is world-readable',
     );
   }
   // D3 / OPS-11: Sign in with Apple is all-or-nothing. The adapter is deferred (stub-on-empty), but if

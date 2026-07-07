@@ -207,14 +207,29 @@ jobs:
       - name: Dependency audit — full tree (advisory)
         run: cd backend && npm audit --audit-level=high
         continue-on-error: true
-      # SAST / container scan are advisory until tuned (rules + SARIF upload + thresholds), then
-      # flip continue-on-error → false to make them blocking gates.
-      - name: SAST (Semgrep, OWASP)
-        uses: returntocorp/semgrep-action@v1
-        with: { config: p/owasp-top-ten }
+      # SAST / container scan are now BLOCKING gates, but tuned to HIGH-severity only so they gate on
+      # exploitable findings without drowning the build in low-confidence noise on the existing codebase
+      # (Wave F). Rationale for the threshold split:
+      #  - Semgrep: p/owasp-top-ten mixes ERROR (high-confidence, exploitable) with WARNING/INFO
+      #    (stylistic / low-confidence) rules. We BLOCK on ERROR-severity only (`--severity ERROR
+      #    --error`) and keep a full-severity pass as ADVISORY visibility. Run via the pinned CLI (the
+      #    deprecated returntocorp/semgrep-action gives no severity control through `with:`).
+      #  - Trivy: already scoped to HIGH,CRITICAL; making it blocking needs `exit-code: 1` (the action
+      #    exits 0 on findings by default). `ignore-unfixed: true` drops OS/transitive CVEs with no
+      #    available fix — those are un-actionable and would wedge every build.
+      # SARIF upload / a lower threshold are the next tightening step once this baseline is clean.
+      - name: SAST (Semgrep, OWASP Top-10) — BLOCKING on ERROR-severity
+        run: |
+          python3 -m pip install --quiet semgrep
+          semgrep --config p/owasp-top-ten --severity ERROR --error --quiet
+      - name: SAST (Semgrep, OWASP Top-10) — full-severity advisory (visibility)
+        run: semgrep --config p/owasp-top-ten --quiet
         continue-on-error: true
-      - name: Filesystem scan (Trivy)
+      - name: Filesystem scan (Trivy) — BLOCKING on HIGH,CRITICAL
         uses: aquasecurity/trivy-action@master
-        with: { scan-type: fs, severity: HIGH,CRITICAL }
-        continue-on-error: true
+        with:
+          scan-type: fs
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
       # DAST (OWASP ZAP baseline) runs against staging on a schedule, not per-PR.

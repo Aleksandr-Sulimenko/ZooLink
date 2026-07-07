@@ -35,6 +35,9 @@ describe('validateEnv — security defaults', () => {
     const parsed = validateEnv({
       ...noNodeEnv,
       AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+      // Defaulting to production also makes METRICS_TOKEN required — provide it so the parse reaches
+      // its natural NODE_ENV default rather than tripping the unrelated /metrics gate refine.
+      METRICS_TOKEN: 'm'.repeat(16),
     });
     expect(parsed.NODE_ENV).toBe('production');
   });
@@ -85,6 +88,7 @@ describe('validateEnv — RF data residency (ADR-0017)', () => {
     PII_DATA_KEY: 'd'.repeat(32),
     PII_BLIND_INDEX_KEY: 'e'.repeat(32),
     AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+    METRICS_TOKEN: 'm'.repeat(16),
     NODE_ENV: 'production',
   };
 
@@ -135,5 +139,55 @@ describe('validateEnv — RF data residency (ADR-0017)', () => {
       RESIDENCY_ALLOW_NON_RF_DEV: 'true',
     });
     expect(parsed.S3_REGION).toBe('us-east-1');
+  });
+});
+
+/**
+ * /metrics scrape-credential gate (AUDIT3 security.md, D8 🟡). In production METRICS_TOKEN MUST be set
+ * (≥16); without it MetricsGuard falls back to trusting req.ip, which behind the reverse proxy makes
+ * /metrics world-readable. Optional in dev/test (the internal-client fallback covers local scraping).
+ */
+describe('validateEnv — /metrics token gate (production-required)', () => {
+  const prodBase = {
+    DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    REDIS_URL: 'redis://localhost:6379',
+    S3_ENDPOINT: 'http://localhost:9000',
+    S3_ACCESS_KEY: 'x',
+    S3_SECRET_KEY: 'x',
+    S3_BUCKET: 'b',
+    JWT_ACCESS_SECRET: 'a'.repeat(32),
+    JWT_REFRESH_SECRET: 'b'.repeat(32),
+    PHONE_HASH_PEPPER: 'c'.repeat(32),
+    PII_DATA_KEY: 'd'.repeat(32),
+    PII_BLIND_INDEX_KEY: 'e'.repeat(32),
+    AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+    NODE_ENV: 'production',
+  };
+
+  it('THROWS at boot in production when METRICS_TOKEN is missing', () => {
+    expect(() => validateEnv({ ...prodBase })).toThrow(/METRICS_TOKEN: required in production/);
+  });
+
+  it('THROWS at boot in production when METRICS_TOKEN is empty', () => {
+    expect(() => validateEnv({ ...prodBase, METRICS_TOKEN: '' })).toThrow(
+      /METRICS_TOKEN: required in production/,
+    );
+  });
+
+  it('boots in production with a valid METRICS_TOKEN (≥16)', () => {
+    const parsed = validateEnv({ ...prodBase, METRICS_TOKEN: 'm'.repeat(16) });
+    expect(parsed.METRICS_TOKEN).toBe('m'.repeat(16));
+  });
+
+  it('rejects a too-short METRICS_TOKEN even in production (shape-check ≥16)', () => {
+    expect(() => validateEnv({ ...prodBase, METRICS_TOKEN: 'short' })).toThrow(
+      /Invalid environment configuration/,
+    );
+  });
+
+  it('boots in dev WITHOUT a METRICS_TOKEN (internal-client fallback covers local scraping)', () => {
+    const parsed = validateEnv({ ...prodBase, NODE_ENV: 'development' });
+    expect(parsed.NODE_ENV).toBe('development');
+    expect(parsed.METRICS_TOKEN).toBeUndefined();
   });
 });
