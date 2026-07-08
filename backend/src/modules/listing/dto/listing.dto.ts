@@ -44,6 +44,15 @@ export type ModerationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CHANGES_RE
 
 const CURRENCY = /^[A-Z]{3}$/;
 
+/**
+ * Upper bound for `priceCents` (minor units). `price_cents` is a BIGINT, but `@IsInt` alone accepts
+ * non-safe integers (e.g. 1e21) that overflow the column (PG 22003 → an unmapped 500) and lose integer
+ * precision in JSON before Prisma ever sees them. 10^12 minor units = 10 billion RUB — far above any
+ * legitimate animal/goods price, well inside JS's safe-integer range, and a clean 400 above it (P2 rider,
+ * AUDIT4 trash-test).
+ */
+const PRICE_CENTS_MAX = 1_000_000_000_000;
+
 export class ListingCreateDto {
   @ApiProperty({ format: 'uuid', description: 'Animal being listed (actor must own it, L-2)' })
   @IsUUID()
@@ -81,11 +90,12 @@ export class ListingCreateDto {
   @Type(() => LocalizedStringDto)
   descriptionLocalized?: LocalizedStringDto;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Price in minor units (≥0; L-9)' })
+  @ApiPropertyOptional({ nullable: true, description: 'Price in minor units (0..10^12; L-9)' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(PRICE_CENTS_MAX)
   priceCents?: number;
 
   @ApiPropertyOptional({ default: 'RUB', description: 'ISO-4217 currency' })
@@ -149,6 +159,7 @@ export class ListingUpdateDto {
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(PRICE_CENTS_MAX)
   priceCents?: number;
 
   @ApiPropertyOptional()

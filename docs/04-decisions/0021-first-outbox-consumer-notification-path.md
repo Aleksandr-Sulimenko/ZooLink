@@ -204,6 +204,43 @@ Adopt **Option 1**.
   scope here; transactional needs no consent).
 - [ADR-0008](0008-rf-provider-matrix.md): the RF email/SMS provider ports (form-now, deferred).
 
+## Amendment — 2026-07-08 (Slice H3 / AUDIT4 P2-5): reconcile promised vs built coverage; IN_APP read now exists
+
+This ADR stays **Accepted**; the amendment records the *reconciled reality* against §5 (event coverage)
+and §Negative, without rewriting the original prose (the honest history is preserved above).
+
+**WHAT.** Three findings (alpha-analyst F1/F3, backend-engineer D2) showed the built registry and the
+IN_APP channel had drifted from §5's promise. The reconciled truth as of Slice H3:
+
+- **Built & live in `NOTIFICATION_REGISTRY`:** `Moderation.Decided` (→ seller) and the full
+  **ownership-transfer lifecycle** `OwnershipTransfer.{Initiated,Accepted,Declined,Cancelled,Expired}`
+  (→ the other party / both on Expired). These match §5 and are proven end-to-end.
+- **Promised in §5 but NOT YET BUILT (registry has no entry) — DEFERRED, tracked here:**
+  `Listing.Expired` / `Listing.Sold` / `Listing.Activated` (→ seller) and `ContentReport.Actioned`
+  (→ reporter/owner). These events either have no producer yet or no seeded template; until a route +
+  template ship, the relay's "no matching consumer → mark processed" path applies (they are not
+  notified). This is a **known, documented deferral**, not silent drift — the honest state is that
+  IN_APP coverage today is *moderation-decision + transfer-lifecycle only*. Building the remaining
+  routes is a registry edit + template seed (a follow-up slice), exactly as the ADR's design intends.
+- **`OwnershipTransfer.Expired` starvation closed (P2-6):** a worker-side expiry sweeper
+  (`lib/scheduler/transfer-expiry.*`) now proactively expires overdue PENDING transfers and emits the
+  event in-tx, so this registered route actually fires without waiting for a lazy read.
+- **IN_APP is no longer write-only (P2-5):** `GET /v1/me/notifications` (notification-api.yaml,
+  own-scope, PageMeta, ETag) surfaces the materialised IN_APP rows, and the contract `type` enum now
+  includes `IN_APP`. The §Positive claim "outcomes stop happening in silence" and the ADR-0021 §3
+  "you were told" are now true **end-to-end** for the built event set.
+
+**Still deferred (unchanged):** the EMAIL/SMS provider channels; the analytics replay-sink / no-purge
+projection (§Neutral); IN_APP suppression. `notification_state_machine.md` should gain an IN_APP lane
+(`[*] → SENT`, terminal, no `notification_prefs` guard) and `event-catalog.md §3` should be corrected so
+its channel assignment + "registry allow-list" note match this reconciled set — routed to **doc-keeper**
+(EN↔RU) as a documentation-consistency follow-up (no behavioural change).
+
+**WHY-BETTER-for-the-whole-project.** Recording the *gap* between promise and build (rather than quietly
+trimming §5 or over-claiming completeness) keeps the ADR a truthful contract: a reader/agent sees exactly
+which events notify today and which are queued, and the deferral has an explicit close-out path. No
+Accepted decision was rewritten; the coverage promise remains the target, now with a dated reality check.
+
 ## References
 
 - `docs/specs/event-catalog.md` §1–§3 (outbox contract, catalog, event→notification matrix).

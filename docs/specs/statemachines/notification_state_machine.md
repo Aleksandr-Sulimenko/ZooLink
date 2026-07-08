@@ -1,7 +1,7 @@
 # Notification Delivery State Machine Specification
 
 ## Overview
-Defines the lifecycle states and transitions for a `notification_logs` record (one outbound EMAIL/SMS) in the ZooLink system. Delivery outcomes are driven by **provider delivery webhooks** (see `docs/specs/13-notification-domain.md`). A transient `QUEUED` stage exists at the application level before the row is persisted with status `SENT`.
+Defines the lifecycle states and transitions for a `notification_logs` record (one outbound EMAIL/SMS/IN_APP) in the ZooLink system. Delivery outcomes for the provider channels (EMAIL/SMS) are driven by **provider delivery webhooks** (see `docs/specs/13-notification-domain.md`). A transient `QUEUED` stage exists at the application level before the row is persisted with status `SENT`. The **IN_APP** channel (ADR-0021, the built MVP channel) has no provider and no webhook — see the IN_APP lane below.
 
 ## State Diagram
 
@@ -22,6 +22,25 @@ stateDiagram-v2
         notification_logs row starts at SENT
     end note
 ```
+
+### IN_APP lane (ADR-0021 — no provider, no webhook)
+
+```mermaid
+stateDiagram-v2
+    [*] --> SENT: outbox consumer materialises IN_APP row (in-tx, idempotent)
+    SENT --> [*]: terminal — read via GET /v1/me/notifications (no read-state mutation)
+    note right of SENT
+        IN_APP has no QUEUED/provider/DELIVERED/BOUNCED path:
+        the NotificationConsumer INSERTs one notification_logs
+        row (channel IN_APP, status SENT) transactionally per
+        recipient, deduped on idempotency_key. Terminal at SENT.
+        No notification_prefs guard (transactional, ФЗ-38 ≠ ad).
+        No read/unread flag today — the read endpoint is own-scope
+        and does not mutate state.
+    end note
+```
+
+> **(round-N, normative — IN_APP delivery lane, Slice H3 / ADR-0021 §Amendment 2026-07-08) WHAT:** documents the IN_APP channel's lifecycle, which differs from EMAIL/SMS: a single transition `[*] → SENT` (terminal). The first outbox consumer (`NotificationConsumer`) materialises one `notification_logs` row (channel `IN_APP`, status `SENT`) **in the same tx** as event processing, deduped on `idempotency_key` (event.id‖recipient‖template). There is **no** `QUEUED`, provider submit, `DELIVERED`/`BOUNCED`, or retry — no provider is involved. There is **no `notification_prefs` guard** (transactional, not advertising — ФЗ-38). The row is read own-scope via `GET /v1/me/notifications` and reading **does not mutate state** — there is deliberately **no read/unread flag** in MVP (none exists in the schema; do not invent one). **WHY:** the base state machine models only the provider (EMAIL/SMS) path, but ADR-0021 shipped IN_APP as the live MVP channel with a fundamentally different (provider-less, terminal-on-insert) lifecycle — a backend dev or agent reading this spec would otherwise wrongly expect a QUEUED→provider→webhook flow for IN_APP. **WHY-BETTER-for-the-whole-project:** it makes the spec match the built read path exactly (own-scope, no read-state), keeps the provider lane unchanged for the future EMAIL/SMS slice, and records the *absence* of a read/unread flag as a deliberate MVP choice so a later "mark read" feature is an explicit additive decision, not an accidental gap. RU mirror updated.
 
 ## States
 

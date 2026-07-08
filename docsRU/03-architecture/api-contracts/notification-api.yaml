@@ -95,6 +95,60 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /me/notifications:
+    get:
+      summary: Список собственных in-app (IN_APP) уведомлений вызывающего пользователя
+      operationId: listMyNotifications
+      description: >-
+        Slice H3 / AUDIT4 P2-5 (добавлено 2026-07-08).
+
+        WHAT: сторона чтения IN_APP-канала уведомлений. Возвращает собственные долговременные IN_APP-строки
+        `notification_logs` (только channel IN_APP) аутентифицированного вызывающего, сначала новые, с
+        пагинацией `{items, meta: PageMeta}` (API_CONVENTIONS §5). Отдаёт слабый `ETag` + `Cache-Control:
+        private, no-store` (собственная область, меняется по мере поступления событий). ТОЛЬКО собственная
+        область — вызывающий является `notification_logs.user_id`; нет query-параметра `user_id` и нет
+        расширения для оператора (личный входящий не является поверхностью модерации).
+
+        WHY: ADR-0021 построил путь записи IN_APP (первый потребитель outbox материализует одну IN_APP-строку
+        на получателя), чтобы «прекратить тишину», когда исходы модерации/передачи создавались без видимого
+        пользователю эффекта. Но эти строки были ТОЛЬКО ДЛЯ ЗАПИСИ — ни один эндпоинт не давал пользователю их
+        прочитать, а enum `type` в контракте не включал IN_APP, поэтому «вас уведомили» было правдой лишь
+        наполовину (alpha-analyst F3). Этот эндпоинт закрывает вторую половину: построенные строки становятся
+        читаемыми.
+
+        WHY-BETTER-for-the-whole-project: он переиспользует платформенную идиому чтения (список в собственной
+        области + PageMeta + ETag, точно как `GET /favorites`), не добавляет новой таблицы и структурно держит
+        класс IDOR закрытым (владелец — это JWT-принципал, никогда не задаётся клиентом). Он делает собственное
+        обещание ADR-0021 истинным сквозным образом и даёт будущему SPA Фазы-2 / ИИ-оператору (ADR-0006)
+        детерминированную поверхность для отображения или анализа истории исходов пользователя.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Страница in-app уведомлений вызывающего
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Слабый валидатор состояния входящих вызывающего
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '304': { description: Не изменено (If-None-Match совпал) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/notification-preferences:
     get:
       summary: Получить настройки уведомлений текущего пользователя
@@ -230,8 +284,10 @@ components:
           format: uuid
           nullable: true
         type:
+          # IN_APP добавлен ADR-0021 (миграция 0030 — первый потребитель outbox материализует IN_APP-строки);
+          # enum отставал от схемы до Slice H3 / P2-5. type = КАНАЛ доставки.
           type: string
-          enum: [EMAIL, SMS]
+          enum: [EMAIL, SMS, IN_APP]
         templateId:
           type: string
           format: uuid
@@ -247,6 +303,29 @@ components:
           type: string
           format: date-time
         updatedAt:
+          type: string
+          format: date-time
+    Notification:
+      type: object
+      description: >-
+        Уведомление in-app (IN_APP) для вызывающего — проекция чтения в собственной области строки
+        `notification_logs` (channel IN_APP). Внутренние колонки (userId, recipient, templateId, поля
+        провайдера) намеренно опущены; владелец — всегда аутентифицированный вызывающий.
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [IN_APP]
+        content:
+          type: string
+          nullable: true
+          description: Отрендеренное тело уведомления (может быть null при стирании по ФЗ-152)
+        status:
+          type: string
+          enum: [SENT, DELIVERED, FAILED, BOUNCED]
+        createdAt:
           type: string
           format: date-time
     NotificationPreferences:

@@ -20,6 +20,7 @@ import { ListingModule } from './modules/listing/listing.module';
 import { SavedSearchModule } from './modules/saved-search/saved-search.module';
 import { FavoriteModule } from './modules/favorite/favorite.module';
 import { ModerationModule } from './modules/moderation/moderation.module';
+import { NotificationReadModule } from './modules/notification/notification-read.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -51,6 +52,7 @@ import { HealthModule } from './health/health.module';
     SavedSearchModule,
     FavoriteModule,
     ModerationModule,
+    NotificationReadModule,
     HealthModule,
   ],
 })

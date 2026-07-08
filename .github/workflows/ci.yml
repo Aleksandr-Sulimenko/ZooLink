@@ -162,6 +162,35 @@ jobs:
             exit 1
           fi
 
+  # Migration BACKFILL-on-populated-data gate (AUDIT4 P2-3). The migration-drift job proves DDL
+  # idempotency + schema convergence on EMPTY tables — where every backfill-then-`SET NOT NULL`
+  # migration's data path is a no-op. This job SEEDS representative rows first, then replays the
+  # backfill migrations (0033/0032/0036) twice and asserts the backfill produced the correct value +
+  # the NOT NULL constraint holds — the data-correctness case the empty-table gate cannot reach.
+  # HARD GATE: a wrong/missing backfill fails the build. Runs against a throwaway DB the script creates.
+  migration-backfill:
+    runs-on: ubuntu-latest
+    env:
+      PGUSER: zoolink
+      PGPASSWORD: ci
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGADMIN_DB: postgres
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: zoolink
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backfill correctness on populated tables (fail-on-wrong-backfill)
+        run: bash scripts/check-migration-backfill.sh
+
   # RF data-residency gate (ADR-0017; ФЗ-152 ст.18 ч.5) — layer 2 of the 3-layer guardrail
   # (layer 1 = boot refine in env.validation.ts; layer 3 = the documented region-pin in
   # deployment_specification.md). BLOCKING: fails the pipeline if any region-bearing value in the

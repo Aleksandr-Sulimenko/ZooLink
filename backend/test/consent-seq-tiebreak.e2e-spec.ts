@@ -83,4 +83,27 @@ describe('Consent monotonic seq tie-break (AUDIT4 P1-2, e2e)', () => {
     const uid = await mkUser('SeqNoRow');
     await expect(consent.currentlyGranted(uid, 'CONTACT_DISTRIBUTION')).resolves.toBe(false);
   });
+
+  // ── AUDIT4 P2-4: prove the append-only guarantee actually FIRES (not just disabled in cleanup) ──
+  describe('consents append-only immutability (trg_consents_immutable ENABLED)', () => {
+    it('rejects a raw UPDATE on an existing consents row (ФЗ-152 append-only proof)', async () => {
+      const uid = await mkUser('AppendOnlyUpdate');
+      const created = (await insertAt(uid, true, new Date())) as { id: string };
+      // The trigger is ENABLED here (only disabled in afterAll cleanup) — the mutation MUST raise.
+      await expect(
+        prisma.consents.update({ where: { id: created.id }, data: { granted: false } }),
+      ).rejects.toThrow(/append-only/i);
+      // And the row is untouched — the withdrawal never took effect (grant still current).
+      await expect(consent.currentlyGranted(uid, 'CONTACT_DISTRIBUTION')).resolves.toBe(true);
+    });
+
+    it('rejects a raw DELETE on an existing consents row (append-only proof)', async () => {
+      const uid = await mkUser('AppendOnlyDelete');
+      const created = (await insertAt(uid, true, new Date())) as { id: string };
+      await expect(prisma.consents.delete({ where: { id: created.id } })).rejects.toThrow(/append-only/i);
+      // The row survives the rejected delete.
+      const still = await prisma.consents.findUnique({ where: { id: created.id } });
+      expect(still).not.toBeNull();
+    });
+  });
 });

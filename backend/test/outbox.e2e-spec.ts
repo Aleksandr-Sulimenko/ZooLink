@@ -79,7 +79,9 @@ describe('Outbox relay (integration, real PG)', () => {
 
     const row = await prisma.outbox_events.findFirst({ where: { aggregate_id: aggId } });
     expect(row?.processed_at).not.toBeNull();
-    expect(row?.attempts).toBe(1);
+    // P2-1: a clean first delivery records ZERO attempts — `attempts` counts real FAILURES, not
+    // leases. A successful event never touched the failure path, so its budget stays untouched.
+    expect(row?.attempts).toBe(0);
   });
 
   it('retries a failed delivery (backoff) and redelivers at-least-once until it succeeds', async () => {

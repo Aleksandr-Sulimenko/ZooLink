@@ -95,6 +95,59 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /me/notifications:
+    get:
+      summary: List the caller's own in-app (IN_APP) notifications
+      operationId: listMyNotifications
+      description: >-
+        Slice H3 / AUDIT4 P2-5 (added 2026-07-08).
+
+        WHAT: the read side of the IN_APP notification channel. Returns the authenticated caller's own
+        durable IN_APP `notification_logs` rows (channel IN_APP only), newest first, paginated as
+        `{items, meta: PageMeta}` (API_CONVENTIONS §5). Emits a weak `ETag` + `Cache-Control: private,
+        no-store` (own-scope, mutates as events land). Own-scope ONLY — the caller is `notification_logs.
+        user_id`; there is no `user_id` query param and no operator widening (a personal inbox is not a
+        moderation surface).
+
+        WHY: ADR-0021 built the IN_APP write path (the first outbox consumer materialises one IN_APP row
+        per recipient) to "end the silence" where moderation/transfer outcomes were produced with no
+        user-visible effect. But those rows were WRITE-ONLY — no endpoint let a user read them and the
+        contract `type` enum omitted IN_APP, so "you were told" was only half-true (alpha-analyst F3).
+        This endpoint closes that half: the built rows become readable.
+
+        WHY-BETTER-for-the-whole-project: it reuses the platform read idiom (own-scope list + PageMeta +
+        ETag, exactly like `GET /favorites`), adds no new table, and keeps the IDOR class closed
+        structurally (owner is the JWT principal, never client-supplied). It makes ADR-0021's own promise
+        true end-to-end and gives a future Phase-2 SPA / an AI operator (ADR-0006) a deterministic surface
+        to render or reason over a user's outcome history.
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: The caller's in-app notifications page
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Weak validator over the caller's inbox state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '304': { description: Not modified (If-None-Match matched) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/notification-preferences:
     get:
       summary: Get the current user's notification preferences
@@ -230,8 +283,10 @@ components:
           format: uuid
           nullable: true
         type:
+          # IN_APP added by ADR-0021 (mig 0030 — the first outbox consumer materialises IN_APP rows);
+          # the enum trailed the schema until Slice H3 / P2-5. type = the delivery CHANNEL.
           type: string
-          enum: [EMAIL, SMS]
+          enum: [EMAIL, SMS, IN_APP]
         templateId:
           type: string
           format: uuid
@@ -247,6 +302,29 @@ components:
           type: string
           format: date-time
         updatedAt:
+          type: string
+          format: date-time
+    Notification:
+      type: object
+      description: >-
+        A caller-facing in-app (IN_APP) notification — the own-scope read projection of a
+        `notification_logs` row (channel IN_APP). Internal columns (userId, recipient, templateId,
+        provider fields) are intentionally omitted; the owner is always the authenticated caller.
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [IN_APP]
+        content:
+          type: string
+          nullable: true
+          description: The rendered notification body (may be null if erased under ФЗ-152)
+        status:
+          type: string
+          enum: [SENT, DELIVERED, FAILED, BOUNCED]
+        createdAt:
           type: string
           format: date-time
     NotificationPreferences:

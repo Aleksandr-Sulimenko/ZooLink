@@ -163,6 +163,14 @@ describe('Listings Slice 1 (e2e)', () => {
     await create(sellerTok, baseBody({ animalId, lat: 10 })).expect(422); // service half-set
   });
 
+  it('P2 rider: priceCents above the BIGINT-safe ceiling → clean 400, not a 500 overflow', async () => {
+    const animalId = await newAnimal(sellerId);
+    // 1e21 passes @IsInt but overflows price_cents (BIGINT) → PG 22003 500 without the @Max guard.
+    await create(sellerTok, baseBody({ animalId, priceCents: 1e21 })).expect(400); // DTO @Max
+    // The boundary value itself (10^12) is accepted.
+    await create(sellerTok, baseBody({ animalId, priceCents: 1_000_000_000_000 })).expect(201);
+  });
+
   it('L-P0: a forced ACTIVE while moderation_status≠APPROVED is rejected by the trigger (clean error, not 500)', async () => {
     const animalId = await newAnimal(sellerId);
     const listing = await prisma.listings.create({
