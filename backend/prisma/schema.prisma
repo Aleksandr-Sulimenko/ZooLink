@@ -308,6 +308,7 @@ model listings {
   escalated_at                      DateTime?             @db.Timestamptz(6)
   view_count                        BigInt                @default(0)
   market                            String                @db.VarChar(9)
+  content_updated_at                DateTime              @default(now()) @db.Timestamptz(6)
   contact_reveals                   contact_reveals[]
   conversations                     conversations[]
   favorites                         favorites[]

@@ -514,6 +514,38 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/photos/upload-url:
+    post:
+      summary: Get a presigned upload URL for a listing photo
+      operationId: createListingPhotoUploadUrl
+      description: >
+        (normative, AUDIT4 active-user B-1) Issues a short-lived **presigned PUT URL** so the seller can
+        upload a photo directly into ZooLink's own private object storage (S3/MinIO, ADR-0008), then submit
+        the returned `objectUrl` to `POST /listings/{id}/photos` — which passes the own-host allowlist
+        (AUDIT3) because `objectUrl` is on our storage host. This closes the dead-end where the host
+        allowlist rejected every URL a seller could otherwise produce (no upload path existed).
+        Authorization is the SAME object-level ownership as add-photo: the listing's seller or an org-admin
+        (→ else 403); MODERATOR is R-only on listings → excluded. This endpoint writes NOTHING to the
+        database — it only mints a URL — so it takes no `Idempotency-Key`; a retry simply mints a fresh URL.
+        The `MAX_MEDIA_ITEMS=10` cap stays enforced at `POST /photos` (this endpoint does not itself add a
+        photo). The upload URL expires after `expiresInSeconds`.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: Listing ID
+      responses:
+        '201':
+          description: Presigned upload target minted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListingPhotoUploadTarget' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos/{photoId}:
     delete:
       summary: Remove a photo from a listing
@@ -1005,6 +1037,38 @@ components:
           type: integer
           default: 0
           description: Display order index
+    ListingPhotoUploadTarget:
+      type: object
+      description: >
+        A short-lived presigned upload target (AUDIT4 B-1). The client PUTs the raw image bytes to
+        `uploadUrl`, then submits `objectUrl` to POST /listings/{id}/photos.
+      required:
+        - uploadUrl
+        - method
+        - objectUrl
+        - key
+        - expiresInSeconds
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+          description: Presigned URL to PUT the image bytes directly to our private storage bucket
+        method:
+          type: string
+          enum: [PUT]
+          description: HTTP method to use against uploadUrl
+        objectUrl:
+          type: string
+          format: uri
+          description: >
+            Canonical URL of the uploaded object on our own storage host — pass this as the `url` to
+            POST /listings/{id}/photos (it satisfies the own-host allowlist, AUDIT3).
+        key:
+          type: string
+          description: Storage object key the upload will be written to (namespaced by listing)
+        expiresInSeconds:
+          type: integer
+          description: Seconds until the presigned uploadUrl expires
     AnalyticsSeriesPoint:
       type: object
       description: One time-series data point (x-phase:2, series-ready form — §16).

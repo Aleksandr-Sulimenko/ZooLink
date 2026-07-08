@@ -353,6 +353,7 @@ export class ModerationService {
         //    the window. Claim the lifecycle flip FIRST with a status/holder/expiry-guarded updateMany
         //    — only the live lock-holder of a still-PENDING item wins (count===1). The loser rolls back
         //    BEFORE the decision append + audit write, so it writes nothing (no orphan decision/audit).
+        const now = new Date();
         const flip = await tx.listings.updateMany({
           where: {
             id: dto.listingId,
@@ -363,12 +364,15 @@ export class ModerationService {
           data: {
             status: transition.status,
             moderation_status: transition.moderationStatus,
-            published_at: transition.status === 'ACTIVE' ? new Date() : null,
+            published_at: transition.status === 'ACTIVE' ? now : null,
             is_active: transition.status !== 'DEACTIVATED',
             assigned_to: null,
             locked_at: null,
             lock_expires_at: null,
-            updated_at: new Date(),
+            updated_at: now,
+            // ADR-0035: the moderation verdict is a content/state change (status/moderation_status) →
+            // bump the content validator. The lock claim/release paths (not a content change) do NOT.
+            content_updated_at: now,
           },
         });
         if (flip.count !== 1) {

@@ -149,6 +149,13 @@ existing resource **must** send **`If-Match: <etag>`**. The server compares agai
 This prevents silent last-write-wins when two owners/moderators edit the same listing/animal/org concurrently.
 (State-transition endpoints — moderation decide, payment confirm — keep their guard-based `409` instead.)
 
+> **Listing ETag (ADR-0035):** the listing resource's ETag is derived from a dedicated content-version
+> column (`listings.content_updated_at`), **not** `updated_at`. Only writes that change client-visible
+> listing state bump it, so read-path/system writes (the `view_count` increment on the public
+> `GET /listings/{id}`, `escalated_at`, the derived-`market` recompute) do **not** rotate the ETag — a
+> public read never invalidates a seller/operator's held validator (no spurious `412` edit-lockout). Other
+> resources remain on `updated_at` unless they carry the same read-path-write hazard.
+
 ## 11. Idempotency (unsafe POST)
 All non-idempotent `POST`s (create listing, add photo, favorite, save search, contact-reveal, content-report, payment) accept an
 **`Idempotency-Key`** request header (client-generated UUID). The server stores `key → (request-hash, response)` for

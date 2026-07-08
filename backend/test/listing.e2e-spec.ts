@@ -321,6 +321,49 @@ describe('Listings Slice 1 (e2e)', () => {
     await addPhoto(sellerTok, id).expect(201);
   });
 
+  // AUDIT4 B-1: presigned upload closes the dead-end (no path produced an allowlisted URL).
+  it('upload-url: the seller gets a presigned target whose objectUrl passes the allowlist and is accepted by POST /photos', async () => {
+    const animalId = await newAnimal(sellerId);
+    const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+    const res = await request(server())
+      .post(`/v1/listings/${id}/photos/upload-url`)
+      .set('Authorization', `Bearer ${sellerTok}`)
+      .expect(201);
+    expect(res.body.method).toBe('PUT');
+    expect(res.body.key).toMatch(new RegExp(`^listings/${id}/`));
+    expect(typeof res.body.expiresInSeconds).toBe('number');
+    // (c) the minted URLs are on the allowlisted own-storage host (localhost:9000 in dev/test).
+    expect(new URL(res.body.objectUrl as string).host).toBe('localhost:9000');
+    expect(new URL(res.body.uploadUrl as string).host).toBe('localhost:9000');
+    // (a) the objectUrl round-trips: POST /photos accepts it (it satisfies assertOwnMediaHost).
+    const added = await request(server())
+      .post(`/v1/listings/${id}/photos`)
+      .set('Authorization', `Bearer ${sellerTok}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ url: res.body.objectUrl })
+      .expect(201);
+    expect(added.body.url).toBe(res.body.objectUrl);
+  });
+
+  it('upload-url: a non-owner requesting an upload URL → 403 (authz parity with add-photo IDOR)', async () => {
+    const animalId = await newAnimal(sellerId);
+    const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+    await request(server())
+      .post(`/v1/listings/${id}/photos/upload-url`)
+      .set('Authorization', `Bearer ${otherTok}`)
+      .expect(403);
+  });
+
+  it('upload-url: unauthenticated → 401; unknown listing → 404 (no host leak)', async () => {
+    const animalId = await newAnimal(sellerId);
+    const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
+    await request(server()).post(`/v1/listings/${id}/photos/upload-url`).expect(401);
+    await request(server())
+      .post(`/v1/listings/${randomUUID()}/photos/upload-url`)
+      .set('Authorization', `Bearer ${sellerTok}`)
+      .expect(404);
+  });
+
   it('DELETE soft-withdraws → DEACTIVATED; a second withdraw → 409; L-3 non-owner → 403', async () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));

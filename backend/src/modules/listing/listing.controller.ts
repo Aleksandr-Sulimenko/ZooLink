@@ -30,6 +30,7 @@ import {
   type ListingAnalyticsView,
   ListingListQueryDto,
   ListingPhotoCreateDto,
+  type ListingPhotoUploadTargetView,
   type ListingPhotoView,
   ListingUpdateDto,
   type ListingView,
@@ -205,6 +206,19 @@ export class ListingController {
     const photo = await this.service.addPhoto(id, dto, actor);
     res.status(201);
     return photo;
+  }
+
+  @Post(':id/photos/upload-url')
+  @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Mint a presigned PUT URL to upload a photo into our storage (AUDIT4 B-1)' })
+  async createPhotoUploadUrl(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthPrincipal,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ListingPhotoUploadTargetView> {
+    const target = await this.service.createPhotoUploadUrl(id, actor);
+    res.status(201);
+    return target;
   }
 
   @Delete(':id/photos/:photoId')

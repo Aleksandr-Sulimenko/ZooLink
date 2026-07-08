@@ -389,6 +389,19 @@ export interface ListingPhotoView {
 }
 
 /**
+ * Wire shape of a presigned photo-upload target (listings-api ListingPhotoUploadTarget, AUDIT4 B-1). The
+ * client PUTs the raw bytes to `uploadUrl`, then submits `objectUrl` to POST /listings/{id}/photos — where
+ * `objectUrl` satisfies the own-host allowlist (AUDIT3), closing the dead-end where no upload path existed.
+ */
+export interface ListingPhotoUploadTargetView {
+  uploadUrl: string;
+  method: 'PUT';
+  objectUrl: string;
+  key: string;
+  expiresInSeconds: number;
+}
+
+/**
  * Wire shape of a contact reveal result (contact-exchange spec 16 / listings-api ContactRevealResult).
  * Carries only the seller-enabled channels — a disabled/unset channel is absent. Never email. The
  * `phone` is decrypted at reveal (ADR-0019); `telegram` is a plaintext handle.

@@ -259,6 +259,8 @@ erDiagram
         TIMESTAMPTZ expires_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
+        TIMESTAMPTZ content_updated_at
+        %% content_updated_at (ADR-0035/mig 0035): the ETag/optimistic-concurrency validator; bumped only on content/state writes, NOT view_count/escalated_at/market
         %% UK (animal_id, listing_type) WHERE status='ACTIVE'
     }
     listing_photos {

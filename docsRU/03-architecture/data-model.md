@@ -150,6 +150,7 @@ CREATE TABLE listings (
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    content_updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- ADR-0035 (миграция 0035): валидатор КОНТЕНТА/состояния, из которого выводится ETag объявления (НЕ updated_at). Двигается только на записях видимого клиенту контента/состояния (create/edit/submit/вердикт модерации/withdraw/mark-sold + каскадная деактивация); системные записи (view_count/escalated_at/пересчёт market) его не трогают. DEFAULT now() сохранён для write-совместимости N-1.
     CONSTRAINT chk_listing_ownership CHECK (
         (organization_id IS NULL AND branch_id IS NULL) OR  -- Personal listing
         (organization_id IS NOT NULL)                       -- Organizational listing
@@ -166,6 +167,13 @@ CREATE TABLE listings (
   страницы не накручивает), просмотры самого продавца исключаются. Это единственный аналитический
   сигнал, чью историю нельзя восстановить задним числом (AUDIT3), поэтому закладывается первым. Счётчик
   показов контактов здесь НЕ денормализуется — он выводится из таблицы `contact_reveals`.
+- `content_updated_at` (миграция 0035, ADR-0035) — **валидатор контента/состояния** объявления: токен
+  ETag / оптимистичной конкуренции выводится из него, а не из `updated_at`. Его двигают только записи,
+  меняющие видимое клиенту состояние объявления (create/edit/submit/вердикт модерации/withdraw/mark-sold
+  и две функции каскадной деактивации), поэтому запись из read-path/системная — инкремент `view_count`,
+  `escalated_at`, пересчёт `market` (D3) — двигает `updated_at`, но НЕ ETag, закрывая ложный `412`
+  edit-lockout / рычаг гриферства через накрутку просмотров. `updated_at` сохраняет свой смысл (физическое
+  время изменения строки).
 - `market` (миграция 0033, D3; ADR-0018 §Amendment) — денормализованный кэш ВЫВОДИМОГО рынка объявления:
   `species.market`, достигаемый через animal→species. Пишется в той же транзакции при создании объявления
   и пересчитывается при редкой админ-правке рынка вида, чтобы списочный путь очереди/поиска (D8) читал его

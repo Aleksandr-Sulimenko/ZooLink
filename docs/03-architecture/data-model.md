@@ -150,6 +150,7 @@ CREATE TABLE listings (
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    content_updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- ADR-0035 (migration 0035): the CONTENT/state validator the listing ETag is derived from (NOT updated_at). Bumped only on client-visible content/state writes (create/edit/submit/moderation verdict/withdraw/mark-sold + cascade-deactivation); system writes (view_count/escalated_at/market recompute) leave it. DEFAULT now() retained for N-1 write-compat.
     CONSTRAINT chk_listing_ownership CHECK (
         (organization_id IS NULL AND branch_id IS NULL) OR  -- Personal listing
         (organization_id IS NOT NULL)                       -- Organizational listing
@@ -166,6 +167,12 @@ CREATE TABLE listings (
   inflate it, seller self-views excluded. It is the one analytics signal whose history cannot be
   backfilled (AUDIT3), hence captured first. Contact-show count is NOT denormalized here — it is derived
   from the `contact_reveals` table.
+- `content_updated_at` (migration 0035, ADR-0035) is the listing's **content/state validator**: the
+  ETag / optimistic-concurrency token is derived from it, not from `updated_at`. It is bumped only on
+  writes that change client-visible listing state (create/edit/submit/moderation verdict/withdraw/mark-sold
+  and the two cascade-deactivation functions), so a read-path/system write — the `view_count` increment,
+  `escalated_at`, the D3 `market` recompute — moves `updated_at` but NOT the ETag, closing the spurious
+  412 edit-lockout / view-flood griefing lever. `updated_at` keeps its meaning (physical row-mtime).
 - `market` (migration 0033, D3; ADR-0018 §Amendment) is a denormalised cache of the listing's DERIVED
   market — `species.market` reached via animal→species. It is written in-tx at listing create and
   recomputed on the rare admin species-market correction, so the D8 queue/discovery list-path can read it

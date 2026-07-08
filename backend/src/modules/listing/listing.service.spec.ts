@@ -17,6 +17,8 @@ import type { CryptoService } from '../../lib/crypto/crypto.service';
 import type { OutboxService } from '../../lib/outbox/outbox.service';
 import type { RedisService } from '../../lib/redis/redis.service';
 import type { AppConfigService } from '../../config/app-config.service';
+import type { ObjectStorage } from '../../lib/providers/storage/object-storage.port';
+import { isAllowedMediaUrl, mediaAllowedHosts } from '../../lib/media/media-url';
 import { weakEtag } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
 import type { ListingCreateDto } from './dto/listing.dto';
@@ -60,6 +62,9 @@ function listingRow(over: Record<string, unknown> = {}): Record<string, unknown>
     expires_at: null,
     created_at: new Date('2026-06-26T00:00:00Z'),
     updated_at: UPDATED,
+    // ADR-0035: the ETag is derived from content_updated_at. Default it to UPDATED so etagOf() (which
+    // hashes UPDATED) still matches a freshly-read row; content writes overwrite it with a new Date.
+    content_updated_at: UPDATED,
     ...over,
   };
 }
@@ -86,6 +91,8 @@ interface SetupOpts {
   existingReveal?: Record<string, unknown> | null;
   /** D3: ids AnimalService.animalIdsForSpecies returns (drives recomputeMarketForSpecies). */
   animalIdsForSpecies?: string[];
+  /** AUDIT4 B-1: optional prod CDN host for the presigned-upload objectUrl builder. */
+  mediaCdnHost?: string;
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -212,16 +219,30 @@ function setup(opts: SetupOpts = {}) {
   const set = jest.fn().mockResolvedValue('OK');
   const redis = { client: { incr, expire, ttl, set } } as unknown as RedisService;
   // AUDIT3: media-host allowlist derives from S3_ENDPOINT — dev/test host is localhost:9000.
-  const config = { get: (k: string) => (k === 'S3_ENDPOINT' ? 'http://localhost:9000' : undefined) } as unknown as AppConfigService;
+  // AUDIT4 B-1: S3_BUCKET + (optional) MEDIA_CDN_HOST feed the presigned-upload objectUrl builder.
+  const config = {
+    get: (k: string) => {
+      if (k === 'S3_ENDPOINT') return 'http://localhost:9000';
+      if (k === 'S3_BUCKET') return 'zoolink-media';
+      if (k === 'MEDIA_CDN_HOST') return opts.mediaCdnHost ?? '';
+      return undefined;
+    },
+  } as unknown as AppConfigService;
+  // AUDIT4 B-1: OBJECT_STORAGE stub — presignUpload echoes a PUT URL on our own S3 host.
+  const presignUpload = jest.fn().mockImplementation((key: string) =>
+    Promise.resolve({ key, url: `http://localhost:9000/zoolink-media/${key}?X-Amz-Signature=sig`, method: 'PUT' as const, expiresInSeconds: 900 }),
+  );
+  const storage = { presignUpload, presignDownload: jest.fn() } as unknown as ObjectStorage;
   // ADR-0020: ConsentService stub — currentlyGranted defaults to true so existing reveal tests return channels.
   const currentlyGranted = jest.fn().mockResolvedValue(opts.consentGranted ?? true);
   const consent = { currentlyGranted, record: jest.fn() } as unknown as ConsentService;
-  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService, crypto, outbox, redis, config, consent);
+  const svc = new ListingService(prisma, audit, moderation, orgMembership, animalService, crypto, outbox, redis, config, consent, storage);
   return {
     svc,
     listings,
     animals,
     listing_photos,
+    presignUpload,
     users,
     contact_reveals,
     record,
@@ -411,6 +432,36 @@ describe('ListingService', () => {
       const { svc, set } = setup({ listing: active() });
       set.mockRejectedValueOnce(new Error('redis down'));
       await expect(svc.getById(LISTING, p(OTHER))).resolves.toMatchObject({ listing: expect.objectContaining({ status: 'ACTIVE' }) });
+    });
+  });
+
+  // ── ADR-0035 (Slice H2): the ETag is derived from content_updated_at, NOT updated_at ────────────
+  describe('ETag content-version basis (ADR-0035)', () => {
+    const active = (over: Record<string, unknown> = {}) => listingRow({ status: 'ACTIVE', moderation_status: 'APPROVED', ...over });
+    const MTIME = new Date('2026-07-01T12:00:00Z'); // a physical row-mtime distinct from UPDATED
+
+    it('the listing ETag hashes content_updated_at (not updated_at) — a moved mtime does not rotate it', async () => {
+      // updated_at moved (a system write), content_updated_at held at UPDATED → the ETag stays on UPDATED.
+      const { svc } = setup({ listing: active({ updated_at: MTIME, content_updated_at: UPDATED }) });
+      const { etag } = await svc.getById(LISTING, p(SELLER)); // seller read: excluded from view capture
+      expect(etag).toBe(weakEtag(`listing:${LISTING}`, UPDATED));
+      expect(etag).not.toBe(weakEtag(`listing:${LISTING}`, MTIME));
+    });
+
+    it('the view_count increment write does NOT include content_updated_at (never rotates the ETag)', async () => {
+      const { svc, listings } = setup({ listing: active() });
+      await svc.getById(LISTING, p(OTHER)); // a counted view
+      const data = listings.update.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data).toHaveProperty('view_count');
+      expect(data).not.toHaveProperty('content_updated_at');
+    });
+
+    it('a content edit writes content_updated_at at the same instant as updated_at (rotates the ETag)', async () => {
+      const { svc, listings } = setup(); // default DRAFT listing → editDraft uses listings.update
+      await svc.update(LISTING, { priceCents: 9000 }, etagOf(), p(SELLER));
+      const data = listings.update.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data.content_updated_at).toBeInstanceOf(Date);
+      expect((data.content_updated_at as Date).getTime()).toBe((data.updated_at as Date).getTime());
     });
   });
 
@@ -627,6 +678,50 @@ describe('ListingService', () => {
         UnprocessableEntityException,
       );
       expect(listing_photos.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // AUDIT4 B-1: presigned photo upload — the endpoint that lets a seller produce an allowlisted URL.
+  describe('createPhotoUploadUrl — AUDIT4 B-1', () => {
+    it('the owner gets a presigned PUT + an objectUrl that PASSES the own-media allowlist', async () => {
+      const { svc, presignUpload } = setup();
+      const target = await svc.createPhotoUploadUrl(LISTING, p(SELLER));
+      expect(target.method).toBe('PUT');
+      expect(target.expiresInSeconds).toBe(900);
+      // namespaced-by-listing key so uploads can never collide across listings
+      expect(target.key).toMatch(new RegExp(`^listings/${LISTING}/[0-9a-f-]{36}$`));
+      expect(presignUpload).toHaveBeenCalledWith(target.key);
+      // the returned canonical URL is exactly what addPhoto's allowlist admits (host-parity with the guard)
+      const allowed = mediaAllowedHosts('http://localhost:9000', '');
+      expect(isAllowedMediaUrl(target.objectUrl, allowed)).toBe(true);
+      expect(isAllowedMediaUrl(target.uploadUrl, allowed)).toBe(true);
+    });
+
+    it('the objectUrl is accepted end-to-end by addPhoto (round-trips through the allowlist)', async () => {
+      const { svc, listing_photos } = setup({ photoCount: 0 });
+      const target = await svc.createPhotoUploadUrl(LISTING, p(SELLER));
+      const photo = await svc.addPhoto(LISTING, { url: target.objectUrl }, p(SELLER));
+      expect(photo.id).toBe('photo-1');
+      expect(listing_photos.create).toHaveBeenCalled();
+    });
+
+    it('L-3: a non-owner requesting an upload URL → 403 (authz parity with addPhoto)', async () => {
+      const { svc, presignUpload } = setup();
+      await expect(svc.createPhotoUploadUrl(LISTING, p(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(presignUpload).not.toHaveBeenCalled(); // no URL is minted for an unauthorized caller
+    });
+
+    it('404 first when the listing does not exist (no host leak)', async () => {
+      const { svc } = setup({ listing: null });
+      await expect(svc.createPhotoUploadUrl(LISTING, p(SELLER))).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('prefers the prod CDN host when MEDIA_CDN_HOST is configured (still allowlisted)', async () => {
+      const { svc } = setup({ mediaCdnHost: 'cdn.zoolink.ru' });
+      const target = await svc.createPhotoUploadUrl(LISTING, p(SELLER));
+      expect(new URL(target.objectUrl).host).toBe('cdn.zoolink.ru');
+      const allowed = mediaAllowedHosts('http://localhost:9000', 'cdn.zoolink.ru');
+      expect(isAllowedMediaUrl(target.objectUrl, allowed)).toBe(true);
     });
   });
 

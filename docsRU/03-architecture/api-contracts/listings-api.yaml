@@ -516,6 +516,38 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /listings/{id}/photos/upload-url:
+    post:
+      summary: Получить presigned-URL для загрузки фото объявления
+      operationId: createListingPhotoUploadUrl
+      description: >
+        (нормативно, AUDIT4 active-user B-1) Выдаёт короткоживущий **presigned PUT URL**, чтобы продавец мог
+        загрузить фото напрямую в собственное приватное объектное хранилище ZooLink (S3/MinIO, ADR-0008), а
+        затем отправить возвращённый `objectUrl` в `POST /listings/{id}/photos` — который проходит allowlist
+        своего host (AUDIT3), т.к. `objectUrl` находится на нашем host хранилища. Это закрывает тупик, где
+        allowlist отклонял любой URL, который продавец мог создать (пути загрузки не существовало).
+        Авторизация — ТА ЖЕ объектная проверка владения, что и у add-photo: продавец объявления или org-admin
+        (→ иначе 403); MODERATOR — R-only на объявлениях → исключён. Эндпоинт НИЧЕГО не пишет в БД — только
+        выдаёт URL — поэтому не требует `Idempotency-Key`; повтор просто выдаёт новый URL.
+        Лимит `MAX_MEDIA_ITEMS=10` по-прежнему применяется в `POST /photos` (этот эндпоинт сам фото не
+        добавляет). URL загрузки истекает через `expiresInSeconds`.
+      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID объявления
+      responses:
+        '201':
+          description: Presigned-цель загрузки выдана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListingPhotoUploadTarget' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}/photos/{photoId}:
     delete:
       summary: Удалить фото из объявления
@@ -1007,6 +1039,38 @@ components:
           type: integer
           default: 0
           description: Индекс порядка отображения
+    ListingPhotoUploadTarget:
+      type: object
+      description: >
+        Короткоживущая presigned-цель загрузки (AUDIT4 B-1). Клиент PUT-ит байты изображения на
+        `uploadUrl`, затем отправляет `objectUrl` в POST /listings/{id}/photos.
+      required:
+        - uploadUrl
+        - method
+        - objectUrl
+        - key
+        - expiresInSeconds
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+          description: Presigned-URL для PUT байтов изображения напрямую в наш приватный бакет хранилища
+        method:
+          type: string
+          enum: [PUT]
+          description: HTTP-метод для запроса к uploadUrl
+        objectUrl:
+          type: string
+          format: uri
+          description: >
+            Канонический URL загруженного объекта на нашем host хранилища — передайте его как `url` в
+            POST /listings/{id}/photos (он удовлетворяет allowlist своего host, AUDIT3).
+        key:
+          type: string
+          description: Ключ объекта хранилища, куда будет записана загрузка (с namespace по объявлению)
+        expiresInSeconds:
+          type: integer
+          description: Секунды до истечения presigned uploadUrl
     AnalyticsSeriesPoint:
       type: object
       description: Одна точка временного ряда (x-phase:2, форма series-ready — §16).

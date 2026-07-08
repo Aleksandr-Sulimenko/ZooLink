@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -18,6 +20,8 @@ import { OutboxService } from '../../lib/outbox/outbox.service';
 import { RedisService } from '../../lib/redis/redis.service';
 import { AppConfigService } from '../../config/app-config.service';
 import { isAllowedMediaUrl, mediaAllowedHosts } from '../../lib/media/media-url';
+import { OBJECT_STORAGE } from '../../lib/providers/provider.tokens';
+import type { ObjectStorage } from '../../lib/providers/storage/object-storage.port';
 import { paginate, type Paginated } from '../../lib/pagination/page';
 import { weakEtag, assertIfMatch } from '../../lib/http/etag.util';
 import type { AuthPrincipal } from '../../lib/auth/principal';
@@ -30,6 +34,7 @@ import {
   type ListingCreateDto,
   type ListingListQueryDto,
   type ListingPhotoCreateDto,
+  type ListingPhotoUploadTargetView,
   type ListingPhotoView,
   type ListingStatus,
   type ListingUpdateDto,
@@ -103,6 +108,9 @@ interface ListingRow {
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  /** ADR-0035: the CONTENT/state validator the listing ETag is derived from (NOT updated_at). Bumped
+   * only on client-visible content/state writes; a view_count/escalated_at/market write leaves it. */
+  content_updated_at: Date;
   /** Only present on a geo-search raw row (computed Haversine meters); undefined on the Prisma path. */
   distance_m?: number | null;
 }
@@ -145,6 +153,7 @@ export class ListingService {
     private readonly redis: RedisService, // per-market contact-reveal rate limit
     private readonly config: AppConfigService, // S3/MinIO host allowlist for media URLs (AUDIT3)
     private readonly consent: ConsentService, // ADR-0020: gate contact distribution on CONTACT_DISTRIBUTION consent
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage, // AUDIT4 B-1: presigned photo uploads
   ) {}
 
   /**
@@ -334,7 +343,11 @@ export class ListingService {
     if (Object.keys(data).length === 0) {
       throw new BadRequestException({ message: 'No updatable fields provided', code: 'VALIDATION_ERROR' });
     }
-    data.updated_at = new Date();
+    // ADR-0035: a content edit bumps both the physical mtime AND the content validator (same instant),
+    // so the ETag correctly rotates. Both editDraft and editActiveAndReenqueue carry this `data`.
+    const now = new Date();
+    data.updated_at = now;
+    data.content_updated_at = now;
 
     // M-14: an edit to an ACTIVE listing is material (MVP: every editable-content PATCH is material —
     // DRIFT-M14b) → re-enqueue for re-review. A DRAFT edit stays DRAFT (M14-6, Slice-1 behaviour).
@@ -444,11 +457,13 @@ export class ListingService {
     }
 
     // Status-guarded conditional transition (TOCTOU single-winner, mirrors the transfer slice).
+    const now = new Date();
     const row = await this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
         const claim = await tx.listings.updateMany({
           where: { id, status: 'DRAFT' },
-          data: { status: 'PENDING_MODERATION', moderation_status: 'PENDING', updated_at: new Date() },
+          // ADR-0035: a state transition bumps the content validator (same instant as updated_at).
+          data: { status: 'PENDING_MODERATION', moderation_status: 'PENDING', updated_at: now, content_updated_at: now },
         });
         if (claim.count !== 1) {
           throw new ConflictException({ message: 'Only a DRAFT listing can be submitted for moderation', code: 'LISTING_NOT_DRAFT' });
@@ -483,11 +498,13 @@ export class ListingService {
       throw new ConflictException({ message: `A ${existing.status} listing cannot be withdrawn`, code: 'INVALID_STATE' });
     }
 
+    const now = new Date();
     const row = await this.runWrite(() =>
       this.prisma.$transaction(async (tx) => {
         const claim = await tx.listings.updateMany({
           where: { id, status: { in: ['DRAFT', 'PENDING_MODERATION', 'ACTIVE'] } },
-          data: { status: 'DEACTIVATED', is_active: false, updated_at: new Date() },
+          // ADR-0035: a state transition bumps the content validator (same instant as updated_at).
+          data: { status: 'DEACTIVATED', is_active: false, updated_at: now, content_updated_at: now },
         });
         if (claim.count !== 1) {
           throw new ConflictException({ message: `A listing in this state cannot be withdrawn`, code: 'INVALID_STATE' });
@@ -675,7 +692,8 @@ export class ListingService {
       this.prisma.$transaction(async (tx) => {
         const claim = await tx.listings.updateMany({
           where: { id, status: 'ACTIVE' },
-          data: { status: 'SOLD', sold_at: soldAt, is_active: false, updated_at: soldAt },
+          // ADR-0035: SOLD is a content/state change → bump the content validator (same instant).
+          data: { status: 'SOLD', sold_at: soldAt, is_active: false, updated_at: soldAt, content_updated_at: soldAt },
         });
         if (claim.count !== 1) {
           // Lost the race (already left ACTIVE) — roll back, write nothing.
@@ -1093,6 +1111,44 @@ export class ListingService {
     return this.toPhotoView(photo);
   }
 
+  /**
+   * Mint a short-lived presigned PUT URL so the seller can upload a photo directly into OUR private
+   * object storage, then submit the returned `objectUrl` to {@link addPhoto} (AUDIT4 B-1). Without this
+   * the AUDIT3 own-host allowlist rejected every URL a seller could produce — no upload path existed.
+   * Authorization is byte-parity with addPhoto (L-3: seller / org-admin / ADMIN → else 403; 404 first if
+   * the listing is absent). Writes NOTHING to the DB — the MAX_MEDIA_ITEMS cap stays at addPhoto; the key
+   * is namespaced by listing so objects can never collide across listings.
+   */
+  async createPhotoUploadUrl(id: string, actor: AuthPrincipal): Promise<ListingPhotoUploadTargetView> {
+    const existing = await this.findRow(id);
+    await this.assertCanMutate(actor, existing); // L-3 (parity with addPhoto)
+    const key = `listings/${id}/${randomUUID()}`;
+    const presigned = await this.storage.presignUpload(key);
+    const objectUrl = this.buildMediaObjectUrl(key);
+    this.logger.log(`Presigned photo-upload target minted for listing ${id} by ${actor.userId}`);
+    return {
+      uploadUrl: presigned.url,
+      method: 'PUT',
+      objectUrl,
+      key,
+      expiresInSeconds: presigned.expiresInSeconds,
+    };
+  }
+
+  /**
+   * Build the canonical GET URL for an uploaded object on a host the AUDIT3 own-media allowlist accepts.
+   * Prefers the prod CDN host (`MEDIA_CDN_HOST`) when configured — the same host the allowlist admits —
+   * otherwise the path-style S3/MinIO origin (`S3_ENDPOINT`). Path-style `/{bucket}/{key}` matches how the
+   * presigner addresses objects; the key is UUID/slug-safe so no escaping is needed.
+   */
+  private buildMediaObjectUrl(key: string): string {
+    const bucket = this.config.get('S3_BUCKET');
+    const cdn = this.config.get('MEDIA_CDN_HOST')?.trim();
+    if (cdn) return `https://${cdn}/${bucket}/${key}`;
+    const origin = new URL(this.config.get('S3_ENDPOINT')).origin;
+    return `${origin}/${bucket}/${key}`;
+  }
+
   async removePhoto(id: string, photoId: string, actor: AuthPrincipal): Promise<void> {
     const existing = await this.findRow(id);
     await this.assertCanMutate(actor, existing); // L-3
@@ -1199,7 +1255,10 @@ export class ListingService {
   }
 
   private etag(row: ListingRow): string {
-    return weakEtag(`listing:${row.id}`, row.updated_at);
+    // ADR-0035: the ETag / optimistic-concurrency validator is derived from the CONTENT version, not
+    // `updated_at`. A read-path/system write (view_count increment, escalated_at, D3 market recompute)
+    // moves `updated_at` but NOT `content_updated_at`, so it never rotates the ETag / spuriously 412s.
+    return weakEtag(`listing:${row.id}`, row.content_updated_at);
   }
 
   private normalizeLocalized(value?: { en?: string; ru?: string }): LocalizedString {

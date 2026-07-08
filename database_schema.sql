@@ -302,6 +302,13 @@ CREATE TABLE listings (
     expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- ADR-0035 / Slice H2 (migration 0035): dedicated CONTENT/state validator. The listing ETag is
+    -- derived from THIS column (not updated_at), so read-path/system writes (view_count increment,
+    -- escalated_at, D3 market recompute) no longer bust the ETag / cause a spurious 412 edit-lockout.
+    -- Bumped only on writes that change client-visible listing state (create/edit/submit/moderation
+    -- verdict/withdraw/mark-sold + the two cascade-deactivation functions). DEFAULT now() is retained
+    -- permanently for N-1 rolling-deploy write-compat.
+    content_updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_listings_latlng CHECK (
         (lat IS NULL AND lng IS NULL) OR
         (lat BETWEEN -90 AND 90 AND lng BETWEEN -180 AND 180)
@@ -1090,7 +1097,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_open_report_per_reporter_entity
 CREATE OR REPLACE FUNCTION cascade_animal_deactivation() RETURNS trigger AS $$
 BEGIN
     IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
-        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now()
+        -- ADR-0035: a DB-driven state change bumps content_updated_at too (the ETag validator).
+        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now(), content_updated_at = now()
          WHERE animal_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
     END IF;
     RETURN NEW;
@@ -1103,7 +1111,8 @@ CREATE TRIGGER trg_cascade_animal_deactivation AFTER UPDATE ON animals
 CREATE OR REPLACE FUNCTION cascade_user_deactivation() RETURNS trigger AS $$
 BEGIN
     IF NEW.deactivated_at IS NOT NULL AND OLD.deactivated_at IS NULL THEN
-        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now()
+        -- ADR-0035: a DB-driven state change bumps content_updated_at too (the ETag validator).
+        UPDATE listings SET status = 'DEACTIVATED', is_active = false, updated_at = now(), content_updated_at = now()
          WHERE seller_id = NEW.id AND status NOT IN ('DEACTIVATED', 'SOLD', 'EXPIRED');
     END IF;
     RETURN NEW;
