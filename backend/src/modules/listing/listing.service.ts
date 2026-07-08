@@ -67,6 +67,16 @@ const LIVESTOCK_REVEAL_LIMIT_PER_HOUR = 5;
 /** The rolling window (seconds) for the reveal counter — a fixed hour from the first reveal. */
 const CONTACT_REVEAL_WINDOW_SEC = 3600;
 
+// ── Listing-creation quota (AUDIT4 P1-4; API_CONVENTIONS §8 rate limiting) ─────────────────────────
+/** The rolling window (seconds) for the per-user listing-creation counter — a fixed 24h from the first create. */
+const LISTING_CREATION_WINDOW_SEC = 86_400;
+/**
+ * Atomic INCR + first-hit EXPIRE. Keeps the counter and its TTL indivisible so a crash can never leave a
+ * TTL-less (permanent) cap. KEYS[1]=counter key, ARGV[1]=window seconds; returns the post-increment count.
+ */
+const LISTING_QUOTA_INCR_LUA =
+  "local c = redis.call('INCR', KEYS[1]); if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return c";
+
 // ── Geo search constants (Slice 2; geo-spec 07-geo-search-service.md §137–153) ─────────────────
 const EARTH_RADIUS_M = 6_371_000;
 const M_PER_DEG_LAT = 111_320; // meters per degree latitude
@@ -195,6 +205,11 @@ export class ListingService {
     if (dto.organizationId) {
       await this.assertOrgAdmin(actor, dto.organizationId);
     }
+
+    // AUDIT4 P1-4: per-user creation quota. Charged only AFTER the create is proven RESOLVABLE (animal
+    // exists + actor owns it / org-admins it, org check passed) so a 404/403 never burns a unit — matching
+    // the contact-reveal precedent (only resolvable actions charge). Still BEFORE any INSERT below.
+    await this.enforceCreationQuota(actor.userId);
 
     const data: Prisma.listingsUncheckedCreateInput = {
       animal_id: dto.animalId,
@@ -662,6 +677,52 @@ export class ListingService {
           message: `Contact reveal limit reached (${limit}/hour for the ${market ?? 'pet'} marketplace)`,
           code: 'RATE_LIMITED',
           retryAfter,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /**
+   * Per-user listing-creation quota (AUDIT4 P1-4, ⇊converged×4). The create path previously had only an
+   * Idempotency-Key (retry-safety, NOT abuse-control), so a single account could flood N listings and poison
+   * per-city liquidity + DoS the moderation queue, invisibly. This is the same Redis-INCR idiom as the
+   * contact-reveal limit: the first create sets the 24h TTL; when the count exceeds the configured ceiling we
+   * reject with 429 RATE_LIMITED (RFC7807) carrying `Retry-After` (window reset) + `X-RateLimit-*` headers
+   * (both surfaced by problem.filter). Per-USER (keyed by `actor.userId`), never global — one abuser cannot
+   * starve everyone. ADMIN/AGENT-principal follow the same documented rule (no exemption — a compromised
+   * elevated principal is exactly a flood we want capped; MODERATOR cannot create at all, WRITE_ROLES).
+   */
+  private async enforceCreationQuota(userId: string): Promise<void> {
+    const limit = this.config.get('LISTING_CREATION_QUOTA_PER_DAY');
+    const key = `listing-create:${userId}`;
+    let count: number;
+    try {
+      // Atomic INCR+EXPIRE (Lua): the counter can NEVER exist without a TTL, so a crash between the two
+      // ops cannot leave a permanent cap (the plain INCR-then-EXPIRE leak). EXPIRE fires only on the first
+      // increment (window = a fixed 24h from the first create).
+      count = Number(
+        await this.redis.client.eval(LISTING_QUOTA_INCR_LUA, 1, key, String(LISTING_CREATION_WINDOW_SEC)),
+      );
+    } catch (err) {
+      // Fail-OPEN by design: the creation quota is an ABUSE control, NOT a correctness/billing/consent gate
+      // (those — idempotency, consent — fail closed). A Redis outage must not block ALL listing creation
+      // platform-wide, so we allow the create and emit a structured WARN so ops sees the degraded control
+      // (mirrors the best-effort `captureView` swallow). Abuse-control ≠ correctness gate.
+      this.logger.warn(
+        `Listing-creation quota check skipped (Redis unavailable) for user ${userId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (count > limit) {
+      const ttl = await this.redis.client.ttl(key).catch(() => -1);
+      const retryAfter = ttl > 0 ? ttl : LISTING_CREATION_WINDOW_SEC;
+      throw new HttpException(
+        {
+          message: `Listing creation limit reached (${limit} per 24h). Try again later.`,
+          code: 'RATE_LIMITED',
+          retryAfter,
+          rateLimit: { limit, remaining: 0 },
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );

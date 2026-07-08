@@ -168,6 +168,16 @@ paths:
         animal's species (ADR-0002), never client-set. `status`/`moderationStatus` are **not**
         writable — lifecycle moves only via actions (POST /submit). MODERATOR is **R-only** on
         listings (rbac-matrix §64/§99) → excluded from create.
+
+
+        **Per-user creation quota (AUDIT4 P1-4):** a single user may create at most
+        `LISTING_CREATION_QUOTA_PER_DAY` (default **20**) listings per rolling **24h** (Redis-backed,
+        keyed by the authenticated actor). Exceeding → `429 RATE_LIMITED` with `Retry-After` +
+        `X-RateLimit-Limit` / `X-RateLimit-Remaining` (API_CONVENTIONS §8). Per-user, never global; the
+        same rule applies to ADMIN and AGENT-principals (no exemption — MODERATOR cannot create). The quota
+        is charged only for a **resolvable** create (a 404/403 does not consume a unit). On a Redis outage
+        the quota **fails OPEN** (create allowed, degradation logged) — it is an abuse control, not a
+        correctness gate.
       x-required-roles: [USER, BREEDER, FARMER, ADMIN]
       parameters:
         - in: header
@@ -195,6 +205,21 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }   # actor does not own the animal
         '404': { $ref: '#/components/responses/Problem' }   # animal not found
         '422': { $ref: '#/components/responses/Problem' }   # chk_listing_ownership / value CHECK violation / Idempotency-Key reuse w/ different body
+        '429':
+          description: Per-user listing-creation quota exceeded (default 20 per rolling 24h) — AUDIT4 P1-4
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the 24h creation window resets
+            X-RateLimit-Limit:
+              schema: { type: integer }
+              description: Max listings creatable per 24h window
+            X-RateLimit-Remaining:
+              schema: { type: integer }
+              description: Listings still creatable in the current window (0 on a 429)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
   /listings/{id}:
     get:

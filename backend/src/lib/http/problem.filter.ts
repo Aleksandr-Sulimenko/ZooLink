@@ -54,9 +54,23 @@ export class ProblemExceptionFilter implements ExceptionFilter {
       // e.g. a per-market contact-reveal rate limit. Surface it as the header (kept out of the JSON
       // body). The header persists because this filter never strips previously-set headers.
       if (typeof response === 'object' && response !== null) {
-        const retryAfter = (response as Record<string, unknown>).retryAfter;
+        const body = response as Record<string, unknown>;
+        const retryAfter = body.retryAfter;
         if (typeof retryAfter === 'number' && Number.isFinite(retryAfter)) {
           res.setHeader('Retry-After', String(Math.max(0, Math.ceil(retryAfter))));
+        }
+        // Rate-limit headers (§8): a 429 may carry `rateLimit: { limit, remaining }` — surface them as
+        // X-RateLimit-Limit / X-RateLimit-Remaining per API_CONVENTIONS (kept out of the JSON body). A
+        // general seam mirroring `retryAfter`; endpoints that don't set it are unaffected.
+        const rateLimit = body.rateLimit;
+        if (typeof rateLimit === 'object' && rateLimit !== null) {
+          const { limit, remaining } = rateLimit as Record<string, unknown>;
+          if (typeof limit === 'number' && Number.isFinite(limit)) {
+            res.setHeader('X-RateLimit-Limit', String(Math.max(0, Math.trunc(limit))));
+          }
+          if (typeof remaining === 'number' && Number.isFinite(remaining)) {
+            res.setHeader('X-RateLimit-Remaining', String(Math.max(0, Math.trunc(remaining))));
+          }
         }
       }
     } else if (exception instanceof ProviderError) {

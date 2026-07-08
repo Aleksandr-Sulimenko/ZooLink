@@ -811,10 +811,12 @@ model consents {
   actor_id                       String?  @db.Uuid
   actor_principal_type           String   @default("HUMAN") @db.VarChar(10)
   created_at                     DateTime @default(now()) @db.Timestamptz(6)
+  seq                            BigInt   @default(autoincrement())
   users_consents_actor_idTousers users?   @relation("consents_actor_idTousers", fields: [actor_id], references: [id], onUpdate: NoAction)
   users_consents_user_idTousers  users    @relation("consents_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([user_id, consent_type, created_at(sort: Desc)], map: "idx_consents_current")
+  @@index([user_id, consent_type, seq(sort: Desc)], map: "idx_consents_seq_current")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

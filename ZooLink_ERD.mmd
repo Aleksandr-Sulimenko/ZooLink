@@ -445,7 +445,9 @@ erDiagram
         UUID actor_id FK
         VARCHAR_10 actor_principal_type
         TIMESTAMPTZ created_at
+        BIGINT seq
         %% ADR-0020 (migration 0029): append-only versioned consent log (ст.9 ч.1 ФЗ-152 proof); current = latest row by (user_id, consent_type); immutable trigger
+        %% seq (migration 0036, AUDIT4 P1-2): GENERATED ALWAYS monotonic tie-break — current = latest row by seq DESC (fail-safe under same-created_at writes; was random-UUID tie-break)
     }
 
     %% Identity sessions & audit (round-4 integrity)

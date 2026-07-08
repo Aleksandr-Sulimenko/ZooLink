@@ -9,6 +9,7 @@
 | `database-failover.md` | Повышение standby-PostgreSQL, переключение приложения, проверка репликации | Запланировано |
 | `storage-failover.md` | Переключение объектного хранилища на резервный регион/бакет, проверка доступа к медиа | Запланировано |
 | `service-restoration.md` | Перезапуск/передеплой сервисов, разгрузка очередей, проверка health-check'ов | Запланировано |
+| `migration-deploy-order.md` | Порядок expand→migrate→deploy→contract; N-1-безопасность по миграциям (0028/0029/0033 stop-the-world); ожидание CI | Active (AUDIT4 P1-5) |
 
 ## Связанные документы
 

@@ -56,14 +56,21 @@ export class ConsentService {
   }
 
   /**
-   * Current consent = the latest row by `(user_id, consent_type)` (idx_consents_current). No row at all →
-   * default-deny (`false`) — the ст.10.1 default is no-consent. Pass `tx` to read your own uncommitted write.
+   * Current consent = the latest row by `(user_id, consent_type)`, ordered by the MONOTONIC `seq`
+   * (idx_consents_seq_current, mig 0036). No row at all → default-deny (`false`) — the ст.10.1 default is
+   * no-consent. Pass `tx` to read your own uncommitted write.
+   *
+   * Tie-break correctness (AUDIT4 P1-2): `seq` is a strictly-increasing DB-assigned identity, so it is a
+   * TOTAL order on insertion — two rows written in the same microsecond (batched/on-behalf grant→withdraw,
+   * an AGENT sequence, concurrent grant+withdraw) resolve by CAUSAL order, never by the random `id` UUID.
+   * The prior `[created_at DESC, id DESC]` ordering could let a withdrawal LOSE the tie to the grant it
+   * supersedes and fail OPEN toward distribution (ст.9 ч.2 break). `seq DESC` is fail-safe by causality.
    */
   async currentlyGranted(userId: string, type: ConsentType, tx?: Prisma.TransactionClient): Promise<boolean> {
     const client = tx ?? this.prisma;
     const latest = await client.consents.findFirst({
       where: { user_id: userId, consent_type: type },
-      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      orderBy: { seq: 'desc' },
       select: { granted: true },
     });
     return latest?.granted ?? false;

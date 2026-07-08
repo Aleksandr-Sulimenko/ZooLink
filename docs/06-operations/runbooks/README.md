@@ -9,6 +9,7 @@ This directory holds operational runbooks — step-by-step procedures executed d
 | `database-failover.md` | Promote standby PostgreSQL, repoint application, verify replication | Planned |
 | `storage-failover.md` | Switch object storage to secondary region/bucket, validate media access | Planned |
 | `service-restoration.md` | Restart/redeploy services, drain queues, verify health checks | Planned |
+| `migration-deploy-order.md` | Expand→migrate→deploy→contract order; per-migration N-1 safety (0028/0029/0033 stop-the-world); CI expectation | Active (AUDIT4 P1-5) |
 
 ## Related documents
 

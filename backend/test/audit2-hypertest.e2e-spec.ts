@@ -271,8 +271,13 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // 3. ABUSE — per-user listing flood (no creation quota)
   // ════════════════════════════════════════════════════════════════════════════════════════════
   describe('ABUSE: per-user listing flood', () => {
-    it('AUDIT2 (GREEN=abuse-confirmed): one user creates 12 animals → 12 listings, ALL 201 — no per-user creation quota', async () => {
+    it('AUDIT4 P1-4 FIXED: 12 creates stay under the shipped 24h quota (default 20) → all 201; the CAP itself is proven in listing-creation-quota.e2e-spec', async () => {
+      // A per-user creation quota now exists (LISTING_CREATION_QUOTA_PER_DAY, default 20). 12 < 20, so a
+      // legitimate seller listing 12 animals is unaffected. The 429-at-threshold + rate-limit-headers proof
+      // lives in listing-creation-quota.e2e-spec.ts (env-overridden to 3 for a fast deterministic cap).
       const meId = (await request(server()).get('/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
+      // Isolate from creates this seller made in other tests of the suite (shared 24h counter) so 12 < 20 holds.
+      await redis.client.del(`listing-create:${meId}`);
       let created = 0;
       for (let i = 0; i < 12; i++) {
         const animalId = await newAnimal(meId);
@@ -286,7 +291,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
           listings.push(r.body.id as string);
         }
       }
-      expect(created).toBe(12); // DESIRED: a 429/QUOTA_EXCEEDED after a threshold — none exists today.
+      expect(created).toBe(12); // under the 20/day quota → all succeed (the quota is proven to FIRE elsewhere).
     });
   });
 

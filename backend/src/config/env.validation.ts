@@ -121,6 +121,12 @@ export const envSchema = z.object({
   RETENTION_TICK_CRON: z.string().min(1).default('0 * * * *'),
   RETENTION_GRACE_DAYS: z.coerce.number().int().positive().default(30),
 
+  // Listing-creation quota (AUDIT4 P1-4): max NEW listings a single user may create per rolling 24h,
+  // Redis-backed per-user counter. Caps supply-flood / Sybil poisoning of per-city liquidity + the
+  // moderation-queue DoS the create path otherwise has no defence against (only Idempotency-Key). The
+  // default (20/day) is a generous ceiling for a legitimate seller; tune per market/abuse-signal later.
+  LISTING_CREATION_QUOTA_PER_DAY: z.coerce.number().int().positive().default(20),
+
   // Providers (ADR-0008). Empty credential → that adapter runs in stub mode.
   SMS_PROVIDER: z.string().default('smsru'),
   SMSRU_API_ID: z.string().optional().default(''),

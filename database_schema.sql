@@ -1067,9 +1067,16 @@ CREATE TABLE IF NOT EXISTS consents (
     actor_id             UUID REFERENCES users(id) ON DELETE SET NULL,
     actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN'
                             CHECK (actor_principal_type IN ('HUMAN','AGENT')),
-    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() -- append-only; no updated_at
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- append-only; no updated_at
+    -- Monotonic, DB-assigned insertion order (mig 0036, AUDIT4 P1-2). The FAIL-SAFE tie-break for
+    -- "current consent" (see idx_consents_seq_current): two rows sharing the same `created_at` (µs-precision)
+    -- resolve deterministically by causal order, never by the random `id` UUID (which fails OPEN toward
+    -- distribution and breaks ст.9 ч.2). GENERATED ALWAYS = never app-written.
+    seq           BIGINT GENERATED ALWAYS AS IDENTITY
 );
 CREATE INDEX IF NOT EXISTS idx_consents_current ON consents(user_id, consent_type, created_at DESC);
+-- Monotonic ordered-lookup for ConsentService.currentlyGranted (mig 0036): latest row by (subject, kind).
+CREATE INDEX IF NOT EXISTS idx_consents_seq_current ON consents(user_id, consent_type, seq DESC);
 CREATE INDEX IF NOT EXISTS idx_consents_agent_actor ON consents(actor_principal_type) WHERE actor_principal_type = 'AGENT';
 DROP TRIGGER IF EXISTS trg_consents_immutable ON consents;
 CREATE TRIGGER trg_consents_immutable
