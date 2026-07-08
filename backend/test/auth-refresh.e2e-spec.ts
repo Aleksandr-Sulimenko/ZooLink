@@ -103,6 +103,28 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     expect(replay.body.code).toBe('UNAUTHENTICATED');
   });
 
+  it('(a2) P1-3: two concurrent refreshes of the SAME cookie → exactly one 200, the other 401 (atomic CAS, no double-mint)', async () => {
+    const uid = await mkUser('Refresh Race');
+    const { cookie: original } = await session(uid);
+
+    // Fire both refreshes at once against the SAME cookie. The atomic compare-and-swap must let exactly
+    // ONE win the rotation; the loser (or the pre-check on a serialised schedule) is rejected — never
+    // two successful mints from one token (the rotate-TOCTOU the fix closes).
+    const fire = () => request(server()).post('/v1/auth/refresh').set('Cookie', original).send();
+    const [a, b] = await Promise.all([fire(), fire()]);
+
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+    expect(statuses).toEqual([200, 401]);
+    expect((a.status === 401 ? a : b).body.code).toBe('UNAUTHENTICATED');
+
+    // The losing use is treated as reuse → the whole family is burned (the winner's fresh child too):
+    // "both dead". No live token survives the raced double-use.
+    const live = await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } });
+    expect(live).toBe(0);
+    const winner = a.status === 200 ? a : b;
+    await request(server()).post('/v1/auth/refresh').set('Cookie', refreshCookie(winner)).expect(401);
+  });
+
   it('(b) replaying a rotated cookie detects reuse and burns the WHOLE family (siblings revoked on live PG)', async () => {
     const uid = await mkUser('Refresh Reuse');
     const { cookie: original } = await session(uid);

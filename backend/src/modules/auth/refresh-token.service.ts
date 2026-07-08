@@ -74,10 +74,22 @@ export class RefreshTokenService {
       throw new UnauthorizedException({ message: 'Refresh token expired', code: 'UNAUTHENTICATED' });
     }
 
+    // P1-3 (AUDIT4 security.md refresh rotate-TOCTOU): the pre-checks above ran on a snapshot read
+    // OUTSIDE any transaction, so two concurrent requests presenting the SAME token could both pass
+    // `revoked_at == null` under READ COMMITTED and both mint a family — neither tripping reuse
+    // detection (a stolen-cookie replay would slip through undetected). Close it with an atomic
+    // compare-and-swap: the guarded `updateMany` claims the row ONLY while it is still un-revoked and
+    // is the FIRST write in the tx. PostgreSQL serialises the two racers on that row's lock, so exactly
+    // one gets count===1 (proceeds to mint); the loser gets count===0 → this token was already
+    // rotated/revoked → treat as reuse/replay and burn the whole family (both children die).
     const token = this.newToken();
-    await this.prisma.$transaction([
-      this.prisma.refresh_tokens.update({ where: { id: row.id }, data: { revoked_at: new Date() } }),
-      this.prisma.refresh_tokens.create({
+    const rotated = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.refresh_tokens.updateMany({
+        where: { id: row.id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+      if (claim.count !== 1) return null; // lost the CAS race → someone already used this exact token
+      await tx.refresh_tokens.create({
         data: {
           user_id: row.user_id,
           token_hash: this.hash(token),
@@ -86,9 +98,18 @@ export class RefreshTokenService {
           rotated_from: row.id,
           expires_at: new Date(Date.now() + this.ttlMs),
         },
-      }),
-    ]);
-    return { token, userId: row.user_id, familyId: row.family_id };
+      });
+      return { token, userId: row.user_id, familyId: row.family_id } satisfies RotatedRefresh;
+    });
+
+    if (!rotated) {
+      // Reuse/replay detected atomically (a second use of the same token). Burn the family so the
+      // just-minted sibling is revoked too, then reject — identical outcome to the revoked-row path.
+      await this.revokeFamily(row.family_id);
+      this.logger.warn(`Refresh token reuse detected on rotate (lost CAS); revoked family ${row.family_id}`);
+      throw new UnauthorizedException({ message: 'Refresh token reuse detected', code: 'UNAUTHENTICATED' });
+    }
+    return rotated;
   }
 
   /** Revokes the family that owns the presented token (single-device logout). */

@@ -96,6 +96,31 @@ export class ClaimCodeService {
     }
   }
 
+  /**
+   * Compensating re-store of a claim code that was `consume`d for a transfer that then FAILED to be
+   * created (P1-1 / AUDIT4 backend-engineer #1). The C5 consume is a destructive single-use GETDEL,
+   * but the initiate flow can still reject AFTER consuming — the post-resolution SELF_TRANSFER guard,
+   * or a rolled-back tx (e.g. a concurrent PENDING → `TRANSFER_ALREADY_PENDING`). Without compensation
+   * the recipient's single-use code is silently burned though no transfer exists → they must re-mint.
+   * This re-SETs `code → recipient` so the legitimate counterparty can still redeem it.
+   *
+   * Single-use / single-winner is UNAFFECTED: the concurrent-double-consume winner is still decided
+   * by the atomic GETDEL (the loser already saw a miss), and a restore only reopens a code whose
+   * transfer never materialised — it runs ONLY on the failure path (the transfer was NOT created).
+   * The full TTL is re-applied (the small remaining-life extension on this rare compensation path is
+   * strictly preferable to burning a valid code minted out-of-band).
+   */
+  async restore(rawCode: string, recipient: ClaimRecipient): Promise<void> {
+    const normalized = ClaimCodeService.normalize(rawCode);
+    if (!normalized) return; // a code that never normalised was never stored → nothing to restore
+    await this.redis.client.set(
+      this.key(normalized),
+      JSON.stringify(recipient),
+      'EX',
+      CLAIM_CODE_TTL_SECONDS,
+    );
+  }
+
   /** Generate a display-formatted high-entropy code, e.g. `T7Q4-9KJ2-M3XZ-1H5P` (Crockford base32). */
   private generateCode(): string {
     let out = '';

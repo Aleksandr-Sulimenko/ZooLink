@@ -441,6 +441,34 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
       expect(res.body.code).toBe('SELF_TRANSFER');
     });
 
+    it('P1-1 (AUDIT4 #1): a claim-coded initiate that rolls back on TRANSFER_ALREADY_PENDING leaves the code redeemable', async () => {
+      const code = await mintPlain(recipTok);
+      // Occupy the animal's single PENDING slot so a second (claim-coded) initiate rolls back with 409.
+      const busy = await newAnimal(ownerId);
+      track(await initiate(ownerTok, busy, { toUserId: strangerId }).expect(201));
+      const conflict = await initiate(ownerTok, busy, { claimCode: code }).expect(409);
+      expect(conflict.body.code).toBe('TRANSFER_ALREADY_PENDING');
+      // The rolled-back tx must NOT have burned the single-use code — it still redeems on a clean animal.
+      const clean = await newAnimal(ownerId);
+      const ok = await initiate(ownerTok, clean, { claimCode: code }).expect(201);
+      expect(ok.body.status).toBe('PENDING');
+      expect(ok.body.toUserId).toBe(recipId); // resolved to the original recipient
+      track(ok);
+    });
+
+    it('P1-1 (AUDIT4 #1): a claim-coded SELF_TRANSFER leaves the code redeemable for the real counterparty', async () => {
+      const code = await mintPlain(recipTok);
+      // recipId owns this animal, so initiating with recipId's own code is a self-transfer (422).
+      const selfAnimal = await newAnimal(recipId);
+      const rej = await initiate(recipTok, selfAnimal, { claimCode: code }).expect(422);
+      expect(rej.body.code).toBe('SELF_TRANSFER');
+      // The guard rejected AFTER consume; the code was restored → the owner can still use it elsewhere.
+      const clean = await newAnimal(ownerId);
+      const ok = await initiate(ownerTok, clean, { claimCode: code }).expect(201);
+      expect(ok.body.toUserId).toBe(recipId);
+      track(ok);
+    });
+
     it('probe 1 (no-enumeration, claim): garbage / well-formed-absent / consumed codes all → uniform 422, indistinguishable body', async () => {
       const consumed = await mintPlain(recipTok);
       const a0 = await newAnimal(ownerId);

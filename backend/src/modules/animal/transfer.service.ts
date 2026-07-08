@@ -155,6 +155,12 @@ export class TransferService {
     // Resolve the recipient to a concrete user/org (C5 resolution order).
     let toUserId: string | null = null;
     let toOrganizationId: string | null = null;
+    // P1-1 (AUDIT4 backend-engineer #1): a consumed single-use claim code, retained so it can be
+    // RESTORED if the transfer then fails to be created below (the SELF_TRANSFER guard, or a
+    // rolled-back tx — e.g. a concurrent PENDING → `TRANSFER_ALREADY_PENDING`). A destructive consume
+    // followed by a failed create would otherwise silently burn a valid code for a transfer that
+    // never existed. Null on the raw toUserId/toOrganizationId paths (no code to compensate).
+    let consumedClaim: { raw: string; recipient: ClaimRecipient } | null = null;
     if (dto.claimCode != null) {
       // INV-C5-6: atomic single-use consume. INV-C5-1: every failure mode (nonexistent / expired /
       // consumed / malformed) is one uniform 422 — no existence oracle, no per-mode message/timing.
@@ -162,6 +168,7 @@ export class TransferService {
       if (!resolved) {
         throw new UnprocessableEntityException({ message: 'The transfer claim code is invalid or has expired', code: 'TRANSFER_CLAIM_CODE_INVALID' });
       }
+      consumedClaim = { raw: dto.claimCode, recipient: resolved };
       toUserId = resolved.recipientUserId ?? null;
       toOrganizationId = resolved.recipientOrganizationId ?? null;
     } else if (dto.toUserId != null) {
@@ -175,52 +182,67 @@ export class TransferService {
       toOrganizationId = dto.toOrganizationId ?? null;
     }
 
-    // INV-2 / INV-C5-5: recipient ≠ current owner (no self-transfer) — re-checked AFTER resolution.
-    if (
-      (toUserId && animal.owner_id === toUserId) ||
-      (toOrganizationId && animal.organization_id === toOrganizationId)
-    ) {
-      throw new UnprocessableEntityException({ message: 'Cannot transfer an animal to its current owner', code: 'SELF_TRANSFER' });
+    try {
+      // INV-2 / INV-C5-5: recipient ≠ current owner (no self-transfer) — re-checked AFTER resolution.
+      if (
+        (toUserId && animal.owner_id === toUserId) ||
+        (toOrganizationId && animal.organization_id === toOrganizationId)
+      ) {
+        throw new UnprocessableEntityException({ message: 'Cannot transfer an animal to its current owner', code: 'SELF_TRANSFER' });
+      }
+
+      const data: Prisma.ownership_transfersUncheckedCreateInput = {
+        animal_id: animalId,
+        from_user_id: animal.owner_id,
+        from_organization_id: animal.organization_id,
+        to_user_id: toUserId,
+        to_organization_id: toOrganizationId,
+        status: 'PENDING',
+        transfer_reason: dto.transferReason ?? null,
+        initiated_by_user_id: actor.userId,
+        initiated_by_principal_type: actor.principalType,
+        expires_at: new Date(Date.now() + EXPIRY_HOURS * 3600_000),
+      };
+
+      const market = await this.marketOfAnimal(animalId);
+      const row = await this.mapWrite(() =>
+        this.prisma.$transaction(async (tx) => {
+          const created = (await tx.ownership_transfers.create({ data })) as unknown as TransferRow;
+          await this.audit.record(
+            {
+              actorId: actor.userId,
+              actorRole: actor.role,
+              actorPrincipalType: actor.principalType,
+              action: 'animal.transfer_initiated',
+              entityType: 'ownership_transfer',
+              entityId: created.id,
+              afterData: { animalId, toUserId: data.to_user_id, toOrganizationId: data.to_organization_id },
+            },
+            tx,
+          );
+          // Event seam (ADR-0021 §5, event-catalog §2) — emitted in the SAME tx as the state change so the
+          // outbox row is atomic with it. Consumed by NotificationConsumer → notify the TO-party.
+          await this.publishTransferEvent(tx, 'OwnershipTransfer.Initiated', created, market);
+          return created;
+        }),
+      );
+
+      this.logger.log(`Transfer ${row.id} initiated for animal ${animalId} by ${actor.userId}`);
+      return { transfer: this.toView(row), etag: this.etag(row) };
+    } catch (err) {
+      // P1-1: the transfer was NOT created (a guard rejected, or the tx rolled back atomically) — so a
+      // single-use claim code consumed above must be re-opened, else a valid code is burned for a
+      // transfer that never existed. Best-effort: a restore failure must NOT mask the original error,
+      // and a genuine success never reaches this catch (single-use / single-winner is preserved).
+      if (consumedClaim) {
+        try {
+          await this.claimCodes.restore(consumedClaim.raw, consumedClaim.recipient);
+        } catch (restoreErr) {
+          this.logger.error(`Failed to restore claim code after a rolled-back transfer: ${String(restoreErr)}`);
+        }
+      }
+      throw err;
     }
-
-    const data: Prisma.ownership_transfersUncheckedCreateInput = {
-      animal_id: animalId,
-      from_user_id: animal.owner_id,
-      from_organization_id: animal.organization_id,
-      to_user_id: toUserId,
-      to_organization_id: toOrganizationId,
-      status: 'PENDING',
-      transfer_reason: dto.transferReason ?? null,
-      initiated_by_user_id: actor.userId,
-      initiated_by_principal_type: actor.principalType,
-      expires_at: new Date(Date.now() + EXPIRY_HOURS * 3600_000),
-    };
-
-    const market = await this.marketOfAnimal(animalId);
-    const row = await this.mapWrite(() =>
-      this.prisma.$transaction(async (tx) => {
-        const created = (await tx.ownership_transfers.create({ data })) as unknown as TransferRow;
-        await this.audit.record(
-          {
-            actorId: actor.userId,
-            actorRole: actor.role,
-            actorPrincipalType: actor.principalType,
-            action: 'animal.transfer_initiated',
-            entityType: 'ownership_transfer',
-            entityId: created.id,
-            afterData: { animalId, toUserId: data.to_user_id, toOrganizationId: data.to_organization_id },
-          },
-          tx,
-        );
-        // Event seam (ADR-0021 §5, event-catalog §2) — emitted in the SAME tx as the state change so the
-        // outbox row is atomic with it. Consumed by NotificationConsumer → notify the TO-party.
-        await this.publishTransferEvent(tx, 'OwnershipTransfer.Initiated', created, market);
-        return created;
-      }),
-    );
-
-    this.logger.log(`Transfer ${row.id} initiated for animal ${animalId} by ${actor.userId}`);
-    return { transfer: this.toView(row), etag: this.etag(row) };
   }
 
   // ── Read one (lazy-expires) ──────────────────────────────────────────────────────────────────

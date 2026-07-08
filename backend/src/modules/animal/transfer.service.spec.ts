@@ -143,14 +143,16 @@ function setup(opts: SetupOpts = {}) {
   const ttl = jest.fn().mockResolvedValue(3600);
   const redis = { client: { incr, expire, ttl } } as unknown as RedisService;
   // Claim-code store mock: consume() returns the recipient or null (uniform miss); mint() returns a code.
+  // restore() is the P1-1 compensation seam — re-opens a consumed code when the transfer fails to create.
   const consume = jest.fn().mockResolvedValue(opts.claimResolves ?? null);
   const mint = jest.fn().mockResolvedValue({ code: 'T7Q4-9KJ2-M3XZ-1H5P', expiresInSeconds: 900, recipientType: 'USER' });
-  const claimCodes = { consume, mint } as unknown as ClaimCodeService;
+  const restore = jest.fn().mockResolvedValue(undefined);
+  const claimCodes = { consume, mint, restore } as unknown as ClaimCodeService;
   // OutboxService mock — publish() is called in-tx on every lifecycle transition (ADR-0021 producer gap).
   const publish = jest.fn().mockResolvedValue(undefined);
   const outbox = { publish } as unknown as OutboxService;
   const svc = new TransferService(prisma, audit, orgMembership, redis, claimCodes, outbox);
-  return { svc, ownership_transfers, animals, animal_ownership_history, users, organizations, record, isOrgAdmin, orgAdminIds, incr, consume, mint, publish, tx };
+  return { svc, ownership_transfers, animals, animal_ownership_history, users, organizations, record, isOrgAdmin, orgAdminIds, incr, consume, mint, restore, publish, tx };
 }
 
 const etagOf = (): string => weakEtag(`transfer:${XFER}`, UPDATED);
@@ -268,6 +270,37 @@ describe('TransferService', () => {
       const { svc } = setup({ transfer: null, claimResolves: { recipientUserId: OWNER } });
       const err = await svc.initiate(ANIMAL, { claimCode: 'SELF' }, p(OWNER)).catch((e: unknown) => e);
       expect((err as HttpException).getResponse()).toMatchObject({ code: 'SELF_TRANSFER' });
+    });
+
+    it('P1-1: a claim-coded initiate that rolls back on TRANSFER_ALREADY_PENDING (P2002) RESTORES the consumed code', async () => {
+      const { svc, ownership_transfers, consume, restore } = setup({ transfer: null, claimResolves: { recipientUserId: RECIP } });
+      ownership_transfers.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: '6', meta: { target: 'uq_owntransfer_one_pending' } }),
+      );
+      const err = await svc.initiate(ANIMAL, { claimCode: 'T7Q4-9KJ2' }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'TRANSFER_ALREADY_PENDING' });
+      expect(consume).toHaveBeenCalledTimes(1);
+      // The single-use code was consumed but no transfer exists → it is re-opened (not burned).
+      expect(restore).toHaveBeenCalledWith('T7Q4-9KJ2', { recipientUserId: RECIP });
+    });
+
+    it('P1-1: a claim code resolving to a SELF_TRANSFER restores the consumed code (guard rejects post-consume)', async () => {
+      const { svc, restore } = setup({ transfer: null, claimResolves: { recipientUserId: OWNER } });
+      const err = await svc.initiate(ANIMAL, { claimCode: 'SELF' }, p(OWNER)).catch((e: unknown) => e);
+      expect((err as HttpException).getResponse()).toMatchObject({ code: 'SELF_TRANSFER' });
+      expect(restore).toHaveBeenCalledWith('SELF', { recipientUserId: OWNER });
+    });
+
+    it('P1-1: a SUCCESSFUL claim-coded initiate does NOT restore (single-use stays burned)', async () => {
+      const { svc, restore } = setup({ transfer: null, claimResolves: { recipientUserId: RECIP } });
+      await svc.initiate(ANIMAL, { claimCode: 'T7Q4' }, p(OWNER));
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it('P1-1: an invalid code (consume→null) does not restore (nothing was consumed)', async () => {
+      const { svc, restore } = setup({ transfer: null, claimResolves: null });
+      await svc.initiate(ANIMAL, { claimCode: 'GARBAGE' }, p(OWNER)).catch((e: unknown) => e);
+      expect(restore).not.toHaveBeenCalled();
     });
 
     it('INV-C5-4: initiate over the per-principal limit → 429 RATE_LIMITED + retryAfter', async () => {

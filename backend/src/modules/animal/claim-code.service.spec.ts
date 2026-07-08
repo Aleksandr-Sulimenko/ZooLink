@@ -71,4 +71,29 @@ describe('ClaimCodeService', () => {
       expect(await svc.consume('ZZZZ-ZZZZ')).toBeNull();
     });
   });
+
+  describe('restore (P1-1 compensation)', () => {
+    it('re-opens a consumed code so it is redeemable again after a failed transfer', async () => {
+      const { svc } = setup();
+      const { code } = await svc.mint({ recipientUserId: 'u1' });
+      expect(await svc.consume(code)).toEqual({ recipientUserId: 'u1' }); // consumed (burned)
+      expect(await svc.consume(code)).toBeNull(); // single-use: gone
+      await svc.restore(code, { recipientUserId: 'u1' }); // the transfer failed → compensate
+      expect(await svc.consume(code)).toEqual({ recipientUserId: 'u1' }); // redeemable again
+    });
+
+    it('normalises the raw code so a human-typed variant restores to the same key', async () => {
+      const { svc } = setup();
+      const { code } = await svc.mint({ recipientOrganizationId: 'o1' });
+      await svc.consume(code);
+      await svc.restore(code.replace(/-/g, '').toLowerCase(), { recipientOrganizationId: 'o1' });
+      expect(await svc.consume(code)).toEqual({ recipientOrganizationId: 'o1' });
+    });
+
+    it('a malformed code → no-op (nothing stored)', async () => {
+      const { svc, set } = setup();
+      await svc.restore('!!!', { recipientUserId: 'u1' });
+      expect(set).not.toHaveBeenCalled();
+    });
+  });
 });
