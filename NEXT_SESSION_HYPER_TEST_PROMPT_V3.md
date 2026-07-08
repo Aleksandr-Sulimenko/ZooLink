@@ -1,17 +1,19 @@
-# 🔥🔥🔥 HYPER³ — RE-AUDIT (same axes) + NEW UNFORESEEN AXES + TRASH-TEST — next-session launcher (v3)
+# 🔥🔥🔥 HYPER³ — RE-AUDIT (same axes) + NEW UNFORESEEN AXES + TRASH-TEST + STRATEGIC LENS — launcher (v3.5, усилен 2026-07-08)
 
 > **Paste the block below as the FIRST message of a FRESH session** (clean context, ideally a
 > **strong model**). Enter the **zoolink arena**. Everything is on branch `backend`, **PUSHED** to
 > `origin/backend` (HEAD `a23a58f`). This is **round 3**: re-run the whole audit *independently* on the
-> SAME axes, add **NEW axes rounds 1–2 never examined**, and run a deliberate **TRASH-TEST** (chaos /
-> adversarial / fuzz / load / resilience), then **group/reconcile** against round 1 (`AUDIT2*`) and
-> round 2 (`AUDIT3*`). Rounds 1–2 (Opus 4.8 / Fable 5) found the dead-marketplace + anti-rewrite gaps;
-> those are now FIXED (fix-program Waves A–G). Round 3 must **stress the fixes themselves** and hunt what
-> a green suite still masks.
+> SAME axes, add **NEW axes rounds 1–2 never examined**, run a deliberate **TRASH-TEST** (chaos /
+> adversarial / fuzz / load / resilience), **and (v3.5) a STRATEGIC lens** — North-Star agent-run-future
+> readiness · win-win needs-coverage · forward development perspective — then **group/reconcile**
+> against round 1 (`AUDIT2*`) and round 2 (`AUDIT3*`). Rounds 1–2 (Opus 4.8 / Fable 5) found the
+> dead-marketplace + anti-rewrite gaps; those are now FIXED (fix-program Waves A–G). Round 3 must
+> **stress the fixes themselves**, hunt what a green suite still masks, and judge the platform against
+> the business apex, not only against the code contract.
 
 ---
 
-СТАРТ! Ты — оркестратор. Заходим в арену **zoolink**. Запусти **HYPER³** — сквозной ре-анализ + тестирование силами **ВСЕХ 18 спецов** (16 + **psychologist** + **active-user**), ТРИ линзы: **(1) те же оси, что раунды 1–2**, **(2) НОВЫЕ ранее-не-предвиденные оси**, **(3) ТРЕШ-ТЕСТ** (хаос/adversarial). И **сверь с раундами 1 и 2**.
+СТАРТ! Ты — оркестратор. Заходим в арену **zoolink**. Запусти **HYPER³** — сквозной ре-анализ + тестирование силами **ВСЕХ 18 спецов** (16 + **psychologist** + **active-user**), ЧЕТЫРЕ линзы: **(1) те же оси, что раунды 1–2**, **(2) НОВЫЕ ранее-не-предвиденные оси**, **(3) ТРЕШ-ТЕСТ** (хаос/adversarial), **(4) СТРАТЕГИЧЕСКАЯ** (North-Star агентного будущего · win-win-потребности · перспектива развития). И **сверь с раундами 1 и 2**.
 
 ## СОСТОЯНИЕ (на момент запуска, ветка `backend`, HEAD `a23a58f`, ЗАПУШЕНО в origin)
 Fix-программа по HYPER²-аудиту **ЗАКРЫТА** (Волны A–G, 16 коммитов, все через gate). Durable-итог: память **`zoolink-audit3-fix-program-2026-07`** + `zoolink-hypertest2-forward-compat-2026-07-02` (round-2) + `zoolink-hypertest-forward-compat-2026-07-02` (round-1).
@@ -26,7 +28,7 @@ Fix-программа по HYPER²-аудиту **ЗАКРЫТА** (Волны 
   - favorites controller (own-scope, DELETE-204-leak-free), view-count capture (mig 0031), RF-residency guardrail (ADR-0017).
 - **Артефакты прошлых раундов:** `AUDIT2_FORWARD_COMPAT.md`+`AUDIT2/*` (round-1), `AUDIT3_FORWARD_COMPAT.md`+`AUDIT3/*` (round-2), `backend/test/audit2-*.e2e-spec.ts` (BLOCKER теперь GREEN; **9 `it.todo` осталось** — непостроенные поверхности).
 
-## МИССИЯ (ТРОЙНАЯ)
+## МИССИЯ (ЧЕТВЕРНАЯ)
 1. **РЕ-АУДИТ ПО ТЕМ ЖЕ ОСЯМ (независимо, затем reconcile).** Каждый спец сначала выводит сам (свежие глаза), линза — forward-compat/анти-рерайт + application-security + BR-трассировка (как раунды 1–2). Потом diff против `AUDIT2/<role>.md` И `AUDIT3/<role>.md`: **NEW / CONFIRMED / REFUTED / SEV-CHG / FIXED-VERIFIED** (пятая категория: подтверди что fix-программа реально закрыла находку, а не замаскировала). ГЛАВНОЕ: fix-программа изменила много кода — **предполагай, что фиксы могли (а) что-то новое сломать, (б) снова маскировать зелёными тестами**. Grep таблиц/поведений без writer'а/consumer'а (как contact_reveals) — заново.
 2. **НОВЫЕ ОСИ (ранее не предвиденные).** Раунды 1–2 смотрели на forward-compat, security-seams, dead-features, BR-drift. Round-3 добавляет оси, которых НЕ было:
    - **Concurrency-at-scale / race-storms:** новые пути (consent opt-in↔reveal, claim-code consume, favorites dedup P2002, notification idempotency, market-cache recompute, transfer accept) под параллельной нагрузкой и retry-штормом. TOCTOU за пределами найденных.
@@ -43,6 +45,10 @@ Fix-программа по HYPER²-аудиту **ЗАКРЫТА** (Волны 
    - **Clock/TTL skew:** claim-code TTL на границе, SLA-escalation пороги, cookie/JWT expiry, consent policy_version.
    - **Dependency failure injection:** убить Redis/PG посреди tx, задержки, разрыв соединения — система должна деградировать безопасно, НЕ раскрывать данные, НЕ терять инварианты.
    Каждый треш-кейс: ожидаемое безопасное поведение (4xx/deградация/отказ), НЕ 5xx-с-утечкой, НЕ порча данных, НЕ обход authz/consent/market-separation.
+4. **СТРАТЕГИЧЕСКАЯ ЛИНЗА (v3.5 — НОВОЕ; судим платформу по бизнес-апексу, не только по контракту).** Три оси, каждый спец применяет их к СВОЕЙ зоне; сводный блок — в синтезе:
+   - **North-Star: агентно-управляемое будущее (ADR-0006 → уровень бизнеса).** Северная звезда владельца: платформенный бизнес и операторские роли (модератор → админ → бизнес-операции) со временем ВЕДУТ ИИ-агенты; владелец — визионер. Значит round-3 проверяет не только «agent-as-principal в коде», а **агенто-управляемость каждого домена end-to-end**: может ли ИИ-агент УЖЕ (или после какого минимального шва) вести модерацию / админку / поддержку / бизнес-операции этого домена — есть ли у него API-путь (не только UI), идемпотентность, аудит-снапшот, human-override, безопасные границы автономии? Ищи **анти-North-Star долг**: места, где «человек-только» зашито без необходимости (ручной шаг без API, решение без записанного reason, поток без машиночитаемого состояния). Выход: **agent-runnability scorecard по доменам** (READY / SEAM-NEEDED / BLOCKED + минимальный шов).
+   - **Win-win: найти потребность человека и закрыть её.** Философия ведения дел владельца: бизнес существует, чтобы находить РЕАЛЬНЫЕ потребности людей и закрывать их так, чтобы выигрывали ОБЕ стороны. Для каждой персоны active-user: (a) какая реальная потребность стоит за поверхностью, (b) закрывает ли её построенное — полностью / частично / никак, (c) симметрична ли ценность (покупатель↔продавец, платформа↔юзер, обе рыночные стороны ADR-0002), (d) где механика рискует стать извлекающей/манипулятивной (psychologist: анти-dark-pattern — это провал win-win, severity как у бага). Выход: **needs-coverage map** (потребность → поверхность → статус ЗАКРЫТА/ЧАСТИЧНО/ДЫРА → чем закрыть) + win-win-вердикт по каждой монетизационной механике (toggles: payments, boosted_listings, premium_profiles, vet_leadgen, service_marketplace — обогащает ли ценность или только извлекает).
+   - **Перспектива: план развития.** Каждую находку и каждый шов оцени на горизонт: что это значит для Phase-2 (frontend/SPA — фронт уже деплоится!), для включения монетизации, для масштаба, для агент-операторов? Примени фазировку по cost-of-change: что ТЯНУТЬ ВПЕРЁД (дешевле сейчас / потом рерайт), что честно зреет, что тупиковая ветка. Выход: **forward-looking план развития** — приоритизированная перспектива «после round-3» с обоснованием по стоимости изменения.
 
 ## ЗАМЕТКИ — куда смотреть в первую очередь (round-3 hot-spots)
 1. **Стресс самих фиксов:** consent-гейт непробиваем под гонками? billing-unit не жжёт квоту при гонке пустого reveal? claim-code single-use под double-consume? notification idempotency под дублями relay? market grep-gate не обходится новым сырым join'ом? user_roles dormancy держит под каждым authz-путём? refresh-cookie rotation под кражей/replay?
@@ -51,23 +57,26 @@ Fix-программа по HYPER²-аудиту **ЗАКРЫТА** (Волны 
 4. **Scale/perf оси** (раунды 1–2 их не мерили): view-on-read, consumer throughput, N+1, materialize.
 5. **Migration-replay + N-1 upgrade** на чистой БД (0001→0034).
 6. **Открытые тикеты** (не блок, но проверить): `animal.getById` CASL owner-only vs listScope org-admin дивергенция; `/api/v1` vs `/v1` канон; ecosystem-BR-018+ не в requirements-каноне.
+7. **Стратегические хот-споты (v3.5):** где домен требует человека там, где мог бы вести агент (анти-North-Star долг — ручной шаг без API / решение без записанного reason); какие реальные потребности персон закрыты лишь ЧАСТИЧНО или НИКАК (needs-дыры); какие монетизационные toggles рискуют извлекать ценность вместо создавать её (win-win-провал = severity как у бага); что дешевле втянуть сейчас под Phase-2/монетизацию/масштаб, чем переписывать потом.
 
 ## КАК ГНАТЬ (дисциплина — ОБЯЗАТЕЛЬНО)
-- **Каждый агент пишет ПОЛНЫЕ находки + diff-к-раундам-1&2 в `ZooLink/AUDIT4/<role>.md`, оркестратору — резюме ≤150 слов.** Формат: `[severity][критерий][ось: same|new|trash][NEW|CONFIRMED|REFUTED|SEV-CHG|FIXED-VERIFIED] файл:строка → проблема/треш-кейс → фикс`. Не выдумывать; неуверен → «требует ручной проверки». Делегаты **НЕ коммитят**, продуктовый src НЕ меняют (треш-тесты = НОВЫЕ тест-файлы; вскрытый баг → 🔴-находка оркестратору, чинить отдельным гейт-слайсом).
+- **Каждый агент пишет ПОЛНЫЕ находки + diff-к-раундам-1&2 в `ZooLink/AUDIT4/<role>.md`, оркестратору — резюме ≤150 слов.** Формат: `[severity][критерий][ось: same|new|trash|strat][NEW|CONFIRMED|REFUTED|SEV-CHG|FIXED-VERIFIED] файл:строка → проблема/треш-кейс/стратег-гэп → фикс`. Стратегические находки (ось `strat`) дополнительно несут тег `[NS|WW|PERSP]` (North-Star / win-win / перспектива). Не выдумывать; неуверен → «требует ручной проверки». Делегаты **НЕ коммитят**, продуктовый src НЕ меняют (треш-тесты = НОВЫЕ тест-файлы; вскрытый баг → 🔴-находка оркестратору, чинить отдельным гейт-слайсом).
 - **Тест-ресурс общий** (host PG/Redis localhost:5432/6379): **ОДИН тест-прогон за раз**, `redis-cli flushall` первым, `--runInBand` при флапе rate-limit ([[zoolink-e2e-host-services]]). Doc-only линзы — параллельно. Батчи агентов ~5–6 (большие фан-ауты ловят rate-limit).
 - **⚠️ MIGRATION-LOCATION TRAP:** новые миграции пиши ТОЛЬКО в `ZooLink/migrations/` (не workspace-root) — round-2 ловил 0030/0031 не там.
 - **Проектные роли ЗАРЕГИСТРИРОВАНЫ как subagent-типы** (спавнь напрямую architect/backend-engineer/security/reviewer-qa/… — не «claude adopts role»).
 - **Baseline-floor:** сначала прогони весь `backend/test` + `scripts/check-no-raw-market-join.sh` (ожидаемо 610u/289e+9todo, grep-gate green) — это регрессия-этаж перед треш-тестом.
 
 ## ФАЗЫ
-**Фаза 1 — active-user (needs-first + adversarial):** пройди КАЖДУЮ персону first-person по РЕАЛЬНО построенному (теперь маркетплейс живой!) — и как честный юзер, и как злоумышленник (треш). Вердикт «вернусь ли» + misuse → security. → `AUDIT4/active-user.md`, сверь с AUDIT2+AUDIT3.
-**Фаза 2 — все спецы параллельно (3 линзы + reconcile):** каждый (a) выводит сам по 3 осям (same/new/trash), (b) diff к своим `AUDIT2/<role>.md`+`AUDIT3/<role>.md`, (c) даёт тест/треш-пробы. architect держит per-seam forward-compat + новые оси (concurrency/perf/resilience). security ведёт треш-adversarial + exploit-chains. reviewer-qa — маскировку + migration-replay + N-1. legal/finance/growth — record-only по launch-gate (владелец отложил юр/секреты/монетизацию к релизу), но abuse-economics и consent-механику стрессуют. → `AUDIT4/<role>.md`.
+**Фаза 1 — active-user (needs-first + adversarial + win-win):** пройди КАЖДУЮ персону first-person по РЕАЛЬНО построенному (теперь маркетплейс живой!) — как честный юзер, как злоумышленник (треш) И как носитель реальной потребности (win-win-линза: какая нужда стоит за поверхностью, закрыта ли она, симметрична ли ценность обеим сторонам). Вердикт «вернусь ли» + misuse → security + первичная **needs-coverage map**. → `AUDIT4/active-user.md`, сверь с AUDIT2+AUDIT3.
+**Фаза 2 — все спецы параллельно (4 линзы + reconcile):** каждый (a) выводит сам по 4 осям (same/new/trash/**strat**), (b) diff к своим `AUDIT2/<role>.md`+`AUDIT3/<role>.md`, (c) даёт тест/треш-пробы, (d) применяет стратег-линзу к своей зоне (NS-agent-runnability / WW-needs / PERSP-развитие). architect держит per-seam forward-compat + новые оси (concurrency/perf/resilience) + **agent-runnability scorecard по доменам**. security ведёт треш-adversarial + exploit-chains + безопасные границы автономии агент-операторов. reviewer-qa — маскировку + migration-replay + N-1. psychologist ведёт **win-win / анти-dark-pattern** вердикт по механикам. growth+finance+active-user строят **needs-coverage map** + win-win по монетизационным toggles. legal/finance/growth — record-only по launch-gate (владелец отложил юр/секреты/монетизацию к релизу), но abuse-economics, consent-механику и win-win-симметрию стрессуют. → `AUDIT4/<role>.md`.
 **Фаза 3 — ГИПЕР-ТЕСТ + ТРЕШ-ТЕСТ:** baseline-floor → реализуй НОВЫЕ негатив/concurrency/perf/resilience/fuzz-инварианты на КАЖДУЮ поверхность (особенно fix-программные) → прогони треш-кейсы → расширь `it.todo` где построилось. Всё зелёное или 🔴 задокументирован. → `AUDIT4/PHASE3_HYPERTEST.md`.
-**Фаза 4 — синтез + reconcile:** сведи `AUDIT4/*` → **`ZooLink/AUDIT4_HARDENING.md`** с **diff-таблицей раунд1↔2↔3** (NEW/CONFIRMED/REFUTED/SEV-CHG/FIXED-VERIFIED) + объединённым приоритизированным списком (P0–P4) + отдельной **секцией TRASH-TEST results** (что выдержало, что нет). Durable-память. **Коммит — по явной команде владельца.**
+**Фаза 4 — синтез + reconcile:** сведи `AUDIT4/*` → **`ZooLink/AUDIT4_HARDENING.md`** с **diff-таблицей раунд1↔2↔3** (NEW/CONFIRMED/REFUTED/SEV-CHG/FIXED-VERIFIED) + объединённым приоритизированным списком (P0–P4) + отдельной **секцией TRASH-TEST results** (что выдержало, что нет) + отдельной **СТРАТЕГИЧЕСКОЙ секцией**: (1) **agent-runnability scorecard** по доменам (READY/SEAM-NEEDED/BLOCKED к North-Star), (2) **needs-coverage map** (потребность→поверхность→статус) + win-win-вердикт по монетизации, (3) **forward-looking план развития** (перспектива после round-3, фазировка по cost-of-change). Durable-память. **Коммит — по явной команде владельца.**
 
 ## КОНТЕКСТ ВЛАДЕЛЬЦА (учесть при приоритизации)
 - **Бэк ещё дорабатывается, фронт на стадии деплоя.** Фокус round-3 = **backend-хардненинг + forward-compat + треш-устойчивость** (активная зона).
 - **Launch-gate пункты ОТЛОЖЕНЫ владельцем к релизу** (юр-публикация/РКН, ротация секретов, RF-зоны, модель монетизации — win-win/soft-start): в аудите они **record-only, НЕ блокеры сейчас**, но фиксируй их состояние.
 - Владелец ценит **efficiency·accuracy·productivity; measure, don't assume**; коммуникация human-first; **always ask before commit**.
 
-Начни с заземления (прочитай `zoolink-audit3-fix-program-2026-07`, `AUDIT3_FORWARD_COMPAT.md` §Attention + 2–3 острых `AUDIT3/<role>.md`, `git log --oneline -20`, прогони baseline-floor), дай короткий план (кого на что по 3 осям) и запускай Фазу 1.
+Начни с заземления (прочитай `zoolink-audit3-fix-program-2026-07`, `AUDIT3_FORWARD_COMPAT.md` §Attention + 2–3 острых `AUDIT3/<role>.md`, `git log --oneline -20`, прогони baseline-floor) **И со стратегического контекста владельца** (SELF-слой: `~/Buddhi/agent-os/self/life-strategy.md` North-Star + `north-star-agent-run-future` + ADR-0006 — чтобы стратегическая линза мерила платформу по бизнес-апексу, а не по коду), дай короткий план (кого на что по 4 осям) и запускай Фазу 1.
+
+> **Заметка о линзе `strat`:** это НЕ замена launch-gate record-only (юр/секреты/монетизация всё ещё отложены владельцем к релизу). Стратегическая линза не «включает» отложенное — она ОЦЕНИВАЕТ готовность к North-Star, полноту закрытия потребностей (win-win) и перспективу развития, чтобы round-3 судил платформу и по бизнес-цели, а не только по контракту. Находки `strat` приоритизируются в общий P0–P4, но win-win-провал/анти-North-Star-долг несут вес бага, а не «nice-to-have».
