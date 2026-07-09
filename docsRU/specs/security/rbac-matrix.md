@@ -86,6 +86,33 @@ Org-членство — отдельная ось: `organization_users.role_in_
 > (initiate/cancel = инициатор-владелец, accept/decline = получатель, R/U = ADMIN); owner-lock остаётся защитой
 > в глубину (только контролируемый путь через GUC). Согласовано с [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) §1/§5.
 
+> **(round-9, нормативно) — замыкание additive-модели: любой `x-required-roles`, дающий USER, ОБЯЗАН давать также VETERINARIAN и GROOMER.**
+> **ЧТО:** Единое машинно-применимое правило-замыкание над каждой декларацией `x-required-roles` в
+> `docs/03-architecture/api-contracts/*.yaml`: **для любой операции, чей массив `x-required-roles` содержит `USER`, этот
+> массив ОБЯЗАН содержать также и `VETERINARIAN`, и `GROOMER`.** Конкретно, единственные две USER-содержащие формы списков в
+> контрактах — `[USER, BREEDER, FARMER, ADMIN]` и `[USER, BREEDER, FARMER, MODERATOR, ADMIN]` — становятся, соответственно,
+> `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]` и `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]`
+> (вставить `VETERINARIAN, GROOMER` сразу после `FARMER`, сохранив все прочие элементы и их порядок). Полный упорядоченный
+> 7-ролевой канон (§Роли) = `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]`; канонический шаблон записи =
+> `favorites-api.yaml` (D11, 2026-07-07). **Исключений нет.** Поскольку VETERINARIAN/GROOMER = «USER + доп. возможности» и
+> наследуют **все** права USER (§Роли выше), не существует USER-выданной поверхности, на которой им можно правомерно отказать.
+> Списки, НЕ содержащие `USER`, — **вне области** (правило не срабатывает): операторские `[ADMIN]` / `[MODERATOR, ADMIN]` и
+> org-скоуп `[OWNER, ADMIN]` — последние суть значения `organization_users.role_in_org` на **отдельной** оси, а не `users.role`
+> (§Роли), и их никогда нельзя смешивать. Гейтированные операции Фазы 2 (платежи и т.д.) — **не** исключение: гейтинг это ось
+> `feature_toggles`, ортогональная роли, поэтому их USER-содержащие списки тоже получают VET/GROOMER.
+> **ПОЧЕМУ:** ~37 owner/user-facing операций в 7 контрактах (branch, listings, matching, moderation:291, notification,
+> organization, payment) всё ещё перечисляют 5-ролевой набор и опускают VETERINARIAN & GROOMER, при этом давая USER — прямой
+> дрейф от additive-модели (§Роли) и от семантики `RolesGuard` (§Замечания по реализации: роль, отсутствующая в
+> `x-required-roles`, — запрещена). Следствие: VETERINARIAN или GROOMER получает необоснованный **HTTP 403** на базовых
+> USER-поверхностях, на которые он имеет право. D11 починил только поверхности личной коллекции (favorites, saved-search);
+> остальное так и не было прочёсано.
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** один детерминированный, механически проверяемый инвариант
+> (`USER ∈ list ⟹ {VETERINARIAN, GROOMER} ⊆ list`) делает весь корпус контрактов согласованным с единственным источником
+> истины RBAC и с прецедентом D11 — один единообразный набор ролей «USER + extra» на каждой USER-поверхности. Оно чисто
+> **аддитивно** (выдаёт доступ, уже подразумеваемый матрицей, ничего не убирает, не меняет поведение для существующих ролей),
+> forward-compatible с `principal_type` (HUMAN|AGENT без изменений, ADR-0011 §7) и даёт backend-engineer однозначный,
+> без-догадочный свип плюс линтуемый инвариант, не дающий будущим контрактам регрессировать.
+
 ## Правила объектного уровня (владение) — применять в сервис-слое
 - **Животное:** изменяемо только `owner_id == актор` ИЛИ актор — org-admin `organization_id`. Неизменяемые поля
   (species_id, sex, date_of_birth, breed_id) блокируются триггером независимо от роли.

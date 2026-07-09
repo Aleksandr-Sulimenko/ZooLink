@@ -169,7 +169,7 @@ paths:
         вида животного (ADR-0002), никогда не задаётся клиентом. `status`/`moderationStatus` **не**
         записываемы — жизненный цикл движется только через действия (POST /submit). MODERATOR — **R-only** на
         объявлениях (rbac-matrix §64/§99) → исключён из create.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -240,7 +240,7 @@ paths:
         ACTIVE-листинг в модерацию (он уходит из публичного поиска до повторного одобрения). В MVP
         каждая правка редактируемых контент-полей ACTIVE-листинга материальна (нет пути тривиальной правки
         на ACTIVE — DRIFT-M14b). Ответ отражает новые `status`/`moderationStatus`.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -286,7 +286,7 @@ paths:
         (guard-based 409, §10 — это state-transition действие). Объектное правило: только продавец или
         org-admin (rbac-matrix §99); MODERATOR-driven удаление — отдельный operator-путь
         (Admin Slice 4), здесь исключён. Переход audit/principal-stamped.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -317,7 +317,7 @@ paths:
         PENDING_MODERATION → ACTIVE (`trg_listing_active_requires_approval`). Объектное правило:
         только продавец или org-admin; MODERATOR исключён (R-only). Идемпотентно под Idempotency-Key;
         If-Match защищает от действия по устаревшему виду.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -422,7 +422,7 @@ paths:
         только продавец или org-admin (MODERATOR исключён, R-only). Guarded ACTIVE→SOLD переход с одним
         победителем; повтор по уже-SOLD/терминальному объявлению → 409 `LISTING_NOT_ACTIVE`. If-Match
         защищает от действия по устаревшему виду; идемпотентно под Idempotency-Key.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -487,7 +487,7 @@ paths:
         (S3/MinIO, ADR-0008) — его host проверяется по env-driven allowlist хостов хранилища;
         произвольный внешний/внутренний host отклоняется 422. Это предотвращает подмену контента после
         одобрения (обход модерации — в БД хранится URL, а не байты) и латентный SSRF.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -531,7 +531,7 @@ paths:
         выдаёт URL — поэтому не требует `Idempotency-Key`; повтор просто выдаёт новый URL.
         Лимит `MAX_MEDIA_ITEMS=10` по-прежнему применяется в `POST /photos` (этот эндпоинт сам фото не
         добавляет). URL загрузки истекает через `expiresInSeconds`.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -553,7 +553,7 @@ paths:
       summary: Удалить фото из объявления
       operationId: deleteListingPhoto
       description: Только продавец или org-admin (→ иначе 403); MODERATOR R-only на объявлениях, исключён.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -581,7 +581,7 @@ paths:
         объявления (object-level ownership проверяется на сервисном слое по rbac-matrix.md). Сейчас —
         снимок-счётчики; форма series-ready (§16) — опциональный временной ряд `series` помечен x-phase:2
         и в MVP отсутствует/пуст. Применяются конвенции публичного чтения (weak ETag + Cache-Control, §13).
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -613,7 +613,7 @@ paths:
       description: >
         DEPRECATED — чат это Фаза 2+ и вне MVP (ADR-0005). Сервер шлёт заголовки Deprecation + Sunset
         (API_CONVENTIONS §9/§14).
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

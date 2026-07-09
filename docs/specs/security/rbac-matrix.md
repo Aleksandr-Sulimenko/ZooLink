@@ -87,6 +87,33 @@ Org-scoped membership is a separate axis: `organization_users.role_in_org = {OWN
 > (initiate/cancel = инициатор-владелец, accept/decline = получатель, R/U = ADMIN); owner-lock остаётся защитой
 > в глубину (только контролируемый путь через GUC). Согласовано с [ADR-0013](../../04-decisions/0013-mvp-ownership-transfer.md) §1/§5.
 
+> **(round-9, normative) — additive-model closure: any `x-required-roles` that grants USER MUST also grant VETERINARIAN and GROOMER.**
+> **WHAT:** A single machine-applicable closure rule over every `x-required-roles` declaration in
+> `docs/03-architecture/api-contracts/*.yaml`: **for any operation whose `x-required-roles` array contains `USER`, that
+> array MUST also contain both `VETERINARIAN` and `GROOMER`.** Concretely, the only two USER-bearing list shapes present in
+> the contracts — `[USER, BREEDER, FARMER, ADMIN]` and `[USER, BREEDER, FARMER, MODERATOR, ADMIN]` — become, respectively,
+> `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]` and `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]`
+> (insert `VETERINARIAN, GROOMER` immediately after `FARMER`, preserving every other entry and its order). The full ordered
+> 7-role canon (§Roles) is `[USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]`; the canonical record template =
+> `favorites-api.yaml` (D11, 2026-07-07). **Exceptions: none.** Because VETERINARIAN/GROOMER are "USER + extra capabilities"
+> and inherit **all** USER permissions (§Roles above), there is no USER-granted surface on which they may legitimately be
+> denied. Lists that do **not** contain `USER` are **out of scope** (the rule does not fire): operator-only `[ADMIN]` /
+> `[MODERATOR, ADMIN]`, and org-scoped `[OWNER, ADMIN]` — the latter are `organization_users.role_in_org` values on a
+> **separate** axis, not `users.role` (§Roles), and must never be conflated. Gated Phase-2 operations (payments, etc.) are
+> **not** exceptions: gating is a `feature_toggles` axis orthogonal to role, so their USER-bearing lists take VET/GROOMER too.
+> **WHY:** ~37 owner/user-facing operations across 7 contracts (branch, listings, matching, moderation:291, notification,
+> organization, payment) still enumerate a 5-role set and omit VETERINARIAN & GROOMER while granting USER — direct drift from
+> the additive model (§Roles) and from the `RolesGuard` semantics (§Implementation notes: a role absent from
+> `x-required-roles` is denied). Consequence: a VETERINARIAN or GROOMER receives an unwarranted **HTTP 403** on basic USER
+> surfaces they are entitled to. D11 fixed only the personal-collection surfaces (favorites, saved-search); the rest were
+> never swept.
+> **WHY-BETTER-for-the-whole-project:** one deterministic, mechanically-checkable invariant
+> (`USER ∈ list ⟹ {VETERINARIAN, GROOMER} ⊆ list`) makes the whole contract corpus self-consistent with the single RBAC
+> source of truth and with the D11 precedent — one uniform "USER + extra" role set on every USER surface. It is purely
+> **additive** (grants access already implied by the matrix, removes nothing, changes no behaviour for existing roles),
+> forward-compatible with `principal_type` (HUMAN|AGENT unchanged, ADR-0011 §7), and gives backend-engineer an unambiguous,
+> guess-free sweep plus a lint-able invariant that prevents future contracts from regressing.
+
 ## Object-level (ownership) rules — must be enforced at service layer
 - **Animal:** mutable only by `owner_id == actor` OR actor is org-admin of `organization_id`. Immutable fields
   (species_id, sex, date_of_birth, breed_id) blocked by trigger regardless of role.

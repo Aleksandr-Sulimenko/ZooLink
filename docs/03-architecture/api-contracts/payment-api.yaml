@@ -18,7 +18,7 @@ paths:
     post:
       summary: Create a payment intent
       operationId: createPaymentIntent
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       description: >-
         Creates a PENDING payment_transactions row and a gateway intent.
         Requires a unique idempotencyKey to prevent double-charging.
@@ -50,7 +50,7 @@ paths:
     get:
       summary: List the current user's payment transactions
       operationId: listPayments
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
@@ -80,7 +80,7 @@ paths:
     get:
       summary: Get a payment transaction status
       operationId: getPayment
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

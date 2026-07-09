@@ -17,7 +17,7 @@ paths:
     get:
       summary: Список организаций
       operationId: listOrganizations
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: name
@@ -54,7 +54,7 @@ paths:
     post:
       summary: Создать новую организацию
       operationId: createOrganization
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -80,7 +80,7 @@ paths:
     get:
       summary: Получить организацию по ID
       operationId: getOrganizationById
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -104,7 +104,7 @@ paths:
       summary: Обновить организацию
       operationId: updateOrganization
       description: Оптимистичная конкуренция (§10) — требует If-Match с ETag из предыдущего GET.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -140,7 +140,7 @@ paths:
     delete:
       summary: Удалить организацию (мягкое удаление)
       operationId: deleteOrganization
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -156,7 +156,7 @@ paths:
     get:
       summary: Список филиалов организации
       operationId: listOrganizationBranches
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -198,7 +198,7 @@ paths:
     post:
       summary: Создать новый филиал организации
       operationId: createBranch
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -235,7 +235,7 @@ paths:
         организацией: OWNER/ADMIN организации (object-level ownership проверяется на сервисном слое по
         rbac-matrix.md). Рынки разделены по ADR-0002 (pet vs livestock). Сейчас — снимок-счётчики; форма
         series-ready (§16) — опциональный временной ряд `series` помечен x-phase:2 и в MVP отсутствует/пуст.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -263,7 +263,7 @@ paths:
     get:
       summary: Список пользователей, связанных с организацией
       operationId: listOrganizationUsers
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: orgId
@@ -337,7 +337,7 @@ paths:
     get:
       summary: Получить связь организация-пользователь по ID
       operationId: getOrganizationUserById
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

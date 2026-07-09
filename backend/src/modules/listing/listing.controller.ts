@@ -37,11 +37,11 @@ import {
 } from './dto/listing.dto';
 
 /** Roles permitted to WRITE a listing (listings-api.yaml x-required-roles; MODERATOR dropped — L-3). */
-const WRITE_ROLES = ['USER', 'BREEDER', 'FARMER', 'ADMIN'] as const;
+const WRITE_ROLES = ['USER', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER', 'ADMIN'] as const;
 /** Any authenticated principal may request a contact reveal as a buyer (contact-reveal x-required-roles). */
 const REVEAL_ROLES = ['USER', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER', 'MODERATOR', 'ADMIN'] as const;
 /** Roles permitted to read seller-owned analytics (analytics x-required-roles). */
-const ANALYTICS_ROLES = ['USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN'] as const;
+const ANALYTICS_ROLES = ['USER', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER', 'MODERATOR', 'ADMIN'] as const;
 
 /**
  * Listing aggregate CRUD + owner-side lifecycle (listings-api.yaml Slice 1) under /v1/listings.

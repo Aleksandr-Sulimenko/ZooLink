@@ -66,7 +66,7 @@ paths:
     get:
       summary: List notification delivery logs (admin / own)
       operationId: listNotificationLogs
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: user_id
@@ -152,7 +152,7 @@ paths:
     get:
       summary: Get the current user's notification preferences
       operationId: getNotificationPreferences
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       responses:
         '200':
           description: Preferences (users.notification_prefs)
@@ -164,7 +164,7 @@ paths:
     patch:
       summary: Update the current user's notification preferences
       operationId: updateNotificationPreferences
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       requestBody:
         required: true
         content:

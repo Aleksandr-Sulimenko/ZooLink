@@ -22,7 +22,7 @@ paths:
     get:
       summary: Проверка целевого животного для подбора
       operationId: getMatchingTarget
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: animal_id
@@ -48,7 +48,7 @@ paths:
     post:
       summary: Найти пары для целевого животного с предпочтениями
       operationId: findMatches
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -80,7 +80,7 @@ paths:
         персистируемых записей `matches`/`match_history`/`match_feedback`, поэтому нет `id` подбора
         для выборки и нет балла совместимости. Этот эндпоинт (и его scored-ответ) вычисляется в
         Фазе 2; отсутствует в MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -105,7 +105,7 @@ paths:
       description: >-
         **Фаза 2+.** Подбор в MVP stateless (нет таблицы `match_history` по spec 05), поэтому нет
         истории действий для возврата. Вычисляется в Фазе 2; отсутствует в MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: page
@@ -144,7 +144,7 @@ paths:
       description: >-
         **Фаза 2+.** Отзыв питает контур скоринга совместимости (в MVP нет таблицы
         `match_feedback` по spec 05). Вычисляется в Фазе 2; отсутствует в MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

@@ -288,7 +288,7 @@ paths:
         ПРИМЕЧАНИЕ (форма сейчас, поведение с доменом): это каноническая проекция для владельца; чтение
         объявления владельцем (listings-api) ДОЛЖНО встраивать тот же OwnerModerationResult как аддитивное
         поле `lastModerationResult` — отмечено для backend + doc-keeper.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

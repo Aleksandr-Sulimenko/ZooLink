@@ -18,7 +18,7 @@ paths:
     post:
       summary: Создать платёжный интент
       operationId: createPaymentIntent
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       description: >-
         Создаёт PENDING-строку payment_transactions и интент шлюза.
         Требует уникальный idempotencyKey для предотвращения двойного списания.
@@ -50,7 +50,7 @@ paths:
     get:
       summary: Список платёжных транзакций текущего пользователя
       operationId: listPayments
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: status
@@ -80,7 +80,7 @@ paths:
     get:
       summary: Получить статус платёжной транзакции
       operationId: getPayment
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

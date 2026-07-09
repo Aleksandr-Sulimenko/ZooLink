@@ -178,7 +178,7 @@ paths:
         is charged only for a **resolvable** create (a 404/403 does not consume a unit). On a Redis outage
         the quota **fails OPEN** (create allowed, degradation logged) — it is an abuse control, not a
         correctness gate.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -264,7 +264,7 @@ paths:
         an ACTIVE listing back to moderation (it leaves public search until re-approved). In MVP
         every edit to an ACTIVE listing's editable content fields is material (no trivial-edit
         path on ACTIVE — DRIFT-M14b). The response reflects the new `status`/`moderationStatus`.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -310,7 +310,7 @@ paths:
         (guard-based 409, §10 — this is a state-transition action). Object-level rule: seller or
         org-admin only (rbac-matrix §99); MODERATOR-driven removal is a separate operator path
         (Admin Slice 4), excluded here. The transition is audit/principal-stamped.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -341,7 +341,7 @@ paths:
         PENDING_MODERATION → ACTIVE (`trg_listing_active_requires_approval`). Object-level rule:
         seller or org-admin only; MODERATOR excluded (R-only). Idempotent under Idempotency-Key;
         If-Match guards against acting on a stale view.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -445,7 +445,7 @@ paths:
         org-admin only (MODERATOR excluded, R-only). Guarded ACTIVE→SOLD single-winner transition; a
         repeat on an already-SOLD/terminal listing → 409 `LISTING_NOT_ACTIVE`. If-Match guards against
         acting on a stale view; idempotent under Idempotency-Key.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -510,7 +510,7 @@ paths:
         (S3/MinIO, ADR-0008) — its host is validated against the env-driven storage-host allowlist;
         an arbitrary external/internal host is rejected 422. This prevents post-approval content-swap
         (moderation bypass — the DB stores the URL, not the bytes) and latent SSRF.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -554,7 +554,7 @@ paths:
         database — it only mints a URL — so it takes no `Idempotency-Key`; a retry simply mints a fresh URL.
         The `MAX_MEDIA_ITEMS=10` cap stays enforced at `POST /photos` (this endpoint does not itself add a
         photo). The upload URL expires after `expiresInSeconds`.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -576,7 +576,7 @@ paths:
       summary: Remove a photo from a listing
       operationId: deleteListingPhoto
       description: Seller or org-admin only (→ else 403); MODERATOR R-only on listings, excluded.
-      x-required-roles: [USER, BREEDER, FARMER, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, ADMIN]
       parameters:
         - in: path
           name: id
@@ -604,7 +604,7 @@ paths:
         (object-level ownership enforced at the service layer per rbac-matrix.md). Counts-snapshot now;
         series-ready (§16) — the optional `series` time-series is x-phase:2 and absent/empty in MVP.
         Public read conventions apply (weak ETag + Cache-Control, §13).
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -636,7 +636,7 @@ paths:
       description: >
         DEPRECATED — chat is Phase 2+ and out of MVP (ADR-0005). Server sends Deprecation + Sunset headers
         (API_CONVENTIONS §9/§14).
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

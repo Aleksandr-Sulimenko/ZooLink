@@ -288,7 +288,7 @@ paths:
         NOTE (form now, behavior with domain): this is the canonical owner-facing projection; the owner's
         Listing read (listings-api) SHOULD embed the same OwnerModerationResult as an additive
         `lastModerationResult` field — flagged for backend + doc-keeper.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id

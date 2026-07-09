@@ -104,7 +104,7 @@ export class ModerationController {
  * scoped: the listing owner OR MODERATOR/ADMIN (M-12). 204 when there is no decision yet.
  */
 @ApiTags('moderation')
-@Roles('USER', 'BREEDER', 'FARMER', 'MODERATOR', 'ADMIN')
+@Roles('USER', 'BREEDER', 'FARMER', 'VETERINARIAN', 'GROOMER', 'MODERATOR', 'ADMIN')
 @Controller({ path: 'listings', version: '1' })
 export class OwnerModerationResultController {
   constructor(private readonly service: ModerationService) {}

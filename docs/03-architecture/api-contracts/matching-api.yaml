@@ -21,7 +21,7 @@ paths:
     get:
       summary: Get targeting animal verification for matching
       operationId: getMatchingTarget
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: animal_id
@@ -47,7 +47,7 @@ paths:
     post:
       summary: Find matches for target animal with preferences
       operationId: findMatches
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: header
           name: Idempotency-Key
@@ -79,7 +79,7 @@ paths:
         eligibility"): there are no persisted `matches`/`match_history`/`match_feedback` records,
         so there is no match `id` to fetch and no compatibility score. This endpoint (and its
         scored response) is computed in Фаза 2; absent in MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
@@ -104,7 +104,7 @@ paths:
       description: >-
         **Фаза 2+.** MVP matching is stateless (no `match_history` table per spec 05), so there is
         no engagement history to return. Computed in Фаза 2; absent in MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: query
           name: page
@@ -143,7 +143,7 @@ paths:
       description: >-
         **Фаза 2+.** Feedback feeds the compatibility-scoring loop (no `match_feedback` table in
         MVP per spec 05). Computed in Фаза 2; absent in MVP.
-      x-required-roles: [USER, BREEDER, FARMER, MODERATOR, ADMIN]
+      x-required-roles: [USER, BREEDER, FARMER, VETERINARIAN, GROOMER, MODERATOR, ADMIN]
       parameters:
         - in: path
           name: id
