@@ -21,6 +21,7 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { OrgMembershipService } from '../src/lib/org/org-membership.service';
 import { NotificationConsumer } from '../src/modules/notification/notification.consumer';
+import { NotificationWriter } from '../src/modules/notification/notification-writer.service';
 import { resetThrottle } from './throttle-reset.util';
 
 describe('Admin Slice 4a — moderation (e2e)', () => {
@@ -222,7 +223,7 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
     // notification, not merely land in outbox_events (the previous assertion was the AUDIT3 test-mask).
     // moderation.e2e boots the API graph (no worker relay), so we drive the real consumer over the real
     // produced event+payload to prove end-to-end materialization.
-    const consumer = new NotificationConsumer(prisma, app.get(OrgMembershipService));
+    const consumer = new NotificationConsumer(app.get(OrgMembershipService), new NotificationWriter(prisma));
     await consumer.handle({ id: decided!.id, aggregateType: 'Listing', aggregateId: id, eventType: 'Moderation.Decided', payload: decided!.payload, attempts: 1 });
     const notif = await prisma.notification_logs.findFirst({
       where: { user_id: sellerId, type: 'IN_APP', idempotency_key: `${decided!.id}:${sellerId}:listing_approved` },

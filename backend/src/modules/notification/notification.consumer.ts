@@ -1,13 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../lib/db/prisma.service';
 import { OrgMembershipService } from '../../lib/org/org-membership.service';
 import type { OutboxConsumer, OutboxEvent } from '../../lib/outbox/outbox.types';
-import { NOTIFICATION_REGISTRY, renderTemplate } from './notification.registry';
-
-interface TemplateRow {
-  id: string;
-  body_template: string;
-}
+import { NOTIFICATION_REGISTRY } from './notification.registry';
+import { NotificationWriter } from './notification-writer.service';
 
 /**
  * The FIRST real outbox consumer (ADR-0021). Registered under `OUTBOX_CONSUMERS` in the WORKER graph
@@ -31,8 +26,8 @@ export class NotificationConsumer implements OutboxConsumer {
   readonly eventTypes = Object.keys(NOTIFICATION_REGISTRY);
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly orgMembership: OrgMembershipService,
+    private readonly writer: NotificationWriter,
   ) {}
 
   async handle(event: OutboxEvent): Promise<void> {
@@ -54,50 +49,8 @@ export class NotificationConsumer implements OutboxConsumer {
 
     const ctx = route.context(payload);
     for (const userId of recipients) {
-      await this.materialize(event.id, userId, templateName, ctx);
+      // Idempotency unit for a per-event notification = event.id ‖ recipient ‖ template.
+      await this.writer.materialize(userId, templateName, ctx, `${event.id}:${userId}:${templateName}`);
     }
-  }
-
-  private async materialize(
-    eventId: string,
-    userId: string,
-    templateName: string,
-    ctx: Record<string, string>,
-  ): Promise<void> {
-    const language = await this.preferredLanguage(userId);
-    const template = await this.loadTemplate(templateName, language);
-    if (!template) {
-      // A missing template must not wedge the relay (would retry→dead-letter). Log and no-op: the event
-      // is still marked processed. Templates for every registered event are seeded (migration 0010/0030).
-      this.logger.warn(`Notification template '${templateName}' (${language}) not found — no row written`);
-      return;
-    }
-
-    const content = renderTemplate(template.body_template, ctx);
-    const idempotencyKey = `${eventId}:${userId}:${templateName}`;
-
-    // Parameterized INSERT … ON CONFLICT DO NOTHING against the PARTIAL unique index — the predicate
-    // (idempotency_key IS NOT NULL) MUST be restated so Postgres selects that arbiter index.
-    await this.prisma.$executeRaw`
-      INSERT INTO notification_logs (user_id, type, template_id, recipient, content, status, idempotency_key)
-      VALUES (${userId}::uuid, 'IN_APP', ${template.id}::uuid, ${userId}, ${content}, 'SENT', ${idempotencyKey})
-      ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`;
-  }
-
-  /** The recipient's own delivery language (users.preferred_language, default 'ru'). */
-  private async preferredLanguage(userId: string): Promise<string> {
-    const rows = await this.prisma.$queryRaw<{ preferred_language: string | null }[]>`
-      SELECT preferred_language FROM users WHERE id = ${userId}::uuid`;
-    return rows[0]?.preferred_language ?? 'ru';
-  }
-
-  /** The EMAIL source template (channel≠source); fall back to 'ru', then any active row for the name. */
-  private async loadTemplate(name: string, language: string): Promise<TemplateRow | null> {
-    const rows = await this.prisma.$queryRaw<TemplateRow[]>`
-      SELECT id, body_template FROM notification_templates
-      WHERE name = ${name} AND type = 'EMAIL' AND is_active = TRUE
-      ORDER BY (language = ${language}) DESC, (language = 'ru') DESC
-      LIMIT 1`;
-    return rows[0] ?? null;
   }
 }

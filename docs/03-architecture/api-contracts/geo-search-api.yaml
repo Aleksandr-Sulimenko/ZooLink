@@ -4,7 +4,11 @@ info:
   version: 1.2.0
   description: >-
     Address geocoding proxy (Yandex.Maps) and saved searches (UC-GS-03, saved_searches table).
-    Proactive alerts on saved searches are Phase 2.
+    Proactive alerts on saved searches are LIVE (spec 07 SS-M1..SS-M7, Slice H4): a newly-ACTIVE
+    listing (Listing.Activated) is matched against saved searches and yields one IN_APP
+    `saved_search_matched` notification per (saved_search, listing) pair (read via GET /v1/me/
+    notifications). Match runs worker-side; no new endpoint here. Phase-2 saved-search RE-EXECUTION
+    (retargeting a saved search to /listings on demand) is still deferred.
     NEAR-ME CANON (spec 07 round-6 / Wave D D7): radius near-me search over listings is served by
     the CANONICAL, LIVE `GET /v1/listings` discovery path (market + lat/lng/radius_km + sort=distance,
     returning distanceM). The `/geo-search` path in THIS file is DEPRECATED — superseded by /listings,

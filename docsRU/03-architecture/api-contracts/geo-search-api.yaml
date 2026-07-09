@@ -4,7 +4,11 @@ info:
   version: 1.2.0
   description: >-
     Прокси геокодирования адресов (Yandex.Maps) и сохранённые поиски (UC-GS-03, таблица saved_searches).
-    Проактивные алерты по сохранённым поискам — Фаза 2.
+    Проактивные алерты по сохранённым поискам — LIVE (спека 07 SS-M1..SS-M7, Slice H4): ставший
+    ACTIVE листинг (Listing.Activated) сопоставляется с сохранёнными поисками и даёт одно IN_APP-
+    уведомление `saved_search_matched` на пару (saved_search, listing) (читается через GET /v1/me/
+    notifications). Сопоставление идёт worker-side; нового эндпоинта здесь нет. Phase-2 ПЕРЕИСПОЛНЕНИЕ
+    сохранённого поиска (повторный запуск на /listings по требованию) по-прежнему отложено.
     КАНОН near-me (спека 07 round-6 / Wave D D7): поиск объявлений по радиусу обслуживает КАНОНИЧЕСКИЙ,
     ЖИВОЙ путь `GET /v1/listings` (discovery: market + lat/lng/radius_km + sort=distance, возвращает
     distanceM). Путь `/geo-search` в ЭТОМ файле УСТАРЕЛ — заменён на /listings, не имеет контроллера

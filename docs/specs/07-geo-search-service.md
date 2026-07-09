@@ -83,7 +83,7 @@ This specification addresses the following Non-Functional Requirements:
   - Save search filters combined with location for one-click search
   - Synchronize saved locations across devices (future enhancement)
   - Import/export saved locations (future enhancement)
-  - **Scope:** saving/reusing searches and locations is **MVP** (persisted in the `saved_searches` table). Proactive **alerts** on new matching listings are **Phase 2** (see `01-discovery/future-features.md`).
+  - **Scope:** saving/reusing searches and locations is **MVP** (persisted in the `saved_searches` table). Proactive **alerts** on new matching listings are **LIVE** (Slice H4, SS-M1..SS-M7 below); on-demand **re-execution** of a saved search is **Phase 2** (see `01-discovery/future-features.md`).
 
 ## Task Breakdown
 1. **Backend (NestJS)**
@@ -202,6 +202,45 @@ while `/geo-search` exposes `species:string`. When Phase-2 alerts/re-execution m
 `/geo-search` query params, this int↔string mapping (and the `listing_type=leasing` gap — listings
 migration 0021 added `leasing`, not yet a `/geo-search` value) must be handled by the mapping layer.
 This is recorded here per the truth-hierarchy "no requirement dropped silently" rule.
+
+## Proactive saved-search alerts — match & notify (round-N, normative) — Slice H4 (AUDIT4)
+
+> **WHAT:** Pull the "proactive alerts on saved searches" (previously scoped to Phase 2) forward and
+> pin it as SS-M1..SS-M7. When a listing goes **ACTIVE** (moderation APPROVE → the `Listing.Activated`
+> outbox event, already emitted in-tx), a worker-side consumer (`SavedSearchMatchConsumer`, the second
+> entry in `OUTBOX_CONSUMERS`, distinct from the registry `NotificationConsumer`) matches it against
+> users' `saved_searches` (`offering_type='ANIMAL_LISTING'`) and materialises **one IN_APP
+> `saved_search_matched` notification per matching (saved_search, listing) pair** (read via
+> `GET /v1/me/notifications`). Template seeded EMAIL ×(ru,en) in migration 0037 (*channel ≠ source*).
+> No new endpoint, no new schema column.
+> **WHY:** AUDIT4 flagged the platform had **no demand-side return loop** — a user saves a search and is
+> never told when a matching listing appears (the highest-leverage retention signal for a two-sided
+> marketplace). The event, the `saved_searches` table, the OfferingRef seam (0032), and the notification
+> consumer infra (0030, ADR-0021) already existed; only the template row + the matcher were missing, so
+> this is a small, additive slice — the textbook phase-by-cost-of-change case.
+> **WHY-BETTER-for-the-whole-project:** consuming the already-emitted `Listing.Activated` (rather than
+> matching inside the moderation transaction) keeps moderation ignorant of saved-search — a match failure
+> only retries this consumer's delivery, it can **never** roll back a valid approval; a deterministic
+> per-pair notification `idempotency_key` gives exactly-once with **zero** new schema (no marker column,
+> no poll loop); and the ADR-0002 market split is enforced structurally in the match predicate (below).
+
+| ID | Invariant (MUST) | Enforcement | Note |
+|----|------------------|-------------|------|
+| **SS-M1** | On `Listing.Activated`, a saved search is matched iff **all** of its present filters are satisfied by the listing. Evaluated subset: `market`, `species_id`, `breed_id`, `listing_type` (equality); `price_min`/`price_max` (bounds — a **priceless** listing never satisfies a price-bounded search); geo `radius_m`+`lat`/`lng` (exact Haversine — a **coordless** listing never satisfies a geo search). | `SavedSearchMatchConsumer.matchSql` (parameterized `$queryRaw` over `saved_searches` only). | reverse-query |
+| **SS-M2** | **`q` free-text is NOT evaluated** server-side (no cheap, unambiguous full-text over the localized JSONB title/description). A `q`-bearing search still matches on its **other** filters. | documented omission; full-text match is a tracked follow-up. | subset limit |
+| **SS-M3** | **ADR-0002 cross-market safety:** a search matches only when it is **market-anchored** to the listing's market — it pins `market` (== the listing's) **OR** pins `species_id`/`breed_id` (each lives in exactly one market and must equal the listing's). A **market-agnostic** search (no market/species/breed anchor) is **NOT** matched. An alert can never cross pet↔livestock. | `matchSql` anchor clause + equality clauses. | `422` n/a (read-side) |
+| **SS-M4** | **Exactly-once per pair:** at most one `saved_search_matched` notification per `(saved_search, listing)` pair, ever — regardless of `Listing.Activated` at-least-once redelivery. | `notification_logs.idempotency_key = 'saved_search_matched:<savedSearchId>:<listingId>'` + `ON CONFLICT DO NOTHING`. | dedup |
+| **SS-M5** | The **seller is never** alerted about their own listing. | `matchSql`: `s.user_id <> seller_id`. | self-exclusion |
+| **SS-M6** | A saved-search alert is a **user-requested service** notification (opt-in by the act of saving) delivered over **IN_APP** → **transactional-always, NOT gated by `notification_prefs.promo`** (which governs future EMAIL/SMS *marketing* pushes). The opt-out is **deleting the saved search** (SS-2). | consumer writes IN_APP unconditionally, mirroring the ADR-0021 transactional-always discipline. | prefs decision |
+| **SS-M7** | A listing that is **no longer ACTIVE** at relay time (e.g. sold/reversed before the near-real-time relay processed the event) is **not** alerted on; a deleted listing is skipped. | consumer re-loads the listing and gates on `status='ACTIVE'`. | staleness guard |
+
+**Follow-ups (documented, not built):** (1) `q` full-text matching (needs a chosen FTS strategy over the
+localized JSONB); (2) a `SavedSearch.Matched` **analytics** event for the match→view→contact funnel (the
+`notification_logs` rows are the current match signal; a dedicated event is layered when data-analyst
+specs the funnel); (3) a per-user daily cap on saved-search alerts (only if trivially reusable from the
+quota lib) — today anti-spam is the per-pair dedup (SS-M4) + market anchoring (SS-M3); (4) per-recipient
+title localization (the alert body interpolates the listing title **ru-first**; per-language title is a
+minor refinement).
 
 ## Near-me canon reconciliation + `geo_anchor` reservation (round-6, normative) — Wave D / D7
 
