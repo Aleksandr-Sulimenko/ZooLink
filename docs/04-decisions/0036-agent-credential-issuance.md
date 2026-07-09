@@ -1,6 +1,6 @@
 # ADR-0036: Agent-credential issuance — unstub `service_credentials` (human-issued credential → short-lived AGENT JWT)
 
-**Status**: Proposed
+**Status**: Accepted (owner, 2026-07-09)
 **Date**: 2026-07-08
 **Amends / refines**: [ADR-0011](0011-agent-principal-actor-model.md) §5 (fixes the concrete credential-presentation, issuance, bootstrap and verification form that ADR-0011 §5.3 left as a *forward-compatible stub* — does **not** rewrite or supersede it).
 **Related**: [ADR-0006](0006-ai-agents-operate-platform.md) (AI agents as principals; non-negotiable #4 = scoped, least-privilege agent credentials), [ADR-0009](0009-mvp-vs-target-architecture.md) (in-monolith, no separate auth service), [ADR-0037](0037-agent-scoped-ability.md) (the scope the issued credential/JWT carries), the RBAC matrix `docs/specs/security/rbac-matrix.md`.
@@ -208,10 +208,10 @@ ALTER TABLE service_credentials
 - MVP behaviour unchanged: master gate off, `service_credentials` empty, no agent JWT issued — HUMAN-only, byte-identical.
 - The exact JWT scope claim is defined by ADR-0037; this ADR fixes only issuance & authentication.
 
-## Open questions (for the owner — recommendation given, not blocking this ADR)
-1. **[owner/North-Star] May a future trusted agent ever issue credentials to another agent (P-D fully-autonomous onboarding)?** Recommendation: **NO** for the foreseeable term — the trust root stays human (issuance permanently HUMAN-only), even under P-D, because an agent minting agent-authority breaks the accountable-legal-person chain (ADR-0006 #5). Revisit only with legal sign-off. *Default if unanswered: human-only.*
-2. **[owner/security] Default credential TTL / `expires_at` policy at activation.** Security prefers short-lived, auto-expiring credentials + periodic rotation; ops prefers long-lived to avoid churn. Recommendation: `expires_at` optional now (form), with a max default (e.g. 90 days) enforced when the master gate flips — to be set with security/devops at activation. *Not blocking the form.*
-3. **[design, minor] Emergency JWT kill** — layer a short `credId`/`jti` deny-list for compromised-agent revocation-before-TTL? Recommendation: reserve now, implement at activation (reuse refresh-family-revoke). *Not blocking.*
+## Open questions — RESOLVED by the owner (2026-07-09, section-by-section review; each recommendation confirmed)
+1. **[owner/North-Star] May a future trusted agent ever issue credentials to another agent (P-D fully-autonomous onboarding)?** Recommendation: **NO** for the foreseeable term — the trust root stays human (issuance permanently HUMAN-only), even under P-D, because an agent minting agent-authority breaks the accountable-legal-person chain (ADR-0006 #5). Revisit only with legal sign-off. **Owner decision 2026-07-09: NO — issuance stays HUMAN-only permanently; revisit only with legal sign-off.**
+2. **[owner/security] Default credential TTL / `expires_at` policy at activation.** Security prefers short-lived, auto-expiring credentials + periodic rotation; ops prefers long-lived to avoid churn. Recommendation: `expires_at` optional now (form), with a max default (e.g. 90 days) enforced when the master gate flips — to be set with security/devops at activation. **Owner decision 2026-07-09: as recommended — form now, ~90-day max default fixed with security/devops at activation.**
+3. **[design, minor] Emergency JWT kill** — layer a short `credId`/`jti` deny-list for compromised-agent revocation-before-TTL? Recommendation: reserve now, implement at activation (reuse refresh-family-revoke). **Owner decision 2026-07-09: reserve now, build at activation.**
 
 ## Related Decisions
 - [ADR-0011](0011-agent-principal-actor-model.md) — refines §5 (concrete credential-presentation/issuance/bootstrap/verification form); does not supersede.

@@ -1,6 +1,6 @@
 # ADR-0037: Scoped-ability для принципалов AGENT — deny-by-default, без `manage:all`, эффективные = матрица-роли ∩ scope
 
-**Статус**: Proposed
+**Статус**: Accepted — принят (владелец, 2026-07-09 — хранение в §2 решено как **Вариант B** владельческим override: именованные capability-профили с самого начала; см. Решение §2)
 **Дата**: 2026-07-08
 **Уточняет / развивает**: [ADR-0011](0011-agent-principal-actor-model.md) §7 (`principal_type ⟂ role`) — уточняет инвариант ортогональности для *слоя авторизации*: матрица role→ability — это **потолок**; **эффективные** abilities агента = этот потолок, **пересечённый с явным least-privilege scope**. **Не** переписывает/supersede-ит ADR-0011 и **не** вводит cross-column schema CHECK, связывающий role и principal_type (что ADR-0011 §7 запрещает).
 **Связано**: [ADR-0006](0006-ai-agents-operate-platform.md) (непреложное #4 = scoped, least-privilege права; #3 = human override), [ADR-0036](0036-agent-credential-issuance.md) (credential/JWT, несущий scope), [ADR-0022](0022-multi-role-user.md) (прецедент dormant-form-first, миграция 0034), RBAC-матрица `docs/specs/security/rbac-matrix.md`.
@@ -83,11 +83,11 @@ case 'ADMIN':
 
 ---
 
-## §2 — Где живёт scope: на credential (спящий), встроен в JWT при обмене
+## §2 — Где живёт scope: именованный capability-профиль, на который ссылается credential, встроен в JWT при обмене (решение владельца 2026-07-09 — Вариант B с самого начала)
 
 **Рассмотренные варианты**
 
-### Вариант A: Per-credential-колонка scope (`service_credentials.scope JSONB`) (Выбран пока)
+### Вариант A: Per-credential-колонка scope (`service_credentials.scope JSONB`) (рекомендация архитектора — переопределена владельцем)
 Каждый credential несёт свой scope; обмен [ADR-0036](0036-agent-credential-issuance.md) читает его и встраивает в выданный JWT AGENT как claim; `AbilityFactory` читает claim.
 
 Плюсы:
@@ -97,7 +97,7 @@ case 'ADMIN':
 Минусы:
 - Если много агентов делят scope, он дублируется per credential (приемлемо при размере флота эпохи MVP; поднять до Варианта B, если вырастет).
 
-### Вариант B: Таблица именованных capability-профилей (`agent_capability_profiles` + назначение)
+### Вариант B: Таблица именованных capability-профилей (`agent_capability_profiles` + назначение) (Выбран — владелец, 2026-07-09)
 Профиль = именованный, переиспользуемый набор abilities (например `moderation-agent`); агент ссылается на профиль.
 
 Плюсы:
@@ -106,13 +106,13 @@ case 'ADMIN':
 Минусы:
 - Новая таблица(ы) + плюмбинг назначения до того, как есть флот, это оправдывающий — преждевременно. Зарезервировать как позднейшую эволюцию *за* швом credential-scope (профиль — сахар, разрешающийся в тот же JWT scope-claim).
 
-**Решение:** **Вариант A сейчас** (scope на строке credential, встраивается в JWT при обмене), **Вариант B зарезервирован** как позднейшая эволюция масштаба — оба разрешаются в один и тот же JWT-`scope`-claim, потребляемый `AbilityFactory`, поэтому продвижение A→B позже аддитивно и не трогает слой abilities. Это предлагаемая колонка `service_credentials.scope`, которую [ADR-0036](0036-agent-credential-issuance.md) §7 умышленно оставил этому ADR.
+**Решение (владелец, 2026-07-09, секционный разбор — переопределяет рекомендацию «A-сейчас/B-потом»):** **Вариант B с самого начала.** Scope живёт в новой таблице именованных профилей `agent_capability_profiles` (именованный, человекочитаемый, переиспользуемый набор abilities — например `moderation-agent`); `service_credentials` ссылается на неё через nullable-FK `capability_profile_id`; **per-credential-колонка `scope` не строится**. Обмен [ADR-0036](0036-agent-credential-issuance.md) разрешает профиль в момент выдачи токена и встраивает **разрешённый** список `{action, subject}` в JWT-claim `scope` AGENT — поэтому слой abilities (§1) идентичен при A и при B (он всегда читает только claim), а deny-by-default держится сквозь весь путь: `capability_profile_id IS NULL`, неактивный профиль или пустой список грантов — всё выдаёт JWT без scope → никаких abilities. Обоснование владельца: именованный профиль — это аудируемая, человекочитаемая власть («этот агент — moderation-agent») без per-credential-дрейфа scope с первого дня — Северная звезда предполагает флот; цена — одна маленькая lookup-таблица в agent-scope-slice. Per-credential-колонка-override остаётся возможным позднейшим **аддитивным** расширением, не строится. Это разрешает вопрос хранения, который [ADR-0036](0036-agent-credential-issuance.md) §7 умышленно оставил этому ADR.
 
 **Словарь scope (нормативный):** scope — список грантов `{ action, subject }` из **того же** словаря `Action × Subject`, что уже определяет RBAC-матрица / `AbilityFactory` (`Action ∈ {read, create, update, delete}` — **никогда `manage`**; `Subject ∈` существующий enum субъектов — **никогда `all`**). Запрет `manage`/`all` в scope — это то, что делает wildcard-власть структурно невозможной для AGENT. Валидатор scope (слой сервиса) отклоняет любой грант, содержащий `manage` или `all`.
 
-**ЧТО:** Scope живёт на `service_credentials.scope JSONB` (nullable, deny-by-default), встраивается в JWT AGENT при обмене; словарь scope = существующий набор `{action, subject}` минус `manage`/`all`; таблица именованных профилей зарезервирована на потом.
-**ПОЧЕМУ:** Scope должен администрироваться вместе с credential и быть доступен во время запроса без обращения к БД, делая при этом wildcard-власть невыразимой.
-**ПОЧЕМУ ТАК ЛУЧШЕ:** Сорасположение scope с credential (ADR-0036) делает грант/ротацию/отзыв одним атомарным человеко-администрируемым объектом; переиспользование существующего словаря `{action,subject}` означает отсутствие нового authz-языка; исключение `manage`/`all` из словаря обеспечивает P1-6 по построению; зарезервированная таблица профилей позволяет масштабу прийти позже без изменения слоя abilities (аддитивно, в стиле dormant-form-first ADR-0022).
+**ЧТО:** Scope живёт в таблице именованных профилей `agent_capability_profiles` (решение владельца 2026-07-09); credential ссылается на один профиль через nullable `capability_profile_id` (NULL / неактивен / пуст = deny-by-default); обмен встраивает разрешённый scope в JWT AGENT; словарь scope = существующий набор `{action, subject}` минус `manage`/`all`.
+**ПОЧЕМУ:** Власть агента должна быть именованным, аудируемым, переиспользуемым объектом, администрируемым человеком, доступным во время запроса без обращения к БД (разрешается в JWT при обмене), при невыразимости wildcard-власти.
+**ПОЧЕМУ ТАК ЛУЧШЕ:** Именованный профиль делает каждый грант читаемым и DRY с первого дня (нет per-credential-дрейфа scope по мере роста флота); профиль разрешается при обмене, поэтому слой abilities побайтово-идентичен Варианту A (без цены на горячем пути, без второго authz-языка), а ре-скоупинг — одна правка профиля, применяющаяся ко всем агентам, его держащим; исключение `manage`/`all` из словаря по-прежнему обеспечивает P1-6 по построению; ротация/отзыв credential (ADR-0036 §4) без изменений.
 
 ---
 
@@ -155,21 +155,33 @@ Moderation — **READY**-эталон AUDIT4 (agent-toggle + actor-снапшо�
   1. Расширить тип принципала (`AuthPrincipal`/`AccessTokenClaims`) **опциональным** `scope` (заполняется только для AGENT; HUMAN = undefined = полная матрица роли). Только форма.
   2. Добавить **deny-by-default-ветку AGENT** в `AbilityFactory` (§1). Она **спит** — в MVP нет принципала AGENT (master-гейт [ADR-0036](0036-agent-credential-issuance.md) off), поэтому ветка никогда не срабатывает; HUMAN-путь побайтово-идентичен.
   3. Добавить валидатор scope (отклоняет `manage`/`all`).
-  4. Зарезервировать `service_credentials.scope JSONB` (PROPOSED-набросок миграции ниже) — аддитивно, nullable, deny-by-default, N-1 safe.
-- **Позже (активация агента, P-A):** обмен [ADR-0036](0036-agent-credential-issuance.md) заполняет JWT scope-claim из credential; щёлкнуть `agent_moderation`. **Без authz-переписывания** — шов уже там.
+  4. Добавить спящую таблицу `agent_capability_profiles` + FK `service_credentials.capability_profile_id` (PROPOSED-набросок миграции ниже; решение владельца §2) — аддитивно, nullable, deny-by-default, N-1 safe.
+- **Позже (активация агента, P-A):** обмен [ADR-0036](0036-agent-credential-issuance.md) разрешает профиль credential и заполняет JWT scope-claim; щёлкнуть `agent_moderation`. **Без authz-переписывания** — шов уже там.
 - **Parity-тест (DoD):** abilities HUMAN-принципала без изменений на каждой роли (побайтово-идентичны до-ADR); AGENT с **null** scope разрешается в **никакие** abilities (deny-by-default); AGENT со scope `moderation-agent` разрешается **ровно** в `matrix(MODERATOR) ∩ scope`; AGENT с `role='ADMIN'` **никогда** не разрешается в `manage:all`.
 
 **PROPOSED-набросок схемы (этот ADR миграцию не пишет; backend реализует в agent-scope-slice):**
 ```sql
--- Least-privilege-грант abilities, встраиваемый в JWT AGENT при обмене (ADR-0036 §1).
--- NULL/пусто = deny-by-default (никаких abilities). Аддитивно, nullable → N-1 rolling-deploy safe.
--- Словарь: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — никогда "manage"/"all".
+-- Именованный, переиспользуемый least-privilege-набор abilities (решение владельца 2026-07-09: профили с самого начала).
+-- Словарь scope: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — никогда "manage"/"all"
+-- (валидатор сервисного слоя их отклоняет). INT-lookup + provenance/жизненный цикл в форме A2.
+CREATE TABLE IF NOT EXISTS agent_capability_profiles (
+  id          SERIAL PRIMARY KEY,
+  code        VARCHAR(50) NOT NULL UNIQUE,           -- например 'moderation-agent'
+  scope       JSONB NOT NULL,                        -- список грантов {action, subject}
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+-- Credential ссылается на свой профиль; NULL = deny-by-default (никаких abilities). Аддитивно → N-1 safe.
 ALTER TABLE service_credentials
-  ADD COLUMN IF NOT EXISTS scope JSONB;
+  ADD COLUMN IF NOT EXISTS capability_profile_id INT
+    REFERENCES agent_capability_profiles(id) ON DELETE RESTRICT;
 ```
-Счётчик таблиц без изменений (только колонка, +0 таблиц).
+Счётчик таблиц **+1** (`agent_capability_profiles`), когда придёт agent-scope-slice — backend следует полному DB-workflow (schema / ERD / data-model / счётчики в ledger); набросок выше — PROPOSED, slice финализирует DDL.
 
-**ЧТО:** Отгрузить шов scope спящим (тип принципала + deny-by-default-ветка AGENT + валидатор + зарезервированная колонка `scope`); HUMAN побайтово-идентичен; parity-тест это пиннит; активация позже заполняет JWT scope без переписывания.
+**ЧТО:** Отгрузить шов scope спящим (тип принципала + deny-by-default-ветка AGENT + валидатор + спящая таблица `agent_capability_profiles` с FK от credential); HUMAN побайтово-идентичен; parity-тест это пиннит; активация позже заполняет JWT scope без переписывания.
 **ПОЧЕМУ:** Шов дешевле всего до того, как Admin Slice 2 захардкодит human-only-authz, но не должен менять поведение MVP или обнажать живую агентскую авторизацию.
 **ПОЧЕМУ ТАК ЛУЧШЕ:** Переиспользует проверенный dormant-form-first-паттерн (миграция 0034); parity-тест делает «ноль изменений HUMAN-поведения» и «deny-by-default для AGENT» *проверенными*, а не заявленными; аддитивная/nullable-колонка N-1 safe (учитывает AUDIT4 P1-5); активация — один шаг populate-the-claim, соблюдая правило фазирования.
 
@@ -184,16 +196,16 @@ ALTER TABLE service_credentials
 - Human override и человеческое авторизационное превосходство сохранены безусловно.
 
 ### Отрицательные
-- Словарь scope + валидатор для поддержки; дублирование scope между credentials, пока (если) не появится таблица профилей.
-- Одна аддитивная колонка сверх формы [ADR-0036](0036-agent-credential-issuance.md).
+- Словарь scope + валидатор + lookup-таблица `agent_capability_profiles` для поддержки (ещё один администрируемый объект).
+- Одна аддитивная таблица + FK-колонка сверх формы [ADR-0036](0036-agent-credential-issuance.md) (+1 таблица, когда придёт slice).
 
 ### Нейтральные
 - Поведение MVP побайтово-идентично (HUMAN-путь не тронут; ветка AGENT спит, агент не провижионен).
-- Переедет ли scope позже в таблицу именованных профилей — отложено (оба разрешаются в один JWT-claim).
+- Хранение scope решено владельцем (2026-07-09): именованные профили с самого начала (§2); per-credential-колонка-override остаётся возможным аддитивным расширением (оба разрешаются в один JWT-claim).
 
-## Открытые вопросы (владельцу — рекомендация дана, не блокирует)
-1. **[владелец/Северная звезда] Будущий тир «доверенного агента» с широким scope?** Видение P-D — всё более автономные агенты. Рекомендация: даже **широчайший** scope агента остаётся **явно перечисленным** грантом `{action, subject}` — wildcard `manage`/`all` остаётся **human-only навсегда**. Агенту можно предоставить *широкие* полномочия, но никогда *wildcard*-полномочия (так грант всегда аудируем и ограничиваем). *По умолчанию, если без ответа: никакого wildcard для AGENT, никогда.*
-2. **[дизайн, минор] Эволюция хранения scope** — поднять per-credential-scope до таблицы именованных `agent_capability_profiles`, когда флот вырастет? Рекомендация: per-credential сейчас (Вариант A); поднять, когда >~горстки агентов делят scope. *Не блокирует (аддитивно позже).*
+## Открытые вопросы — разбор владельцем 2026-07-09
+1. **[владелец/Северная звезда] Будущий тир «доверенного агента» с широким scope?** Видение P-D — всё более автономные агенты. Рекомендация: даже **широчайший** scope агента остаётся **явно перечисленным** грантом `{action, subject}` — wildcard `manage`/`all` остаётся **human-only навсегда**. Агенту можно предоставить *широкие* полномочия, но никогда *wildcard*-полномочия (так грант всегда аудируем и ограничиваем). **Решение владельца 2026-07-09: сознательно оставлен ОТКРЫТЫМ до фазы P-D; тем временем действует заявленный дефолт — никакого wildcard для AGENT.**
+2. **[дизайн, минор] Эволюция хранения scope** — поднять per-credential-scope до таблицы именованных `agent_capability_profiles`, когда флот вырастет? Рекомендация: per-credential сейчас (Вариант A); поднять, когда >~горстки агентов делят scope. **Решение владельца 2026-07-09: рекомендация ПЕРЕОПРЕДЕЛЕНА — именованные профили с самого начала (см. Решение §2); вопрос закрыт.**
 
 ## Связанные решения
 - [ADR-0011](0011-agent-principal-actor-model.md) — уточняет §7 для authz-слоя (матрица = потолок, эффективные AGENT = потолок ∩ scope); без cross-column CHECK; §3 human-override не тронут.

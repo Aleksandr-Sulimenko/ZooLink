@@ -1,6 +1,6 @@
 # ADR-0037: Scoped-ability for AGENT principals — deny-by-default, no `manage:all`, effective = role-matrix ∩ scope
 
-**Status**: Proposed
+**Status**: Accepted (owner, 2026-07-09 — §2 storage decided as **Option B** by owner override: named capability-profiles from the start; see §2 Decision)
 **Date**: 2026-07-08
 **Amends / refines**: [ADR-0011](0011-agent-principal-actor-model.md) §7 (`principal_type ⟂ role`) — refines the orthogonality invariant for the *authorization layer*: the role→ability **matrix is the ceiling**; an AGENT's **effective** abilities are that ceiling **intersected with an explicit least-privilege scope**. Does **not** rewrite/supersede ADR-0011 and introduces **no** cross-column schema CHECK coupling role and principal_type (which ADR-0011 §7 forbids).
 **Related**: [ADR-0006](0006-ai-agents-operate-platform.md) (non-negotiable #4 = scoped, least-privilege permissions; #3 = human override), [ADR-0036](0036-agent-credential-issuance.md) (the credential/JWT that carries the scope), [ADR-0022](0022-multi-role-user.md) (dormant-form-first precedent, migration 0034), the RBAC matrix `docs/specs/security/rbac-matrix.md`.
@@ -83,11 +83,11 @@ Cons:
 
 ---
 
-## §2 — Where scope lives: on the credential (dormant), embedded in the JWT at exchange
+## §2 — Where scope lives: a named capability-profile referenced by the credential, embedded in the JWT at exchange (owner decision 2026-07-09 — Option B from the start)
 
 **Considered options**
 
-### Option A: Per-credential scope column (`service_credentials.scope JSONB`) (Chosen for now)
+### Option A: Per-credential scope column (`service_credentials.scope JSONB`) (architect's recommendation — overridden by the owner)
 Each credential carries its scope; the [ADR-0036](0036-agent-credential-issuance.md) exchange reads it and embeds it in the issued AGENT JWT as a claim; `AbilityFactory` reads the claim.
 
 Pros:
@@ -97,7 +97,7 @@ Pros:
 Cons:
 - If many agents share a scope, it is duplicated per credential (acceptable at MVP-era fleet size; promote to Option B if it grows).
 
-### Option B: Named capability-profile table (`agent_capability_profiles` + assignment)
+### Option B: Named capability-profile table (`agent_capability_profiles` + assignment) (Chosen — owner, 2026-07-09)
 A profile = a named, reusable ability set (e.g. `moderation-agent`); an agent references a profile.
 
 Pros:
@@ -106,13 +106,13 @@ Pros:
 Cons:
 - New table(s) + assignment plumbing before there is any fleet to justify it — premature. Reserve as the later evolution *behind* the credential-scope seam (a profile is sugar that resolves to the same JWT scope claim).
 
-**Decision:** **Option A now** (scope on the credential row, embedded in the JWT at exchange), **Option B reserved** as the later scale evolution — both resolve to the same JWT `scope` claim `AbilityFactory` consumes, so promoting A→B later is additive and does not touch the ability layer. This is the proposed `service_credentials.scope` column that [ADR-0036](0036-agent-credential-issuance.md) §7 deliberately left to this ADR.
+**Decision (owner, 2026-07-09, section-by-section review — overrides the A-now/B-later recommendation):** **Option B from the start.** Scope lives in a new named-profile table `agent_capability_profiles` (a named, human-readable, reusable ability set — e.g. `moderation-agent`); `service_credentials` references it via a nullable `capability_profile_id` FK; **no per-credential `scope` column is built**. The [ADR-0036](0036-agent-credential-issuance.md) exchange resolves the profile at token issue and embeds the **resolved** `{action, subject}` list in the AGENT JWT `scope` claim — so the ability layer (§1) is identical under A or B (it only ever reads the claim), and deny-by-default holds end-to-end: `capability_profile_id IS NULL`, an inactive profile, or an empty grant list all issue a JWT with no scope → no abilities. Owner's rationale: a named profile is auditable, human-readable authority ("this agent is a moderation-agent") with no per-credential scope drift from day one — the North-Star assumes a fleet; the cost is one small lookup table in the agent-scope slice. A per-credential override column remains a possible later **additive** extension, not built. This resolves the storage question [ADR-0036](0036-agent-credential-issuance.md) §7 deliberately left to this ADR.
 
 **Scope vocabulary (normative):** a scope is a list of `{ action, subject }` grants drawn from the **same** `Action × Subject` vocabulary the RBAC matrix / `AbilityFactory` already defines (`Action ∈ {read, create, update, delete}` — **never `manage`**; `Subject ∈` the existing subject enum — **never `all`**). Forbidding `manage`/`all` in a scope is what makes wildcard authority structurally impossible for an AGENT. A scope validator (service-layer) rejects any grant containing `manage` or `all`.
 
-**ЧТО:** Scope lives on `service_credentials.scope JSONB` (nullable, deny-by-default), embedded in the AGENT JWT at exchange; the scope vocabulary is the existing `{action, subject}` set minus `manage`/`all`; a named-profile table is reserved for later.
-**ПОЧЕМУ:** Scope must be administered together with the credential and available at request time without a DB hit, while making wildcard authority impossible to express.
-**ПОЧЕМУ ТАК ЛУЧШЕ:** Co-locating scope with the credential (ADR-0036) makes grant/rotate/revoke one atomic human-administered object; reusing the existing `{action,subject}` vocabulary means no new authz language; excluding `manage`/`all` from the vocabulary enforces P1-6 by construction; the reserved profile table lets scale come later without an ability-layer change (additive, ADR-0022-style dormant-form-first).
+**ЧТО:** Scope lives in the named `agent_capability_profiles` table (owner decision 2026-07-09); a credential references one profile via nullable `capability_profile_id` (NULL / inactive / empty = deny-by-default); the exchange embeds the resolved scope in the AGENT JWT; the scope vocabulary is the existing `{action, subject}` set minus `manage`/`all`.
+**ПОЧЕМУ:** Agent authority must be a named, auditable, reusable object administered by a human, available at request time without a DB hit (resolved into the JWT at exchange), while wildcard authority stays impossible to express.
+**ПОЧЕМУ ТАК ЛУЧШЕ:** A named profile makes every grant readable and DRY from day one (no per-credential scope drift as the fleet grows); the profile resolves at exchange, so the ability layer is byte-identical to Option A (no hot-path cost, no second authz language) and re-scoping is one profile edit applying to every agent holding it; excluding `manage`/`all` from the vocabulary still enforces P1-6 by construction; credential rotate/revoke (ADR-0036 §4) unchanged.
 
 ---
 
@@ -155,21 +155,33 @@ Per ADR-0022 / migration 0034 (dormant `user_roles` junction) and the cost-of-ch
   1. Extend the principal type (`AuthPrincipal`/`AccessTokenClaims`) with an **optional** `scope` (only ever populated for AGENT; HUMAN = undefined = full role matrix). Form only.
   2. Add the **deny-by-default AGENT branch** to `AbilityFactory` (§1). It is **dormant** — no AGENT principal exists in MVP ([ADR-0036](0036-agent-credential-issuance.md) master gate off), so the branch is never hit; the HUMAN path is byte-identical.
   3. Add the scope validator (rejects `manage`/`all`).
-  4. Reserve `service_credentials.scope JSONB` (PROPOSED migration sketch below) — additive, nullable, deny-by-default, N-1 safe.
-- **Later (agent activation, P-A):** the [ADR-0036](0036-agent-credential-issuance.md) exchange populates the JWT scope claim from the credential; flip `agent_moderation`. **No authz rewrite** — the seam is already there.
+  4. Add the dormant `agent_capability_profiles` table + `service_credentials.capability_profile_id` FK (PROPOSED migration sketch below; §2 owner decision) — additive, nullable, deny-by-default, N-1 safe.
+- **Later (agent activation, P-A):** the [ADR-0036](0036-agent-credential-issuance.md) exchange resolves the credential's profile and populates the JWT scope claim; flip `agent_moderation`. **No authz rewrite** — the seam is already there.
 - **Parity test (DoD):** a HUMAN principal's abilities are unchanged across every role (byte-identical to pre-ADR); an AGENT with **null** scope resolves to **no** abilities (deny-by-default); an AGENT with `moderation-agent` scope resolves to **exactly** `matrix(MODERATOR) ∩ scope`; an AGENT at `role='ADMIN'` **never** resolves `manage:all`.
 
 **PROPOSED schema sketch (this ADR writes no migration; backend implements in the agent-scope slice):**
 ```sql
--- The least-privilege ability grant embedded in the AGENT JWT at exchange (ADR-0036 §1).
--- NULL/empty = deny-by-default (no abilities). Additive, nullable → N-1 rolling-deploy safe.
--- Vocabulary: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — never "manage"/"all".
+-- Named, reusable least-privilege ability set (owner decision 2026-07-09: profiles from the start).
+-- scope vocabulary: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — never "manage"/"all"
+-- (the service-layer validator rejects them). INT-lookup + provenance/lifecycle in the A2 form.
+CREATE TABLE IF NOT EXISTS agent_capability_profiles (
+  id          SERIAL PRIMARY KEY,
+  code        VARCHAR(50) NOT NULL UNIQUE,           -- e.g. 'moderation-agent'
+  scope       JSONB NOT NULL,                        -- the {action, subject} grant list
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+-- The credential references its profile; NULL = deny-by-default (no abilities). Additive → N-1 safe.
 ALTER TABLE service_credentials
-  ADD COLUMN IF NOT EXISTS scope JSONB;
+  ADD COLUMN IF NOT EXISTS capability_profile_id INT
+    REFERENCES agent_capability_profiles(id) ON DELETE RESTRICT;
 ```
-Table count unchanged (column only, +0 tables).
+Table count **+1** (`agent_capability_profiles`) when the agent-scope slice lands — backend follows the full DB workflow (schema / ERD / data-model / ledger counts); the sketch above is PROPOSED, the slice finalizes the DDL.
 
-**ЧТО:** Ship the scope seam dormant (principal type + deny-by-default AGENT branch + validator + reserved `scope` column); HUMAN byte-identical; parity test pins it; activation later populates the JWT scope with no rewrite.
+**ЧТО:** Ship the scope seam dormant (principal type + deny-by-default AGENT branch + validator + dormant `agent_capability_profiles` table with credential FK); HUMAN byte-identical; parity test pins it; activation later populates the JWT scope with no rewrite.
 **ПОЧЕМУ:** The seam is cheapest before Admin Slice 2 hard-wires human-only authz, but must not change MVP behaviour or expose live agent authorization.
 **ПОЧЕМУ ТАК ЛУЧШЕ:** Reuses the proven dormant-form-first pattern (migration 0034); the parity test makes "zero HUMAN behaviour change" and "deny-by-default for AGENT" *verified*, not asserted; additive/nullable column is N-1 safe (heeds AUDIT4 P1-5); activation is one populate-the-claim step, honouring the phasing rule.
 
@@ -184,16 +196,16 @@ Table count unchanged (column only, +0 tables).
 - Human override and human out-authorization preserved unconditionally.
 
 ### Negative
-- A scope vocabulary + validator to maintain; scope duplication across credentials until (if) the profile table lands.
-- One additive column beyond the [ADR-0036](0036-agent-credential-issuance.md) form.
+- A scope vocabulary + validator + the `agent_capability_profiles` lookup table to maintain (one more administered object).
+- One additive table + FK column beyond the [ADR-0036](0036-agent-credential-issuance.md) form (+1 table when the slice lands).
 
 ### Neutral
 - MVP behaviour byte-identical (HUMAN path untouched; AGENT branch dormant, no agent provisioned).
-- Whether scope later moves to a named-profile table is deferred (both resolve to the same JWT claim).
+- Scope storage resolved by the owner (2026-07-09): named profiles from the start (§2); a per-credential override column stays a possible additive extension (both resolve to the same JWT claim).
 
-## Open questions (for the owner — recommendation given, not blocking)
-1. **[owner/North-Star] A future "trusted agent" tier with broad scope?** The P-D vision is increasingly autonomous agents. Recommendation: even the **broadest** agent scope stays an **explicitly enumerated** `{action, subject}` grant — the `manage`/`all` wildcard remains **HUMAN-only forever**. An agent may be granted *wide* authority but never *wildcard* authority (so the grant is always auditable and boundable). *Default if unanswered: no wildcard for AGENT, ever.*
-2. **[design, minor] Scope storage evolution** — promote per-credential scope to a named `agent_capability_profiles` table when the fleet grows? Recommendation: per-credential now (Option A); promote when >~a handful of agents share a scope. *Not blocking (additive later).*
+## Open questions — owner review 2026-07-09
+1. **[owner/North-Star] A future "trusted agent" tier with broad scope?** The P-D vision is increasingly autonomous agents. Recommendation: even the **broadest** agent scope stays an **explicitly enumerated** `{action, subject}` grant — the `manage`/`all` wildcard remains **HUMAN-only forever**. An agent may be granted *wide* authority but never *wildcard* authority (so the grant is always auditable and boundable). **Owner decision 2026-07-09: deliberately left OPEN until P-D; the stated default applies meanwhile — no wildcard for AGENT.**
+2. **[design, minor] Scope storage evolution** — promote per-credential scope to a named `agent_capability_profiles` table when the fleet grows? Recommendation: per-credential now (Option A); promote when >~a handful of agents share a scope. **Owner decision 2026-07-09: recommendation OVERRIDDEN — named profiles from the start (see §2 Decision); question closed.**
 
 ## Related Decisions
 - [ADR-0011](0011-agent-principal-actor-model.md) — refines §7 for the authz layer (matrix = ceiling, AGENT effective = ceiling ∩ scope); no cross-column CHECK; §3 human-override untouched.
