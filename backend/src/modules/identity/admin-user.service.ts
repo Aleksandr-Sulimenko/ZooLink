@@ -247,6 +247,12 @@ export class AdminUserService {
         where: { user_id: user.id },
         data: { recipient: '[erased]', content: null },
       });
+      // ADR-0036 §4: a deactivated/erased AGENT must retain no authenticating credential — cascade-revoke
+      // its live service_credentials in the SAME tx. A no-op for non-agent accounts (they hold none).
+      await tx.service_credentials.updateMany({
+        where: { agent_user_id: user.id, is_active: true },
+        data: { is_active: false, revoked_at: now },
+      });
     });
 
     await this.auth.logout(user.id); // revoke all sessions

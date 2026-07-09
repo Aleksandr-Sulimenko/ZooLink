@@ -40,6 +40,8 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
     users: { update: txUpdate },
     user_roles: { createMany },
     notification_logs: { updateMany },
+    // ADR-0036 §4: cascade-revoke live agent credentials in the erase tx (no-op for non-agents).
+    service_credentials: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const $transaction = jest
     .fn()

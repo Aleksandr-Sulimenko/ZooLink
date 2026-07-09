@@ -9,3 +9,9 @@
  * unaffected; this reset then re-applies before every subsequent file.
  */
 process.env.LISTING_CREATION_QUOTA_PER_DAY = '1000';
+
+// Agent-auth (ADR-0036 §3.2): the HMAC key for service_credentials.secret_hash. Optional in dev/test,
+// but the agent-auth e2e/exchange paths require it to hash & verify a credential — set a fixed test
+// value here so every e2e boot has it (dotenv does not override an already-set process.env var).
+process.env.AGENT_SERVICE_SIGNING_SECRET =
+  process.env.AGENT_SERVICE_SIGNING_SECRET || 'e2e_agent_service_signing_secret_00000000';

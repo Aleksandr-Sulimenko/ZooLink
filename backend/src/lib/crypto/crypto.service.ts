@@ -4,6 +4,7 @@ import {
   createHash,
   createHmac,
   randomBytes,
+  timingSafeEqual,
 } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
@@ -32,12 +33,16 @@ const TAG_BYTES = 16; // AES-GCM auth tag length
 export class CryptoService {
   private readonly dataKey: Buffer; // 32 bytes → AES-256
   private readonly blindIndexKey: string;
+  private readonly agentServiceSecret: string | undefined;
 
   constructor(config: AppConfigService) {
     // Derive a uniform 256-bit AES key from the configured secret. The secret is ≥32 chars and
     // high-entropy (env-validated); SHA-256 maps it to exactly 32 bytes for AES-256.
     this.dataKey = createHash('sha256').update(config.get('PII_DATA_KEY')).digest();
     this.blindIndexKey = config.get('PII_BLIND_INDEX_KEY');
+    // ADR-0036 §3.2: agent-credential HMAC key. Optional/empty in dev/test (the master gate is off in
+    // MVP); the hash method fails closed if it is ever called without the secret configured.
+    this.agentServiceSecret = config.get('AGENT_SERVICE_SIGNING_SECRET') || undefined;
   }
 
   /**
@@ -90,5 +95,31 @@ export class CryptoService {
    */
   emailBlindIndex(rawEmail: string): string {
     return this.blindIndex(rawEmail.trim().toLowerCase());
+  }
+
+  /**
+   * ADR-0036 §3.2 — agent service-credential keyed hash. Returns `HMAC-SHA256(secret,
+   * AGENT_SERVICE_SIGNING_SECRET)` as base64url. Keyed with the reserved env secret (NOT the PII
+   * blind-index key) so a stolen DB alone (without the env secret) cannot verify any credential.
+   * A machine secret is full 256-bit entropy, so a keyed HMAC — not a memory-hard KDF — is the right
+   * primitive (no brute-force advantage to argon2 here). Fails closed if the secret is unconfigured.
+   */
+  agentCredentialHash(secret: string): string {
+    if (!this.agentServiceSecret) {
+      throw new Error('AGENT_SERVICE_SIGNING_SECRET is not configured; cannot hash an agent credential');
+    }
+    return createHmac('sha256', this.agentServiceSecret).update(secret).digest('base64url');
+  }
+
+  /**
+   * Constant-time equality of two hash strings (ADR-0036 §3.3) — no length/timing oracle. Returns
+   * false on any length mismatch (timingSafeEqual requires equal-length buffers). Used to compare a
+   * recomputed credential hash against the stored `secret_hash`.
+   */
+  safeEqual(a: string, b: string): boolean {
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) return false;
+    return timingSafeEqual(ba, bb);
   }
 }

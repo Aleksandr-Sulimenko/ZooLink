@@ -119,9 +119,18 @@ export class ProfileService {
     if (user.status !== 'ACTIVE' && user.status !== 'VERIFIED') {
       throw new ConflictException({ message: 'Account cannot be deactivated from its current state', code: 'CONFLICT' });
     }
-    await this.prisma.users.update({
-      where: { id: userId },
-      data: { status: 'DEACTIVATED', deactivated_at: new Date(), is_active: false },
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.users.update({
+        where: { id: userId },
+        data: { status: 'DEACTIVATED', deactivated_at: now, is_active: false },
+      });
+      // ADR-0036 §4: cascade-revoke any live agent service-credentials in the SAME tx (a deactivated
+      // account must not keep an authenticating credential). No-op for non-agent accounts.
+      await tx.service_credentials.updateMany({
+        where: { agent_user_id: userId, is_active: true },
+        data: { is_active: false, revoked_at: now },
+      });
     });
     await this.auth.logout(userId); // revoke all refresh-token families
     await this.audit.record({

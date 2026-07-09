@@ -756,7 +756,9 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 -- migration 0023 (ADR-0013 §1): gate form for the Phase-2 verified ownership-transfer flow. Off in MVP.
 ('ownership_transfer_verification', 'Phase-2 verified transfer flow (IN_PROGRESS/payment/vet/legal/two-sided ack). Off in MVP (ADR-0013 §1).', false, 0),
 -- migration 0027 (GAP-BA-011): gate FORM for the Phase-2 goods marketplace (аксессуары/корма/товары); behaviour deferred. Off in MVP.
-('goods_marketplace', 'Маркетплейс товаров (аксессуары, корма, ветпрепараты и т.п.) — форма гейта заведена, поведение отложено до Фазы 2+ (GAP-BA-011). Выключено в MVP.', false, 0)
+('goods_marketplace', 'Маркетплейс товаров (аксессуары, корма, ветпрепараты и т.п.) — форма гейта заведена, поведение отложено до Фазы 2+ (GAP-BA-011). Выключено в MVP.', false, 0),
+-- migration 0038 (ADR-0036 §6): master gate for agent service-auth (secret→AGENT JWT exchange). Off in MVP.
+('agent_service_auth', 'Гейт агент-сервис-авторизации (ADR-0036): обмен человеко-выданного секрета service_credentials на короткоживущий AGENT JWT на POST /v1/auth/agent/token. Форма заведена, в MVP ВЫКЛЮЧЕНО.', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- ========== Application-level validations ==========
@@ -1184,13 +1186,45 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON refresh_tokens(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
 
--- ADR-0011 §5.3 — agent service-credential store (FORM ONLY; gated, NOT populated in MVP).
--- A rotatable/revocable, hashed-secret store keyed to an AGENT principal (users.id). The form ships
--- now so activating agent service-auth later (ADR-0006 P-A…P-D) needs no schema rewrite; the AGENT
--- gate is off in MVP, so no row is created and no secret is verified. Non-negotiables enforced by the
--- shape (ADR-0011 §C): in-monolith, rotatable (issue-new + revoke-old), revocable (mark inactive),
--- never plaintext at rest (only secret_hash is stored). FK ON DELETE RESTRICT mirrors the
--- agent-lifecycle = deactivate-not-delete rule (ADR-0011 §4) so credentials can't orphan.
+-- ADR-0037 §2 (owner Option B, 2026-07-09) — named, reusable least-privilege scope profiles.
+-- Defined BEFORE service_credentials because that table's capability_profile_id FK references it.
+-- A profile = a human-readable {action,subject} ability set (e.g. 'moderation-agent') resolved into
+-- the AGENT JWT scope claim at token exchange (ADR-0036 §1). DORMANT in MVP. Scope vocabulary is the
+-- RBAC {action,subject} set MINUS 'manage'/'all' (a service-layer validator rejects them, so wildcard
+-- authority is structurally impossible for an AGENT — AUDIT4 P1-6). +updated_at trigger below.
+CREATE TABLE IF NOT EXISTS agent_capability_profiles (
+    id          SERIAL PRIMARY KEY,
+    code        VARCHAR(50) NOT NULL,
+    scope       JSONB NOT NULL,          -- [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — never manage/all
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_agent_capability_profiles_code UNIQUE (code)
+);
+COMMENT ON TABLE agent_capability_profiles IS
+  'ADR-0037 §2: named reusable least-privilege {action,subject} ability set referenced by service_credentials.capability_profile_id, resolved into the AGENT JWT scope at exchange. Effective AGENT ability = matrix(role) ∩ scope, deny-by-default. Scope never contains manage/all (validator-enforced). DORMANT in MVP.';
+-- updated_at trigger (this table is created AFTER the auto-attach DO-block above, so attach explicitly —
+-- mirrors health_certifications / decision_templates). Idempotent (DROP IF EXISTS).
+DROP TRIGGER IF EXISTS update_agent_capability_profiles_updated_at ON agent_capability_profiles;
+CREATE TRIGGER update_agent_capability_profiles_updated_at BEFORE UPDATE ON agent_capability_profiles
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Reference scope profile (migration 0038, ADR-0037 §3): the READY moderation scope. An AGENT-MODERATOR
+-- holding it may moderate and NOTHING else (narrower than the human MODERATOR ceiling). Never manage/all.
+INSERT INTO agent_capability_profiles (code, scope, is_active) VALUES
+  ('moderation-agent',
+   '[{"action":"read","subject":"ModerationQueue"},{"action":"create","subject":"ModerationDecision"},{"action":"read","subject":"Listing"},{"action":"read","subject":"ContentReport"}]'::jsonb,
+   TRUE)
+ON CONFLICT ON CONSTRAINT uq_agent_capability_profiles_code DO NOTHING;
+
+-- ADR-0011 §5.3 — agent service-credential store (migration 0017 FORM; ADR-0036/0037 add issuance+scope).
+-- A rotatable/revocable, hashed-secret store keyed to an AGENT principal (users.id). The form shipped in
+-- 0017; ADR-0036 makes it live (issuance/exchange/rotate/revoke) and ADR-0037 attaches a scope profile.
+-- Non-negotiables enforced by the shape (ADR-0011 §C): in-monolith, rotatable (issue-new + revoke-old),
+-- revocable (mark inactive), never plaintext at rest (only secret_hash = HMAC-SHA256(secret,
+-- AGENT_SERVICE_SIGNING_SECRET) is stored). FK ON DELETE RESTRICT mirrors deactivate-not-delete
+-- (ADR-0011 §4) so credentials can't orphan. Master gate feature_toggles.agent_service_auth off in MVP.
 CREATE TABLE IF NOT EXISTS service_credentials (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     agent_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -1199,13 +1233,19 @@ CREATE TABLE IF NOT EXISTS service_credentials (
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
     created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     revoked_at    TIMESTAMP WITH TIME ZONE,
-    rotated_from  UUID REFERENCES service_credentials(id) ON DELETE SET NULL -- rotation chain (issue-new links to old)
+    rotated_from  UUID REFERENCES service_credentials(id) ON DELETE SET NULL, -- rotation chain (issue-new links to old)
+    -- ADR-0036 §7 (migration 0038): accountability/operability — all additive/nullable (N-1 safe).
+    issued_by             UUID REFERENCES users(id) ON DELETE RESTRICT, -- accountable human issuer-of-record (ADR-0006 #5)
+    last_used_at          TIMESTAMP WITH TIME ZONE,                     -- best-effort stale-credential detection (never hot-path)
+    expires_at            TIMESTAMP WITH TIME ZONE,                     -- optional auto-expiry; NULL = no expiry (verify checks §3)
+    -- ADR-0037 §2 (migration 0038): named least-privilege scope resolved into the AGENT JWT at exchange.
+    capability_profile_id INT REFERENCES agent_capability_profiles(id) ON DELETE RESTRICT -- NULL = deny-by-default
 );
 -- Lookup of live credentials for an agent (verification path once the gate is on).
 CREATE INDEX IF NOT EXISTS idx_service_credentials_agent_active
     ON service_credentials(agent_user_id) WHERE is_active = TRUE;
 COMMENT ON TABLE service_credentials IS
-  'ADR-0011 §5.3: rotatable/revocable hashed-secret store for AGENT-principal service-auth. FORM ONLY in MVP (gate off; not populated). In-monolith, never plaintext.';
+  'ADR-0011 §5.3 / ADR-0036 / ADR-0037: rotatable/revocable HMAC-hashed-secret store for AGENT-principal service-auth. Live issuance/exchange/rotate/revoke via the agent-auth slice; master gate feature_toggles.agent_service_auth off in MVP. In-monolith, never plaintext.';
 
 -- Animal: trg_animals_immutable_and_owner is defined ONCE above (the controlled-transfer/GUC version,
 -- ADR-0013 §2). The previous duplicate "block all ownership change" CREATE OR REPLACE here was removed

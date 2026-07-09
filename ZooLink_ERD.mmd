@@ -491,7 +491,22 @@ erDiagram
         TIMESTAMPTZ created_at
         TIMESTAMPTZ revoked_at
         UUID rotated_from FK
-        %% ADR-0011 §5.3 agent service-auth FORM ONLY (gated)
+        UUID issued_by FK
+        TIMESTAMPTZ last_used_at
+        TIMESTAMPTZ expires_at
+        INT capability_profile_id FK
+        %% ADR-0011 §5.3 / ADR-0036 issuance + ADR-0037 scope (migration 0038; gated off in MVP)
+    }
+    agent_capability_profiles {
+        SERIAL id PK
+        VARCHAR_50 code UK
+        JSONB scope
+        BOOLEAN is_active
+        UUID created_by FK
+        UUID updated_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+        %% ADR-0037 §2 named least-privilege scope profiles (migration 0038; never manage/all)
     }
 
     %% Extensibility / System Tables
@@ -550,6 +565,7 @@ erDiagram
     users ||..o{ audit_log : "acted (nullable)"
     users ||..o{ service_credentials : "agent service-auth (gated)"
     service_credentials |o..o{ service_credentials : "rotated_from (rotation chain)"
+    agent_capability_profiles |o..o{ service_credentials : "capability_profile_id (scope)"
 
     %% Organization Domain Relationships (junction = M:N resolved)
     organizations ||..o{ organization_users : "has members"

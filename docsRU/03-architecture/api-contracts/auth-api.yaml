@@ -236,6 +236,121 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials:
+    post:
+      summary: '[ADMIN] Выдать сервис-креденшел агента (плейнтекст-секрет отдаётся один раз)'
+      operationId: issueAgentCredential
+      description: >-
+        (ADR-0036 §2, нормативно) Человек-ADMIN выдаёт сервис-креденшел для AGENT-аккаунта (строка
+        users с principal_type='AGENT'). Плейнтекст-секрет `zlk_agent_<credId>_<secret>` отдаётся
+        РОВНО ОДИН РАЗ (больше недоступен — хранится только HMAC `secret_hash`). Выдача — HUMAN-only
+        (никогда не входит ни в один scope AGENT — ADR-0037), аудируется как акт HUMAN (секрет не
+        логируется). Креды можно завести заранее при выключенном мастер-гейте `agent_service_auth`;
+        до его включения они ничего не аутентифицируют. 422 — если цель не AGENT-аккаунт или профиль
+        способностей не существует.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueCredentialRequest' }
+      responses:
+        '201':
+          description: Креденшел выдан; плейнтекст-секрет отдан ОДИН РАЗ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialIssuedResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials/{credId}/rotate:
+    post:
+      summary: '[ADMIN] Ротация креденшела агента (выпуск нового; старый НЕ отзывается — overlap)'
+      operationId: rotateAgentCredential
+      description: >-
+        (ADR-0036 §4, нормативно) Выпустить НОВЫЙ креденшел, связанный со старым через `rotatedFrom`,
+        вернув новый плейнтекст-секрет ОДИН РАЗ. Старый креденшел НЕ отзывается автоматически — окно
+        overlap позволяет агенту сменить креды без простоя; старый отзывается отдельно после смены.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/CredIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotateCredentialRequest' }
+      responses:
+        '201':
+          description: Новый креденшел выдан (rotatedFrom установлен); плейнтекст-секрет отдан ОДИН РАЗ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialIssuedResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials/{credId}:
+    delete:
+      summary: '[ADMIN] Немедленно отозвать креденшел агента (идемпотентно)'
+      operationId: revokeAgentCredential
+      description: >-
+        (ADR-0036 §4, нормативно) Немедленный отзыв креденшела (`is_active=false, revoked_at=now`).
+        Следующий обмен его отклонит; уже выданные короткоживущие JWT доживают до истечения TTL.
+        Идемпотентно — отзыв уже отозванного = no-op 204.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/CredIdParam'
+      responses:
+        '204': { description: Креденшел отозван (или уже отозван — идемпотентно) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/agent/token:
+    post:
+      summary: Обменять сервис-креденшел агента на короткоживущий AGENT access-токен
+      operationId: exchangeAgentToken
+      security: []
+      description: >-
+        (ADR-0036 §1, нормативно) Машина предъявляет свой долгоживущий секрет
+        `zlk_agent_<credId>_<secret>` ОДИН раз и получает короткоживущий AGENT access-JWT (несущий
+        разрешённый least-privilege scope, ADR-0037). Refresh-токен агенту НЕ выдаётся — он
+        переобменивает секрет. Гейтится мастер-тумблером `agent_service_auth` (в MVP выключен → 403).
+        Rate-limit per credId + IP (429 + Retry-After). ЛЮБОЙ отказ проверки (неизвестный/неактивный/
+        отозванный/просроченный креденшел, не-AGENT аккаунт или несовпадение секрета) → ЕДИНЫЙ 401
+        `INVALID_AGENT_CREDENTIAL` — без оракула существования/времени.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentTokenExchangeRequest' }
+      responses:
+        '200':
+          description: Короткоживущий AGENT access-токен (Bearer)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAccessTokenResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429':
+          description: Достигнут rate-limit (per credId + IP)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Секунд до сброса окна лимитера
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/erase:
     post:
       summary: Запросить стирание текущего аккаунта (ФЗ-152)
@@ -480,6 +595,29 @@ components:
         type: string
         format: uuid
       description: ID целевого пользователя (users.id)
+    AgentUserIdParam:
+      in: path
+      name: agentUserId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID целевого AGENT-аккаунта (users.id, principal_type='AGENT')
+    CredIdParam:
+      in: path
+      name: credId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: ID сервис-креденшела (service_credentials.id)
+    IdempotencyKeyHeader:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema: { type: string }
+      description: >-
+        API_CONVENTIONS §5 — опциональный ключ идемпотентности для небезопасного POST (окно 24ч).
   schemas:
     Problem:
       type: object
@@ -694,6 +832,59 @@ components:
         accessToken:
           type: string
           description: JWT access-токен (истекает через 15 мин; refresh TTL 7 д — spec 01 round-4)
+    IssueCredentialRequest:
+      type: object
+      description: ADR-0036 §2 — все поля опциональны; голая выдача создаёт креденшел с deny-by-default.
+      properties:
+        label:
+          type: string
+          maxLength: 120
+          description: Человекочитаемая метка назначения (операбельность; не полномочия)
+        capabilityProfileId:
+          type: integer
+          description: Именованный scope-профиль ADR-0037 (agent_capability_profiles.id). Опустить ⇒ deny-by-default.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Опциональное авто-истечение (ISO-8601). Опустить ⇒ без истечения.
+    RotateCredentialRequest:
+      type: object
+      description: ADR-0036 §4 — переопределения для ротируемого креденшела; опущенные поля наследуются от старого.
+      properties:
+        label: { type: string, maxLength: 120 }
+        capabilityProfileId: { type: integer }
+        expiresAt: { type: string, format: date-time }
+    CredentialIssuedResponse:
+      type: object
+      required: [id, agentUserId, secret, capabilityProfileId, expiresAt, rotatedFrom, createdAt]
+      properties:
+        id: { type: string, format: uuid, description: ID креденшела (credId) }
+        agentUserId: { type: string, format: uuid }
+        secret:
+          type: string
+          description: >-
+            Полный токен `zlk_agent_<credId>_<secret>` — показывается ОДИН РАЗ, больше недоступен.
+        capabilityProfileId: { type: integer, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        rotatedFrom: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AgentTokenExchangeRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+          description: Секрет сервис-креденшела `zlk_agent_<credId>_<secret>`
+    AgentAccessTokenResponse:
+      type: object
+      required: [accessToken, tokenType]
+      properties:
+        accessToken:
+          type: string
+          description: Короткоживущий AGENT JWT (несёт разрешённый least-privilege scope, ADR-0037). Refresh-токен не выдаётся.
+        tokenType:
+          type: string
+          enum: [Bearer]
     AuthResponse:
       type: object
       # (нормативно) Тело ответа сессии = access-токен + профиль ТОЛЬКО. Долгоживущий refresh-токен

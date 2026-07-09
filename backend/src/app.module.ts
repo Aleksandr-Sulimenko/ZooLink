@@ -13,6 +13,7 @@ import { FeatureToggleModule } from './lib/feature-toggle/feature-toggle.module'
 import { OutboxModule } from './lib/outbox/outbox.module';
 import { OrgMembershipModule } from './lib/org/org-membership.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AgentAuthModule } from './modules/agent-auth/agent-auth.module';
 import { IdentityModule } from './modules/identity/identity.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AnimalModule } from './modules/animal/animal.module';
@@ -45,6 +46,7 @@ import { HealthModule } from './health/health.module';
     OutboxModule,
     OrgMembershipModule,
     AuthModule,
+    AgentAuthModule,
     IdentityModule,
     AdminModule,
     AnimalModule,

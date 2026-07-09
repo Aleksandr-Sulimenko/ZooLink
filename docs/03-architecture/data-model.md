@@ -466,13 +466,25 @@ Both append-only actor ledgers — `audit_log` and `moderation_decisions` — re
   override row's `actor_principal_type = 'HUMAN'` and its `supersedes_decision_id` to reference a decision on
   the **same** `(entity_type, entity_id)`. Read side resolves "latest effective decision" by following
   `supersedes_decision_id` (indexed by `idx_moddec_supersedes`).
-- **Agent service-credential store** — `service_credentials` (ADR-0011 §5.3/§C, A0b, migration 0017),
-  a **forward-compatible FORM**: an in-monolith hashed-secret store keyed to the agent (`agent_user_id` FK
-  `users.id`, `ON DELETE RESTRICT`), **rotatable** (`rotated_from` self-FK = issue-new links to old) and
-  **revocable** (`is_active` / `revoked_at`), with **only `secret_hash`** at rest (never plaintext) and no
-  separate auth service. It is **FORM ONLY in MVP**: the AGENT gate is off, so no row is created and no
-  secret is verified; the `AgentServiceTokenAuthenticator` stub is not in the authenticator chain and always
-  returns `null`. Activating agent service-auth later (ADR-0006 P-A…P-D) needs no schema rewrite.
+- **Agent service-credential store** — `service_credentials` (ADR-0011 §5.3/§C, A0b, migration 0017; made
+  **live** by ADR-0036 + ADR-0037, migration 0038): an in-monolith HMAC-hashed-secret store keyed to the agent
+  (`agent_user_id` FK `users.id`, `ON DELETE RESTRICT`), **rotatable** (`rotated_from` self-FK = issue-new links
+  to old) and **revocable** (`is_active` / `revoked_at`), with **only `secret_hash` = HMAC-SHA256(secret,
+  AGENT_SERVICE_SIGNING_SECRET)** at rest (never plaintext) and no separate auth service. Migration 0038 adds
+  (all additive/nullable → N-1 safe): `issued_by` FK `users.id` `ON DELETE RESTRICT` (accountable human
+  issuer-of-record, ADR-0006 #5), `last_used_at` (best-effort stale detection), `expires_at` (optional
+  auto-expiry, verify checks it) and `capability_profile_id` FK `agent_capability_profiles.id` `ON DELETE
+  RESTRICT` (the named least-privilege scope; NULL = deny-by-default). **Behaviour is gated**: the master
+  toggle `feature_toggles.agent_service_auth` is **off** in MVP, so `POST /v1/auth/agent/token` issues no AGENT
+  JWT and no agent is provisioned. A human ADMIN issues/rotates/revokes credentials at
+  `POST /v1/admin/agents/{agentUserId}/credentials` (each act audited, secret never logged).
+- **Agent capability profiles** — `agent_capability_profiles` (ADR-0037 §2, migration 0038): a named, reusable
+  least-privilege `{action, subject}` ability set (`code` UNIQUE, `scope` JSONB, `is_active`, provenance
+  `created_by`/`updated_by`, `updated_at` trigger). A credential references one profile; the token exchange
+  resolves it and embeds the resolved scope in the AGENT JWT `scope` claim. The effective AGENT ability =
+  `matrix(role) ∩ scope`, **deny-by-default**; the scope vocabulary is the RBAC `{action, subject}` set **minus
+  `manage`/`all`** (a service-layer validator rejects them → wildcard authority is structurally impossible for an
+  AGENT, AUDIT4 P1-6). Seeded reference profile: `moderation-agent` (ADR-0037 §3). **DORMANT** in MVP.
 - **Authenticator chain** (ADR-0011 §5) — authentication is factored out of `JwtAuthGuard` into an ordered
   `RequestAuthenticator` chain producing the source-agnostic `AuthPrincipal {userId, role, principalType}`.
   `BearerJwtAuthenticator` is the only link today (human end-users + operators); `AgentServiceTokenAuthenticator`

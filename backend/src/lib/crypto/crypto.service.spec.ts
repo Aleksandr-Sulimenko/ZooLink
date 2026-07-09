@@ -82,3 +82,31 @@ describe('CryptoService.blindIndex / emailBlindIndex', () => {
     expect(crypto.emailBlindIndex('ann@example.com')).toHaveLength(43);
   });
 });
+
+describe('CryptoService.agentCredentialHash / safeEqual (ADR-0036 §3.2/§3.3)', () => {
+  const crypto = makeCrypto({ AGENT_SERVICE_SIGNING_SECRET: 'agent_signing_secret_0000000000000000000' });
+
+  it('is deterministic for the same secret and keyed (43-char base64url, fits VARCHAR(255))', () => {
+    const h = crypto.agentCredentialHash('super-secret');
+    expect(h).toBe(crypto.agentCredentialHash('super-secret'));
+    expect(h).toHaveLength(43);
+  });
+
+  it('differs for a different secret and for a different signing key', () => {
+    expect(crypto.agentCredentialHash('a')).not.toBe(crypto.agentCredentialHash('b'));
+    const other = makeCrypto({ AGENT_SERVICE_SIGNING_SECRET: 'another_agent_signing_secret_00000000000' });
+    expect(other.agentCredentialHash('a')).not.toBe(crypto.agentCredentialHash('a'));
+  });
+
+  it('fails closed when the signing secret is not configured', () => {
+    const noKey = makeCrypto(); // no AGENT_SERVICE_SIGNING_SECRET
+    expect(() => noKey.agentCredentialHash('x')).toThrow(/AGENT_SERVICE_SIGNING_SECRET/);
+  });
+
+  it('safeEqual is true for equal strings, false otherwise (incl. length mismatch)', () => {
+    expect(crypto.safeEqual('abc', 'abc')).toBe(true);
+    expect(crypto.safeEqual('abc', 'abd')).toBe(false);
+    expect(crypto.safeEqual('abc', 'abcd')).toBe(false);
+    expect(crypto.safeEqual('', '')).toBe(true);
+  });
+});

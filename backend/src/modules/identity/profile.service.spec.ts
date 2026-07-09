@@ -28,7 +28,8 @@ function setup(user: Record<string, unknown> | null = baseUser, updateImpl?: jes
   const findUnique = jest.fn().mockResolvedValue(user);
   const update = updateImpl ?? jest.fn().mockResolvedValue({ ...baseUser, updated_at: new Date('2026-06-20T00:00:00Z') });
   const consents = { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({}) };
-  const tx = { users: { update }, consents };
+  // service_credentials.updateMany: ADR-0036 §4 cascade-revoke in the deactivate tx (no-op for non-agents).
+  const tx = { users: { update }, consents, service_credentials: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) } };
   const prisma = {
     users: { findUnique, update },
     $transaction: jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx)),

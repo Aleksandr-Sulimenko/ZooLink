@@ -237,6 +237,120 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials:
+    post:
+      summary: '[ADMIN] Issue an agent service-credential (plaintext secret returned once)'
+      operationId: issueAgentCredential
+      description: >-
+        (ADR-0036 §2, normative) A human ADMIN issues a service-credential for an AGENT account
+        (a users row with principal_type='AGENT'). The plaintext secret `zlk_agent_<credId>_<secret>`
+        is returned EXACTLY ONCE (never retrievable again — only the HMAC `secret_hash` persists).
+        Issuance is a HUMAN-only capability (never in any AGENT scope — ADR-0037) and is audited as a
+        HUMAN act (secret never logged). Credentials may be pre-provisioned while the
+        `agent_service_auth` master gate is off; they authenticate nothing until it is flipped on.
+        422 if the target is not an AGENT account or the capability profile does not exist.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueCredentialRequest' }
+      responses:
+        '201':
+          description: Credential issued; plaintext secret returned ONCE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialIssuedResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials/{credId}/rotate:
+    post:
+      summary: '[ADMIN] Rotate an agent credential (issue-new; old NOT auto-revoked — overlap)'
+      operationId: rotateAgentCredential
+      description: >-
+        (ADR-0036 §4, normative) Issue a NEW credential linked to the old via `rotatedFrom`, returning
+        the new plaintext secret ONCE. The old credential is NOT auto-revoked — the overlap window lets
+        the agent swap credentials with no downtime; revoke the old one separately once swapped.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/CredIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotateCredentialRequest' }
+      responses:
+        '201':
+          description: New credential issued (rotatedFrom set); plaintext secret returned ONCE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialIssuedResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /admin/agents/{agentUserId}/credentials/{credId}:
+    delete:
+      summary: '[ADMIN] Revoke an agent credential immediately (idempotent)'
+      operationId: revokeAgentCredential
+      description: >-
+        (ADR-0036 §4, normative) Immediately revoke a credential (`is_active=false, revoked_at=now`).
+        The next exchange rejects it; already-issued short-lived JWTs survive until their TTL. Idempotent
+        — revoking an already-revoked credential is a no-op 204.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AgentUserIdParam'
+        - $ref: '#/components/parameters/CredIdParam'
+      responses:
+        '204': { description: Credential revoked (or already revoked — idempotent) }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
+  /auth/agent/token:
+    post:
+      summary: Exchange an agent service-credential for a short-lived AGENT access token
+      operationId: exchangeAgentToken
+      security: []
+      description: >-
+        (ADR-0036 §1, normative) A machine presents its long-lived `zlk_agent_<credId>_<secret>` secret
+        ONCE and receives a short-lived AGENT access JWT (carrying the resolved least-privilege scope,
+        ADR-0037). No refresh token is issued to an agent — it re-exchanges its secret. Gated by the
+        `agent_service_auth` master toggle (off in MVP → 403). Rate-limited per credId + IP (429 +
+        Retry-After). ANY verify failure (unknown/inactive/revoked/expired credential, non-agent account,
+        or secret mismatch) returns ONE uniform 401 `INVALID_AGENT_CREDENTIAL` — no existence/timing oracle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentTokenExchangeRequest' }
+      responses:
+        '200':
+          description: A short-lived AGENT access token (Bearer)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAccessTokenResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429':
+          description: Rate limit reached (per credId + IP)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the limiter window resets
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500': { $ref: '#/components/responses/Problem' }
   /me/erase:
     post:
       summary: Request erasure of the current account (ФЗ-152)
@@ -481,6 +595,29 @@ components:
         type: string
         format: uuid
       description: Target user id (users.id)
+    AgentUserIdParam:
+      in: path
+      name: agentUserId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Target AGENT account id (users.id, principal_type='AGENT')
+    CredIdParam:
+      in: path
+      name: credId
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Service-credential id (service_credentials.id)
+    IdempotencyKeyHeader:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema: { type: string }
+      description: >-
+        API_CONVENTIONS §5 — optional idempotency key for the unsafe POST (24h replay window).
   schemas:
     Problem:
       type: object
@@ -695,6 +832,59 @@ components:
         accessToken:
           type: string
           description: JWT access token (expires in 15 min; refresh TTL 7 d — spec 01 round-4)
+    IssueCredentialRequest:
+      type: object
+      description: ADR-0036 §2 — all fields optional; a bare issuance mints a deny-by-default credential.
+      properties:
+        label:
+          type: string
+          maxLength: 120
+          description: Human-readable purpose label (operability only; not authority)
+        capabilityProfileId:
+          type: integer
+          description: ADR-0037 named scope profile (agent_capability_profiles.id). Omit ⇒ deny-by-default.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional auto-expiry (ISO-8601). Omit ⇒ no expiry.
+    RotateCredentialRequest:
+      type: object
+      description: ADR-0036 §4 — overrides for the rotated credential; omitted fields inherit the old credential's.
+      properties:
+        label: { type: string, maxLength: 120 }
+        capabilityProfileId: { type: integer }
+        expiresAt: { type: string, format: date-time }
+    CredentialIssuedResponse:
+      type: object
+      required: [id, agentUserId, secret, capabilityProfileId, expiresAt, rotatedFrom, createdAt]
+      properties:
+        id: { type: string, format: uuid, description: The credential id (credId) }
+        agentUserId: { type: string, format: uuid }
+        secret:
+          type: string
+          description: >-
+            The full `zlk_agent_<credId>_<secret>` token — shown ONCE, never retrievable again.
+        capabilityProfileId: { type: integer, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        rotatedFrom: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AgentTokenExchangeRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+          description: The `zlk_agent_<credId>_<secret>` service-credential secret
+    AgentAccessTokenResponse:
+      type: object
+      required: [accessToken, tokenType]
+      properties:
+        accessToken:
+          type: string
+          description: Short-lived AGENT JWT (carries the resolved least-privilege scope, ADR-0037). No refresh token is issued.
+        tokenType:
+          type: string
+          enum: [Bearer]
     AuthResponse:
       type: object
       # (normative) Session response body = access token + profile ONLY. The long-lived refresh token is
