@@ -488,9 +488,16 @@ dark patterns.
 
 ---
 
-## 13. Open Questions / Assumptions (OWNER business forks — recommendation each; not blocking this design)
+## 13. Open Questions / Assumptions — RESOLVED by the owner (2026-07-09)
 > Per the operating model I do **not** stop and wait; each carries my recommendation so the owner can
 > confirm or redirect.
+>
+> **Owner decision (2026-07-09, section-by-section review): all 8 forks CONFIRMED exactly as
+> recommended.** The *Recommendation* lines below are therefore **normative business decisions** for the
+> reputation slices (fork 1 hybrid confirmation · 2 double-blind · 3 90-day/72-hour · 4 CONFIRMED-only ·
+> 5 stars+text with facet columns form-now · 6 per-market display · 7 reputation never monetised ·
+> 8 pseudonymise-keep-rating). Fork 8 stays subject to the legal confirmation noted in §9 before the
+> behaviour toggle flips.
 
 1. **One-sided vs mutual confirmation of a sale?**
    *Recommendation:* **Hybrid** — **auto-confirm** when anchored to a COMPLETED `ownership_transfers`
