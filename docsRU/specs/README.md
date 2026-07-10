@@ -22,6 +22,13 @@ status: "Approved"
 8. [08-frontend-architecture.md](08-frontend-architecture.md) - Трехслойная архитектура фронтенда (View→Domain→System)
 9. [09-testing-strategy.md](09-testing-strategy.md) - Комплексный подход к тестированию
 10. [10-implementation-roadmap.md](10-implementation-roadmap.md) - Поэтапный план внедрения
+11. [11-organization-domain.md](11-organization-domain.md) - Организации (клиники, питомники, приюты, фермы): филиалы, пользователи организации, идентификация юрлица по ИНН/КПП
+12. [12-moderation-domain.md](12-moderation-domain.md) - Очередь модерации пользовательского контента: решения одобрить/отклонить/запросить изменения с неизменяемым журналом аудита
+13. [13-notification-domain.md](13-notification-domain.md) - Транзакционные/рекламные уведомления по email и SMS (Unisender/SMS.RU), шаблоны, отслеживание доставки, предпочтения пользователей
+14. [14-payment-domain.md](14-payment-domain.md) - Безопасная обработка платежей и выплат (ЮKassa + СБП), возвраты, фискальные чеки по 54-ФЗ, минимизированная область PCI
+15. [15-api-gateway-domain.md](15-api-gateway-domain.md) - Сквозная точка входа (аутентификация, RBAC, ограничение частоты, маршрутизация); в MVP реализуется guard'ами/интерсепторами NestJS за обратным прокси
+16. [16-contact-exchange.md](16-contact-exchange.md) - Механизм раскрытия контакта покупатель→продавец для MVP без чата: с проверкой доступа, ограничением частоты, приватностью по ФЗ-152
+17. [17-media-handling.md](17-media-handling.md) - Сквозной конвейер медиа для фото/аватаров/логотипов: pre-signed загрузка в S3, валидация, варианты, жизненный цикл, приватность
 18. [18-reputation.md](18-reputation.md) - Примитив репутации и подтверждённой сделки (FORM-first)
 
 ## Как использовать эти спецификации
