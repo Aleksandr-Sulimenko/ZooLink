@@ -22,6 +22,7 @@ Each specification follows the SDD template and serves as the source of truth fo
 8. [08-frontend-architecture.md](08-frontend-architecture.md) - Three-layer frontend architecture (View→Domain→System)
 9. [09-testing-strategy.md](09-testing-strategy.md) - Comprehensive testing approach
 10. [10-implementation-roadmap.md](10-implementation-roadmap.md) - Phased implementation plan
+18. [18-reputation.md](18-reputation.md) - Reputation & confirmed-sale primitive (FORM-first)
 
 ## How to Use These Specifications
 

@@ -109,6 +109,27 @@ A flag (`feature_toggles`) gating phased/paid/experimental capabilities (e.g., `
 **Outbox Event**  
 A row in `outbox_events` implementing the **Outbox pattern** for reliable event publishing to external systems.
 
+**Confirmed Sale** (`confirmed_sales`)  
+A record that a real deal closed between two identified parties, acknowledged by **both** sides (or auto-acknowledged when anchored to a COMPLETED `ownership_transfers`). The proof-of-transaction root that every **Review** must reference (FORM-first, spec 18).
+
+**Sale Anchor**  
+The upstream event a **Confirmed Sale** is derived from: `TRANSFER` (a COMPLETED `ownership_transfers`, strongest — animals) or `LISTING_MARK_SOLD` (seller `markSold` + buyer counter-confirmation) (spec 18).
+
+**Review** (`reviews`)  
+An append-only, one-per-(sale, direction) rating + optional text authored by one party of a **Confirmed Sale** about the other. Requires a CONFIRMED sale (proof-of-transaction) (FORM-first, spec 18).
+
+**Review Direction**  
+`BUYER_ON_SELLER` or `SELLER_ON_BUYER` — reputation is **two-sided**; both parties can rate each other (spec 18).
+
+**Reputation Aggregate** (`reputation_aggregates`)  
+A **derived, recomputed** per-subject × per-market rating summary (count, mean, distribution). Never hand-written, never purchasable (FORM-first, spec 18).
+
+**Double-blind release**  
+Neither party's **Review** is visible until **both** have submitted **or** the review window closes — reduces retaliation/reciprocity bias (recommended visibility policy) (spec 18).
+
+**Unconfirmed / weak sale**  
+A `markSold` never counter-confirmed (EXPIRED confirmation). The *signal* is captured but it **does not unlock reviews** (spec 18).
+
 ## Roles & Principals
 
 **Principal**  

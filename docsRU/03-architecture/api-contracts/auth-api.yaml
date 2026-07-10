@@ -750,9 +750,8 @@ components:
         avatarUrl:
           type: string
           format: uri
-          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
+          description: URL аватара в объектном хранилище (опционально); только https URL — javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
-          description: URL аватара в объектном хранилище (опционально)
         preferredLanguage:
           type: string
           enum: [ru, en]
@@ -782,9 +781,8 @@ components:
         avatarUrl:
           type: string
           format: uri
-          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
+          description: URL аватара от провайдера (опционально); только https URL — javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
-          description: URL аватара от провайдера (опционально)
     VerifyPhoneRequest:
       type: object
       required:
@@ -942,10 +940,9 @@ components:
         avatarUrl:
           type: string
           format: uri
-          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2); null очищает
+          description: URL аватара в объектном хранилище; только https URL — javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2); null очищает
           nullable: true
           maxLength: 500
-          description: URL аватара в объектном хранилище
         email:
           type: string
           format: email
@@ -1018,10 +1015,9 @@ components:
         avatarUrl:
           type: string
           format: uri
-          description: только https URL; javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
+          description: URL аватара в объектном хранилище; только https URL — javascript:/data:/http отклоняются при валидации (защита от stored-XSS, AUDIT3 #2)
           maxLength: 500
           nullable: true
-          description: URL аватара в объектном хранилище
         email:
           type: string
           format: email

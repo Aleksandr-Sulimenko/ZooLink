@@ -22,6 +22,7 @@ status: "Approved"
 8. [08-frontend-architecture.md](08-frontend-architecture.md) - Трехслойная архитектура фронтенда (View→Domain→System)
 9. [09-testing-strategy.md](09-testing-strategy.md) - Комплексный подход к тестированию
 10. [10-implementation-roadmap.md](10-implementation-roadmap.md) - Поэтапный план внедрения
+18. [18-reputation.md](18-reputation.md) - Примитив репутации и подтверждённой сделки (FORM-first)
 
 ## Как использовать эти спецификации
 
