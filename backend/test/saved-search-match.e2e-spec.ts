@@ -164,6 +164,8 @@ describe('H4 — saved-search → notify (e2e)', () => {
   afterAll(async () => {
     await prisma.notification_logs.deleteMany({ where: { user_id: { in: userIds } } }).catch(() => undefined);
     await prisma.outbox_events.deleteMany({ where: { id: { in: eventIds } } }).catch(() => undefined);
+    // H4-follow-up: the consumer now emits a SavedSearch.Matched analytics event per inserted pair.
+    await prisma.outbox_events.deleteMany({ where: { event_type: 'SavedSearch.Matched', aggregate_id: { in: savedSearchIds } } }).catch(() => undefined);
     await prisma.saved_searches.deleteMany({ where: { id: { in: savedSearchIds } } }).catch(() => undefined);
     await prisma.listings.deleteMany({ where: { id: { in: listingIds } } }).catch(() => undefined);
     for (const id of animalIds) await prisma.animals.delete({ where: { id } }).catch(() => undefined);
@@ -296,10 +298,40 @@ describe('H4 — saved-search → notify (e2e)', () => {
     expect(await countFor(s, listing)).toBe(0);
   });
 
-  // ── H4-8: q ignored ─────────────────────────────────────────────────────────────────────────────
-  it('H4-8: q free-text is ignored — the search still matches on its other filters', async () => {
+  // ── H4-8: q substring FTS (SS-M2 — now EVALUATED as a case-insensitive substring) ─────────────────
+  it('H4-8a: a q substring that hits the ru title matches (case-insensitive)', async () => {
+    const u = await mkUser();
+    const s = await mkSearch(u, { market: 'pet', q: 'щЕН' }); // 'Щенок' contains 'щен' (case-insensitive)
+    const animal = await mkAnimal(spPet, brPet);
+    const listing = await mkListing(animal, 'pet'); // title { ru: 'Щенок', en: 'Puppy' }
+
+    await consumer.handle(activated(listing, seller));
+    expect(await countFor(s, listing)).toBe(1);
+  });
+
+  it('H4-8b: a q substring that hits the en title matches (both locales are searched)', async () => {
+    const u = await mkUser();
+    const s = await mkSearch(u, { market: 'pet', q: 'upp' }); // 'Puppy' contains 'upp'
+    const animal = await mkAnimal(spPet, brPet);
+    const listing = await mkListing(animal, 'pet');
+
+    await consumer.handle(activated(listing, seller));
+    expect(await countFor(s, listing)).toBe(1);
+  });
+
+  it('H4-8c: a q with no substring hit does NOT match (even when other filters hold)', async () => {
     const u = await mkUser();
     const s = await mkSearch(u, { market: 'pet', q: 'zzz-nonexistent-term' });
+    const animal = await mkAnimal(spPet, brPet);
+    const listing = await mkListing(animal, 'pet');
+
+    await consumer.handle(activated(listing, seller));
+    expect(await countFor(s, listing)).toBe(0);
+  });
+
+  it('H4-8d: a blank/whitespace q is a no-op filter — the search still matches on its other filters', async () => {
+    const u = await mkUser();
+    const s = await mkSearch(u, { market: 'pet', q: '   ' });
     const animal = await mkAnimal(spPet, brPet);
     const listing = await mkListing(animal, 'pet');
 
@@ -394,6 +426,38 @@ describe('H4 — saved-search → notify (e2e)', () => {
     await consumer.handle(activated(listing, seller));
     expect(await countFor(sBelow, listing)).toBe(0); // 5000 < 6000
     expect(await countFor(sAtAbove, listing)).toBe(1); // 5000 >= 5000
+  });
+
+  // ── H4-17: SavedSearch.Matched analytics event — emitted once per pair, exactly-once on redelivery ─
+  it('H4-17: a matched pair emits exactly one SavedSearch.Matched event, atomic and exactly-once', async () => {
+    const u = await mkUser();
+    const s = await mkSearch(u, { market: 'pet', species_id: spPet });
+    const animal = await mkAnimal(spPet, brPet);
+    const listing = await mkListing(animal, 'pet');
+
+    const evCount = () =>
+      prisma.outbox_events.count({
+        where: { event_type: 'SavedSearch.Matched', aggregate_id: s, payload: { path: ['listingId'], equals: listing } },
+      });
+
+    await consumer.handle(activated(listing, seller));
+    expect(await countFor(s, listing)).toBe(1);
+    expect(await evCount()).toBe(1); // event published in the insert-won tx
+
+    // Redelivery: the alert INSERT no-ops (0 rows) → NO second event (exactly-once, SS-M4-consistent).
+    await consumer.handle(activated(listing, seller));
+    expect(await countFor(s, listing)).toBe(1);
+    expect(await evCount()).toBe(1);
+
+    const ev = await prisma.outbox_events.findFirst({
+      where: { event_type: 'SavedSearch.Matched', aggregate_id: s, payload: { path: ['listingId'], equals: listing } },
+    });
+    expect(ev!.aggregate_type).toBe('SavedSearch');
+    const p = ev!.payload as Record<string, unknown>;
+    expect(p.savedSearchId).toBe(s);
+    expect(p.subjectUserId).toBe(u);
+    expect(p.market).toBe('pet');
+    expect(typeof p.matchedAt).toBe('string');
   });
 
   // ── H4-12: relay path (produced event → relay.tick() → notification) ────────────────────────────

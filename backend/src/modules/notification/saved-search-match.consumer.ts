@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../lib/db/prisma.service';
-import type { OutboxConsumer, OutboxEvent } from '../../lib/outbox/outbox.types';
+import type { EventMarket, OutboxConsumer, OutboxEvent } from '../../lib/outbox/outbox.types';
 import { NotificationWriter } from './notification-writer.service';
 
 /** The template rendered for a saved-search match (seeded EMAIL source, migration 0037; IN_APP channel). */
@@ -21,6 +21,7 @@ interface ListingMatchRow {
   lng: number | null;
   status: string;
   title_localized: unknown;
+  description_localized: unknown;
   species_id: number | null;
   breed_id: number | null;
 }
@@ -95,17 +96,43 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
       );
     }
 
-    const ctx = {
-      listing_id: listing.id,
-      listing_title: this.title(listing.title_localized),
-    };
+    // The alert body interpolates `{{listing_id}}` (flat) and `{{listing_title}}` (per-recipient
+    // localized — resolved to the recipient's language with ru fallback by NotificationWriter;
+    // spec 07 H4-follow-ups note, item (3)).
+    const ctx = { listing_id: listing.id };
+    const localized = { listing_title: this.localizedTitle(listing.title_localized) };
+    const market = this.toEventMarket(listing.market);
+    // Batch match time, shared by the whole fan-out; may micro-differ from each event's envelope
+    // occurredAt (publish time) — intentional, both are spec'd.
+    const matchedAt = new Date().toISOString();
+
     for (const m of matches) {
       // Per-pair dedup unit — deterministic, so `Listing.Activated` redelivery collapses to one row.
+      // The analytics `SavedSearch.Matched` event is published ATOMICALLY in the same tx and ONLY when
+      // this INSERT wins ON CONFLICT (SS-M4-consistent exactly-once — redelivery inserts 0 rows → no
+      // event). It has NO consumer today; it feeds the future match→view→contact funnel (data-analyst).
       await this.writer.materialize(
         m.user_id,
         SAVED_SEARCH_MATCHED_TEMPLATE,
         ctx,
         `${SAVED_SEARCH_MATCHED_TEMPLATE}:${m.id}:${listing.id}`,
+        {
+          localized,
+          onInsertEvent: {
+            aggregateType: 'SavedSearch',
+            aggregateId: m.id,
+            eventType: 'SavedSearch.Matched',
+            schemaVersion: 1,
+            market,
+            payload: {
+              savedSearchId: m.id,
+              listingId: listing.id,
+              subjectUserId: m.user_id,
+              market,
+              matchedAt,
+            },
+          },
+        },
       );
     }
     this.logger.log(`Listing ${listing.id} matched ${matches.length} saved search(es) — alerts materialized`);
@@ -130,6 +157,7 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
         lng: true,
         status: true,
         title_localized: true,
+        description_localized: true,
         animals: { select: { species_id: true, breed_id: true } },
       },
     });
@@ -144,6 +172,7 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
       lng: row.lng,
       status: row.status,
       title_localized: row.title_localized,
+      description_localized: row.description_localized,
       species_id: row.animals?.species_id ?? null,
       breed_id: row.animals?.breed_id ?? null,
     };
@@ -184,9 +213,13 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
    *                    priceless listing, e.g. breeding, never matches a price-bounded search).
    *  - geo (`radius_m` + `lat`/`lng` columns) — if set, the listing MUST have coords and lie within the
    *                    radius (exact Haversine, bound params only).
-   *  - `q` (free text) — **NOT evaluated** (no cheap, unambiguous server-side full-text match over the
-   *                    localized JSONB title/description); a `q`-bearing search still matches on its
-   *                    OTHER filters. Documented limitation; full-text matching is a tracked follow-up.
+   *  - `q` (free text) — **case-insensitive SUBSTRING** match (SS-M2): if a non-blank `q` is set, the
+   *                    listing's concatenated both-locale title+description (`searchableText`, a single
+   *                    bound param) MUST contain it (`strpos(lower(text), lower(q)) > 0`). A blank /
+   *                    whitespace-only `q` is a no-op (the search still matches on its OTHER filters).
+   *                    Substring only — no stemming/ranking/typo-tolerance (a stemmed FTS is a Phase-2
+   *                    ADR upgrade behind this seam); the listing text is already loaded, so no DDL /
+   *                    index is needed and the file stays inside the market-join grep-gate.
    *
    * The seller is never alerted about their own listing (`s.user_id <> seller_id`).
    */
@@ -198,6 +231,7 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
     const price = listing.price_cents; // bigint | null
     const lat = listing.lat;
     const lng = listing.lng;
+    const searchText = this.searchableText(listing); // both-locale title+description (a bound param)
 
     return Prisma.sql`
       s.offering_type = 'ANIMAL_LISTING'
@@ -215,6 +249,13 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
       AND (NOT (s.filters ? 'breed_id') OR (s.filters->>'breed_id')::int = ${breedId})
       -- listing_type equality.
       AND (NOT (s.filters ? 'listing_type') OR s.filters->>'listing_type' = ${listingType})
+      -- q free-text — case-insensitive SUBSTRING over the listing's both-locale title+description
+      -- (bound param). A blank/whitespace-only q is a no-op filter; a non-blank q must substring-hit.
+      AND (
+        NOT (s.filters ? 'q')
+        OR btrim(s.filters->>'q') = ''
+        OR strpos(lower(${searchText}), lower(btrim(s.filters->>'q'))) > 0
+      )
       -- price bounds — a priceless listing never satisfies a price-bounded search.
       AND (NOT (s.filters ? 'price_min') OR (${price}::bigint IS NOT NULL AND ${price}::bigint >= (s.filters->>'price_min')::bigint))
       AND (NOT (s.filters ? 'price_max') OR (${price}::bigint IS NOT NULL AND ${price}::bigint <= (s.filters->>'price_max')::bigint))
@@ -233,14 +274,40 @@ export class SavedSearchMatchConsumer implements OutboxConsumer {
       )`;
   }
 
-  /** Best-effort listing title for the alert body — ru-first (matches the default locale). */
-  private title(localized: unknown): string {
+  /**
+   * The listing title as a per-locale map `{ ru, en }` for the alert body. NotificationWriter resolves
+   * it to the recipient's own language (ru fallback) — spec 07 H4-follow-ups note, item (3).
+   * Missing locales collapse to ''.
+   */
+  private localizedTitle(localized: unknown): Record<string, string> {
+    return { ru: this.locale(localized, 'ru'), en: this.locale(localized, 'en') };
+  }
+
+  /**
+   * The listing's searchable text for the `q` substring match (SS-M2): title + description of BOTH
+   * locales, newline-joined so a multi-word `q` can never substring-match across two different
+   * fields. Built in-memory from the already-loaded listing row (no DDL, no index).
+   */
+  private searchableText(listing: ListingMatchRow): string {
+    return [
+      this.locale(listing.title_localized, 'ru'),
+      this.locale(listing.title_localized, 'en'),
+      this.locale(listing.description_localized, 'ru'),
+      this.locale(listing.description_localized, 'en'),
+    ].join('\n');
+  }
+
+  /** One locale value from a localized JSONB object, or '' when absent/malformed. */
+  private locale(localized: unknown, lang: 'ru' | 'en'): string {
     if (localized && typeof localized === 'object') {
-      const l = localized as Record<string, unknown>;
-      const ru = typeof l.ru === 'string' ? l.ru : '';
-      const en = typeof l.en === 'string' ? l.en : '';
-      return ru || en || '';
+      const v = (localized as Record<string, unknown>)[lang];
+      if (typeof v === 'string') return v;
     }
     return '';
+  }
+
+  /** Narrow the cached listing market string to the outbox envelope's EventMarket union. */
+  private toEventMarket(market: string): EventMarket {
+    return market === 'pet' || market === 'livestock' ? market : null;
   }
 }
