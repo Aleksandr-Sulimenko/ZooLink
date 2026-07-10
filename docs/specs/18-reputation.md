@@ -265,7 +265,7 @@ stateDiagram-v2
 **Transition guards (normative):**
 | From → To | Trigger | Guard (all must hold) |
 |---|---|---|
-| ∅ → CONFIRMED | `OwnershipTransfer.Completed` | anchor=`TRANSFER`; both parties are the transfer's from/to; auto-confirm (transfer already two-sided per ADR-0013) |
+| ∅ → CONFIRMED | `OwnershipTransfer.Accepted` (transfer completion = accept, §10) | anchor=`TRANSFER`; both parties are the transfer's from/to; auto-confirm (transfer already two-sided per ADR-0013) |
 | ∅ → PENDING_CONFIRMATION | seller `markSold` | caller owns the listing; a buyer is nominated; listing was `ACTIVE`; no existing live sale for this listing |
 | PENDING → CONFIRMED | buyer confirm | caller = nominated buyer; `now <= confirm_expires_at`; status still PENDING |
 | PENDING → DISPUTED | dispute | caller is a party; status PENDING; reason supplied → moderation reason code |
@@ -297,7 +297,7 @@ Feature: Two-sided confirmed sale
 
   Scenario: Auto-confirm from a completed animal transfer (strongest signal)
     Given an ownership_transfers row reaches COMPLETED for animal A between seller S and buyer B
-    When the OwnershipTransfer.Completed event is handled
+    When the OwnershipTransfer.Accepted event is handled (transfer completion = accept, §10)
     Then a confirmed_sales row is created with anchor_type = 'TRANSFER'
     And status = 'CONFIRMED' with confirmed_at set
     And no separate buyer counter-confirmation is required
@@ -446,11 +446,38 @@ dormant `user_roles` (mig 0034), signal-first `view_count` (mig 0031, D1 reserve
    > now match the code exactly (no doc↔code inversion), the semantically-honest event (no phantom PENDING
    > phase) keeps the future review-window/analytics consumers correct, and the in-tx atomicity documents
    > the "signal never lost" guarantee the whole reputation loop depends on.
-2. **`confirmed_sales` table + `reviews` + `reputation_aggregates`** created dormant, with the
-   append-only trigger reused. No read/write endpoints wired for reviews.
-3. **`feature_toggles`** rows seeded off/0 %: `reputation_reviews` (review authoring/read),
-   `sale_buyer_confirmation` (the listing-markSold counter-confirm path). Same shape as
-   `ownership_transfer_verification`.
+2. **✅ SHIPPED-form (2026-07-10, migration 0040 / ADR-0039).** **`reviews` + `reputation_aggregates`
+   created DORMANT** (on top of `confirmed_sales`, FORM-item 1 / migration 0039), with the append-only
+   trigger reused. No read/write endpoints, no recompute path. `reviews` is append-only
+   (`trg_reviews_immutable`), one-CURRENT-per-(sale, direction) via the partial-unique
+   `uq_reviews_current_per_direction … WHERE superseded_by_id IS NULL` (transfer INV-4 shape — a plain 3-col
+   `UNIQUE(sale,direction,superseded_by_id)` is ineffective because NULLs are distinct), current/supersession
+   resolving on the monotonic `seq BIGINT GENERATED ALWAYS AS IDENTITY` (migration-0036 lesson, **not**
+   `created_at`); `reputation_aggregates` PK `(subject_user_id, market)` with `rating_avg` a Postgres
+   `GENERATED … STORED` derived column (recompute-only, unforgeable — fork 7/TP-8). Reviews scope their
+   offering **through the `confirmed_sale_id` FK** (the sale carries `offering_type`) — no duplicate
+   `offering_type` column on `reviews` (item 5 satisfied via the sale, not a copy).
+   > **Implementation note (backend-engineer, 2026-07-10).** The ADR §3/§7-named **forward** pointer
+   > `superseded_by_id` conflicts with the reused append-only trigger — marking a predecessor superseded
+   > needs an UPDATE the trigger blocks. This FORM slice ships the ADR-named column + the correct-and-inert
+   > head partial-unique; the behaviour slice must pick (i) resolve "current" purely by `seq DESC` (à la
+   > `consents` — then drop the partial-unique), or (ii) invert to a **backward** `supersedes_review_id` set
+   > at INSERT (à la `moderation_decisions.supersedes_decision_id`) with `UNIQUE(supersedes_review_id)`.
+   > Flagged to architect (mirrors the migration-0039 markSold-transition flag).
+   >
+   > **Doc-change triple. WHAT:** marked FORM-item 2 (reviews + reputation_aggregates) SHIPPED-form and
+   > pinned the built storage decisions (partial-unique head over the sketch's ineffective 3-col UNIQUE;
+   > `GENERATED` `rating_avg`; the forward-pointer-vs-append-only flag). **WHY:** the sketch left the UNIQUE
+   > shape ineffective and did not resolve the forward-pointer/append-only tension — a reader/agent could not
+   > tell what is actually enforced. **WHY-BETTER for the project:** the spec now matches the migrated schema
+   > exactly (no doc↔code inversion); the honest head partial-unique + `GENERATED` avg make "one current
+   > review" and "unpurchasable score" structural, and the recorded flag stops the behaviour slice
+   > silently mis-implementing supersession.
+3. **`feature_toggles`** rows seeded off/0 %: **✅ `reputation_reviews` (review authoring/read) — seeded
+   OFF, migration 0040**; `sale_buyer_confirmation` (the listing-markSold counter-confirm path — seeded
+   migration 0039). Same shape as `ownership_transfer_verification`. **`consents.consent_type` CHECK widened
+   with the reserved `REVIEW_PUBLICATION` value (migration 0040, ADR-0039 §4)** — the review-publication
+   consent-of-record reuses the existing `consents` model (no second consent store; no rows written).
 4. **markSold buyer-nomination column** on the sale record reserved now so the listing path does not
    need a schema change when confirmation behaviour flips on.
 5. **Polymorphic `offering_type`** on `confirmed_sales`/`reviews` (widen-additively CHECK) so the same

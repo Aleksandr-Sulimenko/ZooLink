@@ -696,6 +696,78 @@ BEFORE UPDATE OR DELETE ON confirmed_sales
 FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
 COMMENT ON TABLE confirmed_sales IS 'ADR-0038: first-class, append-only record-of-truth that a real deal happened (proof-of-transaction root for reputation, ADR-0039). Anchored to a COMPLETED ownership_transfers (auto-CONFIRMED, in-tx) or a listing markSold (deferred). DORMANT capture in MVP.';
 
+-- ========== Reputation — reviews + reputation_aggregates (ADR-0039; migration 0040) ==========
+-- FORM-slice #2 (DORMANT): the storage the review/reputation loop hangs off. No endpoints, no recompute, no
+-- consumer → byte-identical HUMAN behaviour; behaviour behind feature_toggles.reputation_reviews.
+-- reviews: append-only, one-CURRENT-per-(sale,direction) rating (1..5) + optional text authored by a party of
+-- a CONFIRMED sale about the other (proof-of-transaction — FK to confirmed_sales). "Current"/supersession
+-- resolve on the monotonic `seq` (mig 0036 lesson), NEVER created_at. Double-blind is_visible gate (fork 2).
+-- Facet columns reserved DORMANT (fork 5). Party FKs ON DELETE SET NULL (ФЗ-152 pseudonymise, fork 8). One
+-- head per (sale,direction) via the partial unique uq_reviews_current_per_direction (transfer INV-4 shape;
+-- a plain 3-col UNIQUE is ineffective — NULLs are distinct). Immutable via the REUSED trg_block_modify_append_only.
+CREATE TABLE reviews (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    confirmed_sale_id UUID NOT NULL REFERENCES confirmed_sales(id) ON DELETE CASCADE, -- proof-of-transaction root
+    direction         VARCHAR(16) NOT NULL,           -- BUYER_ON_SELLER | SELLER_ON_BUYER
+    -- Party FKs ON DELETE SET NULL = ФЗ-152 pseudonymise-author-keep-rating (fork 8, legal-gated). NULLABLE
+    -- (SET NULL is incompatible with NOT NULL; the ADR §7 pin overrides the self-contradictory sketch).
+    reviewer_user_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+    subject_user_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+    market            VARCHAR(9) NOT NULL,            -- copied from the sale's derived market (ADR-0002)
+    rating            SMALLINT NOT NULL,              -- 1..5 (chk_reviews_rating)
+    body              TEXT,                           -- optional; moderated like listing content (ADR-0040 §2)
+    moderation_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    is_visible        BOOLEAN NOT NULL DEFAULT FALSE, -- double-blind release gate (fork 2)
+    superseded_by_id  UUID REFERENCES reviews(id) ON DELETE SET NULL, -- edit-within-grace = new row (fork 3)
+    -- Reserved DORMANT facet columns (fork 5) — no facet behaviour; scale decided in the facet phase (no CHECK).
+    facet_description_accuracy SMALLINT,
+    facet_communication        SMALLINT,
+    facet_as_described         SMALLINT,
+    actor_id             UUID REFERENCES users(id) ON DELETE SET NULL, -- actor snapshot (ADR-0006/0011)
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
+    seq               BIGINT GENERATED ALWAYS AS IDENTITY, -- monotonic current/supersede order (mig 0036 lesson)
+    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- append-only; no updated_at
+    CONSTRAINT chk_reviews_direction         CHECK (direction IN ('BUYER_ON_SELLER','SELLER_ON_BUYER')),
+    CONSTRAINT chk_reviews_market            CHECK (market IN ('pet','livestock')),
+    CONSTRAINT chk_reviews_rating            CHECK (rating BETWEEN 1 AND 5),
+    CONSTRAINT chk_reviews_moderation_status CHECK (moderation_status IN
+        ('PENDING','APPROVED','REJECTED','CHANGES_REQUESTED')),
+    CONSTRAINT chk_reviews_actor_ptype       CHECK (actor_principal_type IN ('HUMAN','AGENT'))
+);
+CREATE UNIQUE INDEX uq_reviews_current_per_direction ON reviews(confirmed_sale_id, direction) WHERE superseded_by_id IS NULL;
+CREATE INDEX idx_reviews_subject_market ON reviews(subject_user_id, market)
+    WHERE moderation_status = 'APPROVED' AND is_visible = TRUE AND superseded_by_id IS NULL;
+CREATE INDEX idx_reviews_current_seq ON reviews(confirmed_sale_id, direction, seq DESC);
+CREATE INDEX idx_reviews_agent_actor ON reviews(actor_principal_type) WHERE actor_principal_type = 'AGENT';
+CREATE TRIGGER trg_reviews_immutable
+BEFORE UPDATE OR DELETE ON reviews
+FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
+COMMENT ON TABLE reviews IS 'ADR-0039: append-only, one-current-per-(sale,direction) proof-of-transaction review (1..5 + optional body). Current/supersede resolve on seq DESC (mig 0036 lesson). Double-blind is_visible gate. Immutable (trg_reviews_immutable, reused). DORMANT — behaviour behind feature_toggles.reputation_reviews.';
+
+-- reputation_aggregates: DERIVED per-(subject, market) rating cache (count/sum/avg/histogram), recomputed
+-- (never hand-written) on the review-state event path; read as a single indexed PK lookup. PK (subject_user_id,
+-- market) = the ADR-0002 boundary structurally. rating_avg is a GENERATED STORED column → recompute-only,
+-- never writable (fork 7 / TP-8). NOT append-only (a mutable, recomputed cache). DORMANT — no recompute wired.
+CREATE TABLE reputation_aggregates (
+    subject_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    market          VARCHAR(9) NOT NULL,
+    review_count    INTEGER NOT NULL DEFAULT 0,
+    rating_sum      INTEGER NOT NULL DEFAULT 0,
+    rating_avg      NUMERIC(3,2) GENERATED ALWAYS AS (ROUND(rating_sum::numeric / NULLIF(review_count, 0), 2)) STORED,
+    dist_1          INTEGER NOT NULL DEFAULT 0,
+    dist_2          INTEGER NOT NULL DEFAULT 0,
+    dist_3          INTEGER NOT NULL DEFAULT 0,
+    dist_4          INTEGER NOT NULL DEFAULT 0,
+    dist_5          INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    recomputed_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_reputation_aggregates PRIMARY KEY (subject_user_id, market),
+    CONSTRAINT chk_reputation_aggregates_market CHECK (market IN ('pet','livestock')),
+    CONSTRAINT chk_reputation_aggregates_nonneg CHECK
+        (review_count >= 0 AND rating_sum >= 0 AND dist_1 >= 0 AND dist_2 >= 0 AND dist_3 >= 0 AND dist_4 >= 0 AND dist_5 >= 0)
+);
+COMMENT ON TABLE reputation_aggregates IS 'ADR-0039 §1/§2: DERIVED per-(subject, market) rating cache; PK (subject_user_id, market) = the ADR-0002 boundary. rating_avg GENERATED (recompute-only, unpurchasable — fork 7). NOT append-only. DORMANT — behaviour behind feature_toggles.reputation_reviews.';
+
 -- ========== Digital Assets / NFT readiness (ADR-0010) ==========
 -- Schema hook only: no minting/contracts/indexer in MVP. Behavior gated by feature_toggles ('digital_assets').
 -- PostgreSQL stays the source of truth; on-chain is a verifiable mirror. No owner PII in on-chain metadata.
@@ -832,7 +904,9 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 -- migration 0038 (ADR-0036 §6): master gate for agent service-auth (secret→AGENT JWT exchange). Off in MVP.
 ('agent_service_auth', 'Гейт агент-сервис-авторизации (ADR-0036): обмен человеко-выданного секрета service_credentials на короткоживущий AGENT JWT на POST /v1/auth/agent/token. Форма заведена, в MVP ВЫКЛЮЧЕНО.', false, 0),
 -- migration 0039 (ADR-0038 §4): gate FORM for the listing markSold buyer-counter-confirmation path. Off in MVP.
-('sale_buyer_confirmation', 'Гейт подтверждения сделки покупателем на пути listing markSold (ADR-0038 §4): продавец отмечает продано + номинирует покупателя → PENDING_CONFIRMATION → покупатель подтверждает → CONFIRMED. Форма заведена, поведение отложено — в MVP ВЫКЛЮЧЕНО (пассивно пишутся только авто-CONFIRMED строки с пути передачи владения).', false, 0)
+('sale_buyer_confirmation', 'Гейт подтверждения сделки покупателем на пути listing markSold (ADR-0038 §4): продавец отмечает продано + номинирует покупателя → PENDING_CONFIRMATION → покупатель подтверждает → CONFIRMED. Форма заведена, поведение отложено — в MVP ВЫКЛЮЧЕНО (пассивно пишутся только авто-CONFIRMED строки с пути передачи владения).', false, 0),
+-- migration 0040 (ADR-0039 §6): master gate for review authoring/read/display + §4 erasure (also legal-gated). Off in MVP.
+('reputation_reviews', 'Гейт репутации/отзывов (ADR-0039): авторство и чтение отзывов, double-blind раскрытие, отображение агрегата репутации, поведение стирания (§4, дополнительно под юридическим одобрением). Таблицы reviews/reputation_aggregates заведены спящими; в MVP ВЫКЛЮЧЕНО — эндпоинтов нет, пересчёта нет, поведение людей байт-в-байт прежнее.', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- ========== Application-level validations ==========
@@ -1134,8 +1208,10 @@ COMMENT ON TABLE messages IS 'Фаза 2+ only — chat is out of MVP (ADR-0005)
 CREATE TABLE IF NOT EXISTS consents (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, -- the DATA SUBJECT
-    consent_type  VARCHAR(40) NOT NULL CHECK (consent_type IN
-                     ('CONTACT_DISTRIBUTION','MARKETING','ANALYTICS_PROFILING','NONESSENTIAL_COOKIES')),
+    -- REVIEW_PUBLICATION reserved form-now (ADR-0039 §4, migration 0040): consent-of-record for publishing a
+    -- review — reuse this model, no second consent store. Named constraint = drift-gate (mig 0026 lesson).
+    consent_type  VARCHAR(40) NOT NULL CONSTRAINT chk_consents_consent_type CHECK (consent_type IN
+                     ('CONTACT_DISTRIBUTION','MARKETING','ANALYTICS_PROFILING','NONESSENTIAL_COOKIES','REVIEW_PUBLICATION')),
     granted       BOOLEAN NOT NULL, -- true=grant, false=withdrawal (a NEW superseding row; ст.9 ч.2)
     policy_version VARCHAR(20) NOT NULL, -- version of the consent text agreed to (ст.9 ч.1 proof)
     source        VARCHAR(30) NOT NULL, -- origin of the UI action ('PROFILE_SETTINGS','REGISTRATION','ADMIN','AGENT')

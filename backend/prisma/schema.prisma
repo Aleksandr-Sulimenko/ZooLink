@@ -721,6 +721,10 @@ model users {
   ownership_transfers_ownership_transfers_to_user_idTousers             ownership_transfers[]       @relation("ownership_transfers_to_user_idTousers")
   payment_transactions                                                  payment_transactions[]
   refresh_tokens                                                        refresh_tokens[]
+  reputation_aggregates                                                 reputation_aggregates[]
+  reviews_reviews_actor_idTousers                                       reviews[]                   @relation("reviews_actor_idTousers")
+  reviews_reviews_reviewer_user_idTousers                               reviews[]                   @relation("reviews_reviewer_user_idTousers")
+  reviews_reviews_subject_user_idTousers                                reviews[]                   @relation("reviews_subject_user_idTousers")
   saved_searches                                                        saved_searches[]
   service_credentials                                                   service_credentials[]
   service_credentials_service_credentials_issued_byTousers              service_credentials[]       @relation("service_credentials_issued_byTousers")
@@ -902,8 +906,60 @@ model confirmed_sales {
   ownership_transfers                                                 ownership_transfers? @relation(fields: [ownership_transfer_id], references: [id], onUpdate: NoAction)
   organizations_confirmed_sales_seller_organization_idToorganizations organizations?       @relation("confirmed_sales_seller_organization_idToorganizations", fields: [seller_organization_id], references: [id], onUpdate: NoAction)
   users_confirmed_sales_seller_user_idTousers                         users?               @relation("confirmed_sales_seller_user_idTousers", fields: [seller_user_id], references: [id], onUpdate: NoAction)
+  reviews                                                             reviews[]
 
   @@index([animal_id], map: "idx_confirmed_sales_animal")
   @@index([seller_user_id, buyer_user_id], map: "idx_confirmed_sales_parties")
   @@index([offering_type, offering_id], map: "idx_confirmed_sales_subject")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model reputation_aggregates {
+  subject_user_id String   @db.Uuid
+  market          String   @db.VarChar(9)
+  review_count    Int      @default(0)
+  rating_sum      Int      @default(0)
+  rating_avg      Decimal? @default(dbgenerated("round(((rating_sum)::numeric / (NULLIF(review_count, 0))::numeric), 2)")) @db.Decimal(3, 2)
+  dist_1          Int      @default(0)
+  dist_2          Int      @default(0)
+  dist_3          Int      @default(0)
+  dist_4          Int      @default(0)
+  dist_5          Int      @default(0)
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  recomputed_at   DateTime @default(now()) @db.Timestamptz(6)
+  users           users    @relation(fields: [subject_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([subject_user_id, market], map: "pk_reputation_aggregates")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model reviews {
+  id                                    String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  confirmed_sale_id                     String          @db.Uuid
+  direction                             String          @db.VarChar(16)
+  reviewer_user_id                      String?         @db.Uuid
+  subject_user_id                       String?         @db.Uuid
+  market                                String          @db.VarChar(9)
+  rating                                Int             @db.SmallInt
+  body                                  String?
+  moderation_status                     String          @default("PENDING") @db.VarChar(20)
+  is_visible                            Boolean         @default(false)
+  superseded_by_id                      String?         @db.Uuid
+  facet_description_accuracy            Int?            @db.SmallInt
+  facet_communication                   Int?            @db.SmallInt
+  facet_as_described                    Int?            @db.SmallInt
+  actor_id                              String?         @db.Uuid
+  actor_principal_type                  String          @default("HUMAN") @db.VarChar(10)
+  seq                                   BigInt          @default(autoincrement())
+  created_at                            DateTime        @default(now()) @db.Timestamptz(6)
+  users_reviews_actor_idTousers         users?          @relation("reviews_actor_idTousers", fields: [actor_id], references: [id], onUpdate: NoAction)
+  confirmed_sales                       confirmed_sales @relation(fields: [confirmed_sale_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_reviews_reviewer_user_idTousers users?          @relation("reviews_reviewer_user_idTousers", fields: [reviewer_user_id], references: [id], onUpdate: NoAction)
+  users_reviews_subject_user_idTousers  users?          @relation("reviews_subject_user_idTousers", fields: [subject_user_id], references: [id], onUpdate: NoAction)
+  reviews                               reviews?        @relation("reviewsToreviews", fields: [superseded_by_id], references: [id], onUpdate: NoAction)
+  other_reviews                         reviews[]       @relation("reviewsToreviews")
+
+  @@index([confirmed_sale_id, direction, seq(sort: Desc)], map: "idx_reviews_current_seq")
 }

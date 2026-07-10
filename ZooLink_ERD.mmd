@@ -203,6 +203,46 @@ erDiagram
         %% Append-only (trg_confirmed_sales_immutable, reused). DORMANT capture: no consumer, no endpoint reads it. Auto-CONFIRMED in-tx at transfer completion (ADR-0038 §1/§3).
     }
 
+    %% reviews: ADR-0039 reputation FORM-slice #2 (migration 0040). Append-only, one-current-per-(sale,direction). DORMANT.
+    reviews {
+        UUID id PK
+        UUID confirmed_sale_id FK "proof-of-transaction root (ADR-0038); no sale ⇒ no review"
+        VARCHAR_16 direction "BUYER_ON_SELLER|SELLER_ON_BUYER"
+        UUID reviewer_user_id FK "author (SET NULL on erasure — pseudonymise, fork 8)"
+        UUID subject_user_id FK "the rated party (SET NULL on erasure)"
+        VARCHAR_9 market "copied from the sale; pet|livestock (ADR-0002)"
+        SMALLINT rating "1..5 (chk_reviews_rating)"
+        TEXT body "optional; moderated like listing content (ADR-0040 §2)"
+        VARCHAR_20 moderation_status "PENDING|APPROVED|REJECTED|CHANGES_REQUESTED"
+        BOOLEAN is_visible "double-blind release gate (fork 2); DEFAULT false"
+        UUID superseded_by_id FK "edit-within-grace = new row (fork 3); see mig 0040 DESIGN NOTE"
+        SMALLINT facet_description_accuracy "RESERVED DORMANT facet (fork 5)"
+        SMALLINT facet_communication "RESERVED DORMANT facet"
+        SMALLINT facet_as_described "RESERVED DORMANT facet"
+        UUID actor_id FK "actor snapshot (ADR-0006/0011)"
+        VARCHAR_10 actor_principal_type "HUMAN|AGENT (authoring OFF, ADR-0040 §3)"
+        BIGINT seq "GENERATED — monotonic current/supersede order (mig 0036 lesson), NOT created_at"
+        TIMESTAMPTZ created_at
+        %% Append-only (trg_reviews_immutable, reused). ONE head per (sale,direction) via partial-unique WHERE superseded_by_id IS NULL. DORMANT — behaviour behind feature_toggles.reputation_reviews.
+    }
+
+    %% reputation_aggregates: ADR-0039 §1/§2 derived per-(subject,market) rating cache (migration 0040). NOT append-only. DORMANT.
+    reputation_aggregates {
+        UUID subject_user_id PK "FK users; PK part 1 = the ADR-0002 boundary"
+        VARCHAR_9 market PK "PK part 2; pet|livestock"
+        INTEGER review_count
+        INTEGER rating_sum
+        NUMERIC rating_avg "GENERATED = ROUND(sum/NULLIF(count,0),2) — recompute-only, unpurchasable (fork 7)"
+        INTEGER dist_1 "star histogram"
+        INTEGER dist_2
+        INTEGER dist_3
+        INTEGER dist_4
+        INTEGER dist_5
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ recomputed_at
+        %% Derived cache: recomputed on the review-state event path (never hand-written). Single indexed PK read on the trust path. DORMANT — no recompute wired.
+    }
+
     %% Organization Domain
     organizations {
         UUID id PK
@@ -577,6 +617,10 @@ erDiagram
     ownership_transfers |o..o| confirmed_sales : "auto-CONFIRMED anchor (ADR-0038)"
     animals ||..o{ confirmed_sales : "sale of (transfer anchor)"
     users ||..o{ confirmed_sales : "seller/buyer/actor"
+    confirmed_sales ||..o{ reviews : "proof-of-transaction root (ADR-0039)"
+    users ||..o{ reviews : "reviewer/subject/actor"
+    reviews |o..o| reviews : "superseded by (edit-within-grace)"
+    users ||..o{ reputation_aggregates : "per-market rating subject (ADR-0002)"
     animals ||..o{ digital_assets : "tokenized as"
     animals }o..|| animals : "mother of"
     animals }o..|| animals : "father of"
