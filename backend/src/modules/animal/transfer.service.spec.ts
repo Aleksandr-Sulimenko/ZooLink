@@ -114,7 +114,12 @@ function setup(opts: SetupOpts = {}) {
   const users = { findUnique: jest.fn().mockResolvedValue(opts.recipientUserExists === false ? null : { id: RECIP }) };
   const organizations = { findUnique: jest.fn().mockResolvedValue({ id: ORG }) };
 
-  const tx = { ownership_transfers, animals, animal_ownership_history, $executeRaw: jest.fn().mockResolvedValue(1) };
+  // ADR-0038: the accept tx captures a confirmed_sales row (auto-CONFIRMED) in-tx.
+  const csCreate = jest.fn().mockImplementation((args: { data: Record<string, unknown> }) =>
+    Promise.resolve({ id: 'cs-0000', ...args.data }),
+  );
+  const confirmed_sales = { create: csCreate };
+  const tx = { ownership_transfers, animals, animal_ownership_history, confirmed_sales, $executeRaw: jest.fn().mockResolvedValue(1) };
   const prisma = {
     ownership_transfers,
     animals,
@@ -152,7 +157,7 @@ function setup(opts: SetupOpts = {}) {
   const publish = jest.fn().mockResolvedValue(undefined);
   const outbox = { publish } as unknown as OutboxService;
   const svc = new TransferService(prisma, audit, orgMembership, redis, claimCodes, outbox);
-  return { svc, ownership_transfers, animals, animal_ownership_history, users, organizations, record, isOrgAdmin, orgAdminIds, incr, consume, mint, restore, publish, tx };
+  return { svc, prisma, ownership_transfers, animals, animal_ownership_history, users, organizations, record, isOrgAdmin, orgAdminIds, incr, consume, mint, restore, publish, csCreate, tx };
 }
 
 const etagOf = (): string => weakEtag(`transfer:${XFER}`, UPDATED);
@@ -409,6 +414,110 @@ describe('TransferService', () => {
       // Critical: the irreversible writes never ran for the loser.
       expect(animals.update).not.toHaveBeenCalled();
       expect(animal_ownership_history.create).not.toHaveBeenCalled();
+    });
+
+    // ── ADR-0038 reputation FORM-slice #1 — passive confirmed-sale capture ─────────────────────────
+    describe('ADR-0038 confirmed-sale capture', () => {
+      it('writes exactly one auto-CONFIRMED confirmed_sales row (anchor=TRANSFER) with the right parties, market & actor snapshot', async () => {
+        const { svc, csCreate } = setup();
+        await svc.accept(XFER, etagOf(), p(RECIP));
+        expect(csCreate).toHaveBeenCalledTimes(1);
+        expect(csCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              anchor_type: 'TRANSFER',
+              ownership_transfer_id: XFER,
+              offering_type: 'ANIMAL_LISTING',
+              animal_id: ANIMAL,
+              market: 'pet',
+              status: 'CONFIRMED',
+              seller_user_id: OWNER, // FROM-party
+              buyer_user_id: RECIP, // TO-party
+              actor_id: RECIP, // the responding (accepting) actor
+              actor_principal_type: 'HUMAN',
+              confirmed_at: expect.any(Date),
+            }),
+          }),
+        );
+        // amount_minor is reserved / off-record (owner 2026-07-09) — nothing writes it.
+        const data = csCreate.mock.calls[0][0].data as Record<string, unknown>;
+        expect(data.amount_minor).toBeUndefined();
+        // offering_id (polymorphic listing pointer) stays NULL for a pure transfer anchor.
+        expect(data.offering_id).toBeUndefined();
+      });
+
+      it('emits ConfirmedSale.Confirmed (NOT .Created) into the outbox in the same tx, market-stamped', async () => {
+        const { svc, publish } = setup();
+        await svc.accept(XFER, etagOf(), p(RECIP));
+        const confirmedSaleEvents = publish.mock.calls.filter(
+          (c) => (c[1] as { eventType: string }).eventType?.startsWith('ConfirmedSale.'),
+        );
+        expect(confirmedSaleEvents).toHaveLength(1);
+        expect(confirmedSaleEvents[0][1]).toEqual(
+          expect.objectContaining({
+            aggregateType: 'ConfirmedSale',
+            eventType: 'ConfirmedSale.Confirmed',
+            market: 'pet',
+            payload: expect.objectContaining({ anchorType: 'TRANSFER', ownershipTransferId: XFER, status: 'CONFIRMED' }),
+          }),
+        );
+        // The Created event is explicitly NOT emitted from the transfer path (no PENDING phase).
+        expect(publish.mock.calls.some((c) => (c[1] as { eventType: string }).eventType === 'ConfirmedSale.Created')).toBe(false);
+      });
+
+      it('snapshots an AGENT accepting actor on the confirmed-sale row (ADR-0006/0011)', async () => {
+        const { svc, csCreate } = setup();
+        await svc.accept(XFER, etagOf(), p(RECIP, 'MODERATOR', 'AGENT'));
+        expect(csCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ actor_principal_type: 'AGENT', actor_id: RECIP }) }),
+        );
+      });
+
+      it('atomicity: a failed confirmed_sales INSERT rolls back the whole accept (transfer never completes without the truth row)', async () => {
+        const { svc, csCreate, animals } = setup();
+        csCreate.mockRejectedValueOnce(new Error('insert boom'));
+        await expect(svc.accept(XFER, etagOf(), p(RECIP))).rejects.toThrow('insert boom');
+        // The tx callback threw → in a real DB the animal re-attribution rolls back with it. The capture
+        // is the LAST write in the tx, so proving it threw proves the completion cannot commit without it.
+        expect(animals.update).toHaveBeenCalled(); // ran earlier in the same tx, but is rolled back by the throw
+      });
+
+      it('an org→user transfer records seller org / buyer user on the sale', async () => {
+        const { svc, csCreate } = setup({
+          transfer: transferRow({ from_user_id: null, from_organization_id: ORG, to_user_id: RECIP }),
+          animal: animalRow({ owner_id: null, organization_id: ORG }),
+          orgAdmin: true,
+        });
+        await svc.accept(XFER, etagOf(), p(RECIP)); // recipient (to_user) accepts
+        expect(csCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ seller_organization_id: ORG, seller_user_id: null, buyer_user_id: RECIP }),
+          }),
+        );
+      });
+
+      it('n1: an unresolved market (data-integrity break) throws LOUDLY and rolls back the accept — never silently defaults to pet', async () => {
+        const { svc, csCreate, prisma } = setup();
+        // Force marketOfAnimal → null (the $queryRaw species-join returns no market row).
+        (prisma.$queryRaw as jest.Mock).mockResolvedValueOnce([]);
+        await expect(svc.accept(XFER, etagOf(), p(RECIP))).rejects.toThrow(/unresolved market/i);
+        // The capture never wrote a mis-scoped row; the whole tx rolls back (loud failure > silent 'pet').
+        expect(csCreate).not.toHaveBeenCalled();
+      });
+
+      it('a declined / cancelled / expired transfer never writes a confirmed_sales row', async () => {
+        const declined = setup();
+        await declined.svc.decline(XFER, etagOf(), p(RECIP));
+        expect(declined.csCreate).not.toHaveBeenCalled();
+
+        const cancelled = setup();
+        await cancelled.svc.cancel(XFER, etagOf(), p(OWNER));
+        expect(cancelled.csCreate).not.toHaveBeenCalled();
+
+        const expired = setup({ transfer: transferRow({ expires_at: new Date(Date.now() - 1000) }) });
+        await expired.svc.getById(XFER, p(OWNER)); // triggers lazy expiry
+        expect(expired.csCreate).not.toHaveBeenCalled();
+      });
     });
   });
 

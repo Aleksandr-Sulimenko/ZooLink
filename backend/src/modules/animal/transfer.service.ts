@@ -347,6 +347,15 @@ export class TransferService {
         // Event seam (ADR-0021 §5) — notify the FROM-party (initiator) that the recipient accepted.
         await this.publishTransferEvent(tx, 'OwnershipTransfer.Accepted', row, market);
 
+        // ADR-0038 reputation FORM-slice #1 — passive confirmed-sale capture. A COMPLETED transfer is
+        // the strongest, already-two-sided sale signal (ADR-0013); it is lost irreversibly if not
+        // recorded now. Written IN THIS SAME TX as the completion (and its outbox event) so the
+        // record-of-truth is atomic with the deal — if this INSERT fails, the whole accept rolls back
+        // (the transfer never completes without the truth row: "the signal is never lost"). Dormant:
+        // no consumer, no endpoint reads it. The `market` reused here is the sanctioned intra-aggregate
+        // value already resolved above (animal module owns animal↔species, ADR-0018) — no new join.
+        await this.captureConfirmedSaleFromTransfer(tx, row, actor, market);
+
         const updated = (await tx.ownership_transfers.findUnique({ where: { id: transferId } })) as unknown as TransferRow;
         return updated;
       }),
@@ -683,6 +692,93 @@ export class TransferService {
         fromOrganizationId: row.from_organization_id,
         toUserId: row.to_user_id,
         toOrganizationId: row.to_organization_id,
+      },
+    });
+  }
+
+  /**
+   * ADR-0038 reputation FORM-slice #1 — write the auto-CONFIRMED confirmed-sale record of truth for a
+   * COMPLETED transfer, and emit `ConfirmedSale.Confirmed` into the outbox, both in the CALLER'S accept
+   * transaction (atomic with the completion). Dormant capture: no consumer subscribes yet.
+   *
+   * Design decisions (documented for the ADR-0038 §3 Created/Confirmed ambiguity — semantically honest
+   * per the spec-18 §4 state machine):
+   *  - **`ConfirmedSale.Confirmed` is emitted, NOT `ConfirmedSale.Created`.** The TRANSFER anchor row is
+   *    BORN in status CONFIRMED — there is no PENDING_CONFIRMATION phase (the transfer is already
+   *    two-sided per ADR-0013, `[*] --> CONFIRMED` in the state machine). `ConfirmedSale.Created` is
+   *    defined (event-catalog / ADR-0038 §3) as "a PENDING_CONFIRMATION row is written (markSold
+   *    anchor)"; emitting it here would falsely signal an awaiting-confirmation phase that never exists.
+   *    So the transfer path emits only `Confirmed` (whose definition explicitly includes "auto on
+   *    TRANSFER anchor"); `Created` is reserved for the deferred markSold path (`sale_buyer_confirmation`).
+   *  - **Seller = the FROM party** (gives up the animal), **buyer = the TO party** (receives it).
+   *  - **Append-only holds:** the row is written once, terminal-CONFIRMED, never updated. `UNIQUE
+   *    (ownership_transfer_id)` is the durable backstop mirroring the transfer INV-4 — but the accept
+   *    status-guard already makes this a single-winner write, so the row is created exactly once even
+   *    under redelivery/concurrent accepts (the loser's tx rolled back before reaching here).
+   *  - **Actor snapshot** (ADR-0006/0011) = the responding (accepting) actor, HUMAN|AGENT preserved.
+   *  - `amount_minor` is left NULL (owner decision 2026-07-09 — reserved, off-record default).
+   */
+  private async captureConfirmedSaleFromTransfer(
+    tx: Prisma.TransactionClient,
+    row: TransferRow,
+    actor: AuthPrincipal,
+    market: EventMarket,
+  ): Promise<void> {
+    // confirmed_sales.market is NOT NULL / CHECK pet|livestock. Every animal has a NOT NULL species_id and
+    // species.market is NOT NULL, so `market` is ALWAYS resolvable here. Assert LOUDLY rather than silently
+    // defaulting: a null would be a structural data-integrity break, and mis-scoping a livestock sale as
+    // 'pet' (a silent default) is worse than failing the accept — a wrong market corrupts the ADR-0002
+    // per-market record of truth irreversibly, whereas a throw rolls the whole tx back and is visible.
+    if (market !== 'pet' && market !== 'livestock') {
+      throw new Error(
+        `confirmed-sale capture: unresolved market for animal ${row.animal_id} (transfer ${row.id}) — species.market is NOT NULL, so this indicates a data-integrity break`,
+      );
+    }
+    const saleMarket: 'pet' | 'livestock' = market;
+    const now = new Date();
+
+    const sale = await tx.confirmed_sales.create({
+      data: {
+        anchor_type: 'TRANSFER',
+        ownership_transfer_id: row.id,
+        offering_type: 'ANIMAL_LISTING',
+        // offering_id (the polymorphic listing pointer) stays NULL for a pure transfer — no listing.
+        // The concrete subject link is animal_id + ownership_transfer_id.
+        animal_id: row.animal_id,
+        market: saleMarket,
+        // Seller = FROM-party, buyer = TO-party (either user or org on each side).
+        seller_user_id: row.from_user_id,
+        seller_organization_id: row.from_organization_id,
+        buyer_user_id: row.to_user_id,
+        buyer_organization_id: row.to_organization_id,
+        status: 'CONFIRMED',
+        seller_confirmed_at: now,
+        buyer_confirmed_at: now, // auto-set on the TRANSFER anchor (already two-sided; no counter-confirm)
+        confirmed_at: now,
+        // actor snapshot (ADR-0006/0011): the responding (accepting) actor.
+        actor_id: actor.userId,
+        actor_principal_type: actor.principalType,
+      },
+    });
+
+    await this.outbox.publish(tx, {
+      aggregateType: 'ConfirmedSale',
+      aggregateId: sale.id,
+      eventType: 'ConfirmedSale.Confirmed',
+      schemaVersion: 1,
+      market: saleMarket,
+      payload: {
+        confirmedSaleId: sale.id,
+        anchorType: 'TRANSFER',
+        ownershipTransferId: row.id,
+        animalId: row.animal_id,
+        offeringType: 'ANIMAL_LISTING',
+        offeringId: null,
+        sellerUserId: row.from_user_id,
+        sellerOrganizationId: row.from_organization_id,
+        buyerUserId: row.to_user_id,
+        buyerOrganizationId: row.to_organization_id,
+        status: 'CONFIRMED',
       },
     });
   }

@@ -423,10 +423,29 @@ rewrite **or** the signal is irreversibly lost; keep *behaviour* behind a real t
 dormant `user_roles` (mig 0034), signal-first `view_count` (mig 0031, D1 reserved-first).
 
 **FORM-now shortlist (ship dormant soonest — recommended order):**
-1. **`confirmed_sales` written passively at `OwnershipTransfer.Completed`** (anchor=`TRANSFER`,
-   auto-CONFIRMED, in the same tx as the transfer). **This is the highest-value dormant seam** — it is
-   the confirmed-sale *signal we lose irreversibly today* (same reserved-first logic as `view_count`
-   D1). Reviews stay off; the *record of truth* starts accruing now.
+1. **✅ SHIPPED-form (2026-07-10, migration 0039 / ADR-0038).** **`confirmed_sales` written passively at
+   transfer completion** (anchor=`TRANSFER`, auto-CONFIRMED, in the same tx as the transfer accept).
+   **This is the highest-value dormant seam** — the confirmed-sale *signal we lose irreversibly today*
+   (same reserved-first logic as `view_count` D1). Reviews stay off; the *record of truth* accrues now.
+   > **Implementation note (backend-engineer, 2026-07-10).** There is **no `OwnershipTransfer.Completed`
+   > event** in the built system — the completion transition (`PENDING → COMPLETED`) lives in
+   > `TransferService.accept()` and emits `OwnershipTransfer.Accepted`. The passive capture hooks that
+   > accept transaction: the `confirmed_sales` INSERT + a `ConfirmedSale.Confirmed` outbox event are
+   > written **in the same tx** as the completion, so the signal is atomic with the deal (a failed INSERT
+   > rolls the whole accept back — the transfer never completes without the truth row). The transfer path
+   > emits **only `ConfirmedSale.Confirmed`** (the row is born CONFIRMED with no PENDING phase per §4
+   > `[*] --> CONFIRMED`), **not `ConfirmedSale.Created`** (which is reserved for the deferred markSold
+   > PENDING path). Exactly-once under redelivery/parallel-accept = the accept status-guard (single-winner)
+   > + `UNIQUE(ownership_transfer_id)` backstop. Derived `market` reuses the sanctioned intra-aggregate
+   > value (ADR-0018; no new join). See event-catalog.md `ConfirmedSale.*` note.
+   >
+   > **Doc-change triple.** **ЧТО:** marked FORM-item 1 as SHIPPED-form and pinned the built emission
+   > semantics (accept-tx hook, `Confirmed`-only, exactly-once). **ПОЧЕМУ:** the ADR/spec referenced a
+   > non-existent `OwnershipTransfer.Completed` event and left the Created-vs-Confirmed choice open — a
+   > reader/agent could not tell what is actually emitted. **ПОЧЕМУ ЛУЧШЕ для проекта:** the catalog/spec
+   > now match the code exactly (no doc↔code inversion), the semantically-honest event (no phantom PENDING
+   > phase) keeps the future review-window/analytics consumers correct, and the in-tx atomicity documents
+   > the "signal never lost" guarantee the whole reputation loop depends on.
 2. **`confirmed_sales` table + `reviews` + `reputation_aggregates`** created dormant, with the
    append-only trigger reused. No read/write endpoints wired for reviews.
 3. **`feature_toggles`** rows seeded off/0 %: `reputation_reviews` (review authoring/read),

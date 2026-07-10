@@ -116,6 +116,14 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   });
 
   afterAll(async () => {
+    // ADR-0038: a COMPLETED transfer now writes an append-only confirmed_sales row (auto-CONFIRMED).
+    // Disable the immutability trigger for cleanup only (same idiom as the consents e2e), then delete
+    // the sale rows anchored to this suite's transfers before the transfers/animals are removed.
+    await prisma.$executeRaw`ALTER TABLE confirmed_sales DISABLE TRIGGER trg_confirmed_sales_immutable`.catch(() => undefined);
+    for (const id of transfers) await prisma.confirmed_sales.deleteMany({ where: { ownership_transfer_id: id } }).catch(() => undefined);
+    for (const id of animals) await prisma.confirmed_sales.deleteMany({ where: { animal_id: id } }).catch(() => undefined);
+    await prisma.$executeRaw`ALTER TABLE confirmed_sales ENABLE TRIGGER trg_confirmed_sales_immutable`.catch(() => undefined);
+
     for (const id of transfers) await prisma.ownership_transfers.delete({ where: { id } }).catch(() => undefined);
     for (const id of animals) {
       await prisma.animal_ownership_history.deleteMany({ where: { animal_id: id } }).catch(() => undefined);

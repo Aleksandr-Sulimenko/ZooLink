@@ -67,6 +67,7 @@ model animals {
   users                                      users?                     @relation(fields: [owner_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   species                                    species                    @relation(fields: [species_id], references: [id], onUpdate: NoAction)
   breeds_animals_breed_id_species_idTobreeds breeds?                    @relation("animals_breed_id_species_idTobreeds", fields: [breed_id, species_id], references: [id, species_id], onUpdate: NoAction, map: "fk_animals_breed_species")
+  confirmed_sales                            confirmed_sales[]
   digital_assets                             digital_assets[]
   listings                                   listings[]
   ownership_transfers                        ownership_transfers[]
@@ -309,6 +310,7 @@ model listings {
   view_count                        BigInt                @default(0)
   market                            String                @db.VarChar(9)
   content_updated_at                DateTime              @default(now()) @db.Timestamptz(6)
+  confirmed_sales                   confirmed_sales[]
   contact_reveals                   contact_reveals[]
   conversations                     conversations[]
   favorites                         favorites[]
@@ -481,6 +483,8 @@ model organizations {
   animal_ownership_history                                                    animal_ownership_history[]
   animals                                                                     animals[]
   branches                                                                    branches[]
+  confirmed_sales_confirmed_sales_buyer_organization_idToorganizations        confirmed_sales[]          @relation("confirmed_sales_buyer_organization_idToorganizations")
+  confirmed_sales_confirmed_sales_seller_organization_idToorganizations       confirmed_sales[]          @relation("confirmed_sales_seller_organization_idToorganizations")
   listings                                                                    listings[]
   organization_users                                                          organization_users[]
   ownership_transfers_ownership_transfers_from_organization_idToorganizations ownership_transfers[]      @relation("ownership_transfers_from_organization_idToorganizations")
@@ -504,33 +508,34 @@ model outbox_events {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model ownership_transfers {
-  id                                                                    String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  animal_id                                                             String         @db.Uuid
-  from_user_id                                                          String?        @db.Uuid
-  to_user_id                                                            String?        @db.Uuid
-  status                                                                String         @default("PENDING") @db.VarChar(20)
-  from_confirmed                                                        Boolean        @default(false)
-  to_confirmed                                                          Boolean        @default(false)
-  payment_confirmed                                                     Boolean        @default(false)
+  id                                                                    String           @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  animal_id                                                             String           @db.Uuid
+  from_user_id                                                          String?          @db.Uuid
+  to_user_id                                                            String?          @db.Uuid
+  status                                                                String           @default("PENDING") @db.VarChar(20)
+  from_confirmed                                                        Boolean          @default(false)
+  to_confirmed                                                          Boolean          @default(false)
+  payment_confirmed                                                     Boolean          @default(false)
   failure_reason                                                        String?
-  expires_at                                                            DateTime?      @db.Timestamptz(6)
-  created_at                                                            DateTime       @default(now()) @db.Timestamptz(6)
-  updated_at                                                            DateTime       @default(now()) @db.Timestamptz(6)
-  from_organization_id                                                  String?        @db.Uuid
-  to_organization_id                                                    String?        @db.Uuid
-  completed_at                                                          DateTime?      @db.Timestamptz(6)
+  expires_at                                                            DateTime?        @db.Timestamptz(6)
+  created_at                                                            DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at                                                            DateTime         @default(now()) @db.Timestamptz(6)
+  from_organization_id                                                  String?          @db.Uuid
+  to_organization_id                                                    String?          @db.Uuid
+  completed_at                                                          DateTime?        @db.Timestamptz(6)
   transfer_reason                                                       String?
-  initiated_by_principal_type                                           String         @default("HUMAN") @db.VarChar(10)
-  responded_by_principal_type                                           String?        @db.VarChar(10)
-  responded_by_user_id                                                  String?        @db.Uuid
-  initiated_by_user_id                                                  String?        @db.Uuid
-  animals                                                               animals        @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
-  organizations_ownership_transfers_from_organization_idToorganizations organizations? @relation("ownership_transfers_from_organization_idToorganizations", fields: [from_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  users_ownership_transfers_from_user_idTousers                         users?         @relation("ownership_transfers_from_user_idTousers", fields: [from_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  users_ownership_transfers_initiated_by_user_idTousers                 users?         @relation("ownership_transfers_initiated_by_user_idTousers", fields: [initiated_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  users_ownership_transfers_responded_by_user_idTousers                 users?         @relation("ownership_transfers_responded_by_user_idTousers", fields: [responded_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  organizations_ownership_transfers_to_organization_idToorganizations   organizations? @relation("ownership_transfers_to_organization_idToorganizations", fields: [to_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  users_ownership_transfers_to_user_idTousers                           users?         @relation("ownership_transfers_to_user_idTousers", fields: [to_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  initiated_by_principal_type                                           String           @default("HUMAN") @db.VarChar(10)
+  responded_by_principal_type                                           String?          @db.VarChar(10)
+  responded_by_user_id                                                  String?          @db.Uuid
+  initiated_by_user_id                                                  String?          @db.Uuid
+  confirmed_sales                                                       confirmed_sales?
+  animals                                                               animals          @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  organizations_ownership_transfers_from_organization_idToorganizations organizations?   @relation("ownership_transfers_from_organization_idToorganizations", fields: [from_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_from_user_idTousers                         users?           @relation("ownership_transfers_from_user_idTousers", fields: [from_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_initiated_by_user_idTousers                 users?           @relation("ownership_transfers_initiated_by_user_idTousers", fields: [initiated_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_responded_by_user_idTousers                 users?           @relation("ownership_transfers_responded_by_user_idTousers", fields: [responded_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations_ownership_transfers_to_organization_idToorganizations   organizations?   @relation("ownership_transfers_to_organization_idToorganizations", fields: [to_organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_ownership_transfers_to_user_idTousers                           users?           @relation("ownership_transfers_to_user_idTousers", fields: [to_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([animal_id], map: "idx_owntransfer_animal")
   @@index([status], map: "idx_owntransfer_status")
@@ -682,6 +687,10 @@ model users {
   breeds_breeds_updated_byTousers                                       breeds[]                    @relation("breeds_updated_byTousers")
   cities_cities_created_byTousers                                       cities[]                    @relation("cities_created_byTousers")
   cities_cities_updated_byTousers                                       cities[]                    @relation("cities_updated_byTousers")
+  confirmed_sales_confirmed_sales_actor_idTousers                       confirmed_sales[]           @relation("confirmed_sales_actor_idTousers")
+  confirmed_sales_confirmed_sales_buyer_user_idTousers                  confirmed_sales[]           @relation("confirmed_sales_buyer_user_idTousers")
+  confirmed_sales_confirmed_sales_nominated_buyer_user_idTousers        confirmed_sales[]           @relation("confirmed_sales_nominated_buyer_user_idTousers")
+  confirmed_sales_confirmed_sales_seller_user_idTousers                 confirmed_sales[]           @relation("confirmed_sales_seller_user_idTousers")
   consents_consents_actor_idTousers                                     consents[]                  @relation("consents_actor_idTousers")
   consents_consents_user_idTousers                                      consents[]                  @relation("consents_user_idTousers")
   contact_reveals_contact_reveals_seller_idTousers                      contact_reveals[]           @relation("contact_reveals_seller_idTousers")
@@ -857,4 +866,44 @@ model agent_capability_profiles {
   users_agent_capability_profiles_created_byTousers users?                @relation("agent_capability_profiles_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction)
   users_agent_capability_profiles_updated_byTousers users?                @relation("agent_capability_profiles_updated_byTousers", fields: [updated_by], references: [id], onUpdate: NoAction)
   service_credentials                               service_credentials[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model confirmed_sales {
+  id                                                                  String               @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  offering_type                                                       String               @default("ANIMAL_LISTING") @db.VarChar(30)
+  offering_id                                                         String?              @db.Uuid
+  listing_id                                                          String?              @db.Uuid
+  animal_id                                                           String?              @db.Uuid
+  market                                                              String               @db.VarChar(9)
+  seller_user_id                                                      String?              @db.Uuid
+  buyer_user_id                                                       String?              @db.Uuid
+  seller_organization_id                                              String?              @db.Uuid
+  buyer_organization_id                                               String?              @db.Uuid
+  anchor_type                                                         String               @db.VarChar(20)
+  ownership_transfer_id                                               String?              @unique(map: "uq_confirmed_sales_transfer") @db.Uuid
+  status                                                              String               @default("PENDING_CONFIRMATION") @db.VarChar(24)
+  nominated_buyer_user_id                                             String?              @db.Uuid
+  seller_confirmed_at                                                 DateTime?            @db.Timestamptz(6)
+  buyer_confirmed_at                                                  DateTime?            @db.Timestamptz(6)
+  confirmed_at                                                        DateTime?            @db.Timestamptz(6)
+  expires_at                                                          DateTime?            @db.Timestamptz(6)
+  amount_minor                                                        BigInt?
+  actor_id                                                            String?              @db.Uuid
+  actor_principal_type                                                String               @default("HUMAN") @db.VarChar(10)
+  created_at                                                          DateTime             @default(now()) @db.Timestamptz(6)
+  users_confirmed_sales_actor_idTousers                               users?               @relation("confirmed_sales_actor_idTousers", fields: [actor_id], references: [id], onUpdate: NoAction)
+  animals                                                             animals?             @relation(fields: [animal_id], references: [id], onUpdate: NoAction)
+  organizations_confirmed_sales_buyer_organization_idToorganizations  organizations?       @relation("confirmed_sales_buyer_organization_idToorganizations", fields: [buyer_organization_id], references: [id], onUpdate: NoAction)
+  users_confirmed_sales_buyer_user_idTousers                          users?               @relation("confirmed_sales_buyer_user_idTousers", fields: [buyer_user_id], references: [id], onUpdate: NoAction)
+  listings                                                            listings?            @relation(fields: [listing_id], references: [id], onUpdate: NoAction)
+  users_confirmed_sales_nominated_buyer_user_idTousers                users?               @relation("confirmed_sales_nominated_buyer_user_idTousers", fields: [nominated_buyer_user_id], references: [id], onUpdate: NoAction)
+  ownership_transfers                                                 ownership_transfers? @relation(fields: [ownership_transfer_id], references: [id], onUpdate: NoAction)
+  organizations_confirmed_sales_seller_organization_idToorganizations organizations?       @relation("confirmed_sales_seller_organization_idToorganizations", fields: [seller_organization_id], references: [id], onUpdate: NoAction)
+  users_confirmed_sales_seller_user_idTousers                         users?               @relation("confirmed_sales_seller_user_idTousers", fields: [seller_user_id], references: [id], onUpdate: NoAction)
+
+  @@index([animal_id], map: "idx_confirmed_sales_animal")
+  @@index([seller_user_id, buyer_user_id], map: "idx_confirmed_sales_parties")
+  @@index([offering_type, offering_id], map: "idx_confirmed_sales_subject")
 }

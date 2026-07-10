@@ -176,6 +176,32 @@ erDiagram
         TIMESTAMPTZ updated_at
         %% ADR-0010: NFT readiness hook; gated by feature_toggles
     }
+    %% confirmed_sales: ADR-0038 reputation FORM-slice #1 (migration 0039). Append-only record-of-truth.
+    confirmed_sales {
+        UUID id PK
+        VARCHAR_30 offering_type "polymorphic subject (mig 0032 dialect); ANIMAL_LISTING-only now"
+        UUID offering_id "polymorphic listing pointer; NULL for a pure TRANSFER anchor"
+        UUID listing_id FK "concrete ANIMAL_LISTING instance (markSold path)"
+        UUID animal_id FK "the animal (transfer anchor)"
+        VARCHAR_9 market "derived (ADR-0018/0033); pet|livestock (ADR-0002)"
+        UUID seller_user_id FK "FROM-party (SET NULL on erasure)"
+        UUID buyer_user_id FK "TO-party (SET NULL on erasure)"
+        UUID seller_organization_id FK "reserved org side"
+        UUID buyer_organization_id FK "reserved org side"
+        VARCHAR_20 anchor_type "TRANSFER|LISTING_MARK_SOLD"
+        UUID ownership_transfer_id FK "UNIQUE — one sale per transfer (mirror INV-4); set when anchor=TRANSFER"
+        VARCHAR_24 status "PENDING_CONFIRMATION|CONFIRMED|DISPUTED|EXPIRED|CANCELLED"
+        UUID nominated_buyer_user_id FK "RESERVED form-now (markSold counter-confirm path)"
+        TIMESTAMPTZ seller_confirmed_at
+        TIMESTAMPTZ buyer_confirmed_at "auto-set on the TRANSFER anchor"
+        TIMESTAMPTZ confirmed_at
+        TIMESTAMPTZ expires_at "PENDING_CONFIRMATION horizon (markSold path)"
+        BIGINT amount_minor "RESERVED, off-record default (owner 2026-07-09); NO path writes it"
+        UUID actor_id FK "actor snapshot (ADR-0006/0011): the accepting actor on the transfer path"
+        VARCHAR_10 actor_principal_type "HUMAN|AGENT"
+        TIMESTAMPTZ created_at
+        %% Append-only (trg_confirmed_sales_immutable, reused). DORMANT capture: no consumer, no endpoint reads it. Auto-CONFIRMED in-tx at transfer completion (ADR-0038 §1/§3).
+    }
 
     %% Organization Domain
     organizations {
@@ -548,6 +574,9 @@ erDiagram
     animals ||..o{ listings : "listed for"
     animals ||..o{ ownership_transfers : "transferred via"
     users ||..o{ ownership_transfers : "transfers (from/to)"
+    ownership_transfers |o..o| confirmed_sales : "auto-CONFIRMED anchor (ADR-0038)"
+    animals ||..o{ confirmed_sales : "sale of (transfer anchor)"
+    users ||..o{ confirmed_sales : "seller/buyer/actor"
     animals ||..o{ digital_assets : "tokenized as"
     animals }o..|| animals : "mother of"
     animals }o..|| animals : "father of"

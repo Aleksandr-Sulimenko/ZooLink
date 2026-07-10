@@ -624,6 +624,78 @@ CREATE INDEX idx_owntransfer_from_org ON ownership_transfers(from_organization_i
 CREATE INDEX idx_owntransfer_to_org   ON ownership_transfers(to_organization_id)   WHERE to_organization_id IS NOT NULL;
 CREATE INDEX idx_owntransfer_to_user  ON ownership_transfers(to_user_id)           WHERE to_user_id IS NOT NULL;
 
+-- ========== Reputation — Confirmed Sale record of truth (ADR-0038; migration 0039) ==========
+-- First-class, APPEND-ONLY record that a real deal happened — the proof-of-transaction root reputation
+-- (ADR-0039) hangs off. NOT a projection: it holds new facts the sources lack (buyer counter-confirm,
+-- dispute, actor-snapshot). Anchored to a COMPLETED ownership_transfers (auto-CONFIRMED, written IN-TX
+-- with the transfer accept so the strongest sale signal is never lost) or a listing markSold (buyer
+-- counter-confirmation, deferred behind feature_toggles.sale_buyer_confirmation). DORMANT capture in MVP
+-- (no consumer, no endpoint reads it). Immutable via the REUSED trg_block_modify_append_only trigger.
+-- APPEND-ONLY vs the status machine: in the FORM slice the transfer path writes a single terminal
+-- CONFIRMED row that never transitions (append-only holds byte-for-byte); the markSold
+-- PENDING_CONFIRMATION → CONFIRMED transition mechanics (superseding-row vs. relaxed guard) are deferred
+-- to the behaviour slice — the full status vocabulary is reserved in the CHECK now, only CONFIRMED is produced.
+CREATE TABLE confirmed_sales (
+    id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- What was sold (polymorphic subject; migration 0032 dialect / ADR-0014 seam / ADR-0038 §2). No FK on
+    -- offering_id (polymorphic target across future subtype tables; anti-god-table). offering_id is the
+    -- offering-instance pointer (a listing) — NULL for a pure TRANSFER anchor; listing_id/animal_id are the
+    -- concrete ANIMAL_LISTING links.
+    offering_type          VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING',
+    offering_id            UUID,
+    listing_id             UUID REFERENCES listings(id) ON DELETE SET NULL,
+    animal_id              UUID REFERENCES animals(id)  ON DELETE SET NULL,
+    -- Derived market (ADR-0018/0033; ADR-0002 hard split): cached from species.market via the animal at
+    -- capture (the sanctioned intra-aggregate read), never re-derived on read.
+    market                 VARCHAR(9) NOT NULL,
+    -- Parties. Seller = the party giving up the animal (transfer FROM-side); buyer = the receiving TO-side.
+    -- exactly-one-of user/org per side is enforced by the writer (form-now; no DB CHECK so the reserved org
+    -- path stays open without over-constraining the animal-only MVP). ON DELETE SET NULL = ФЗ-152 erasure
+    -- pseudonymises the party without destroying the record (spec 18 §9).
+    seller_user_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+    buyer_user_id          UUID REFERENCES users(id) ON DELETE SET NULL,
+    seller_organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    buyer_organization_id  UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    -- Anchor + lifecycle (spec 18 §4 state machine).
+    anchor_type            VARCHAR(20) NOT NULL,
+    ownership_transfer_id  UUID REFERENCES ownership_transfers(id) ON DELETE SET NULL, -- set when anchor='TRANSFER'
+    status                 VARCHAR(24) NOT NULL DEFAULT 'PENDING_CONFIRMATION',
+    -- markSold buyer-nomination — RESERVED form-now (ADR-0038 §4 item 3); the counter-confirmation flow
+    -- (feature_toggles.sale_buyer_confirmation) uses it without a schema change. Unused by the transfer path.
+    nominated_buyer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    seller_confirmed_at    TIMESTAMP WITH TIME ZONE,  -- markSold / transfer-complete time (asserting side)
+    buyer_confirmed_at     TIMESTAMP WITH TIME ZONE,  -- buyer counter-confirm (auto-set on the TRANSFER anchor)
+    confirmed_at           TIMESTAMP WITH TIME ZONE,  -- set once status→CONFIRMED (both acked)
+    expires_at             TIMESTAMP WITH TIME ZONE,  -- PENDING_CONFIRMATION timeout horizon (markSold path)
+    -- RESERVED nullable, OFF-record default (owner decision 2026-07-09, ADR-0038 Open-Q1): NO code path
+    -- writes it in the FORM slice. Capture behaviour decided with finance + legal at payments activation.
+    amount_minor           BIGINT,
+    -- Actor snapshot (ADR-0006/0011) — WHO produced this state, as-of-the-action. For the TRANSFER anchor
+    -- = the responding (accepting) actor.
+    actor_id               UUID REFERENCES users(id) ON DELETE SET NULL,
+    actor_principal_type   VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
+    created_at             TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- append-only; no updated_at
+    -- Named constraints (drift-gate; widen offering_type/anchor/status additively as subtypes/behaviour ship).
+    CONSTRAINT chk_confirmed_sales_offering_type CHECK (offering_type IN ('ANIMAL_LISTING')),
+    CONSTRAINT chk_confirmed_sales_market        CHECK (market IN ('pet','livestock')),
+    CONSTRAINT chk_confirmed_sales_anchor        CHECK (anchor_type IN ('TRANSFER','LISTING_MARK_SOLD')),
+    CONSTRAINT chk_confirmed_sales_status        CHECK (status IN
+        ('PENDING_CONFIRMATION','CONFIRMED','DISPUTED','EXPIRED','CANCELLED')),
+    CONSTRAINT chk_confirmed_sales_actor_ptype   CHECK (actor_principal_type IN ('HUMAN','AGENT')),
+    -- One confirmed sale per anchored transfer (mirror of ownership_transfers INV-4). NULLs are distinct in
+    -- Postgres, so the markSold path (ownership_transfer_id NULL) is unconstrained — correct.
+    CONSTRAINT uq_confirmed_sales_transfer       UNIQUE (ownership_transfer_id)
+);
+CREATE INDEX idx_confirmed_sales_subject      ON confirmed_sales(offering_type, offering_id);
+CREATE INDEX idx_confirmed_sales_parties      ON confirmed_sales(seller_user_id, buyer_user_id);
+CREATE INDEX idx_confirmed_sales_animal       ON confirmed_sales(animal_id);
+CREATE INDEX idx_confirmed_sales_confirm_scan ON confirmed_sales(expires_at) WHERE status = 'PENDING_CONFIRMATION';
+-- Append-only immutability — REUSE the shared trigger function (ADR-0038 §5; do NOT invent a second path).
+CREATE TRIGGER trg_confirmed_sales_immutable
+BEFORE UPDATE OR DELETE ON confirmed_sales
+FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
+COMMENT ON TABLE confirmed_sales IS 'ADR-0038: first-class, append-only record-of-truth that a real deal happened (proof-of-transaction root for reputation, ADR-0039). Anchored to a COMPLETED ownership_transfers (auto-CONFIRMED, in-tx) or a listing markSold (deferred). DORMANT capture in MVP.';
+
 -- ========== Digital Assets / NFT readiness (ADR-0010) ==========
 -- Schema hook only: no minting/contracts/indexer in MVP. Behavior gated by feature_toggles ('digital_assets').
 -- PostgreSQL stays the source of truth; on-chain is a verifiable mirror. No owner PII in on-chain metadata.
@@ -758,7 +830,9 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 -- migration 0027 (GAP-BA-011): gate FORM for the Phase-2 goods marketplace (аксессуары/корма/товары); behaviour deferred. Off in MVP.
 ('goods_marketplace', 'Маркетплейс товаров (аксессуары, корма, ветпрепараты и т.п.) — форма гейта заведена, поведение отложено до Фазы 2+ (GAP-BA-011). Выключено в MVP.', false, 0),
 -- migration 0038 (ADR-0036 §6): master gate for agent service-auth (secret→AGENT JWT exchange). Off in MVP.
-('agent_service_auth', 'Гейт агент-сервис-авторизации (ADR-0036): обмен человеко-выданного секрета service_credentials на короткоживущий AGENT JWT на POST /v1/auth/agent/token. Форма заведена, в MVP ВЫКЛЮЧЕНО.', false, 0)
+('agent_service_auth', 'Гейт агент-сервис-авторизации (ADR-0036): обмен человеко-выданного секрета service_credentials на короткоживущий AGENT JWT на POST /v1/auth/agent/token. Форма заведена, в MVP ВЫКЛЮЧЕНО.', false, 0),
+-- migration 0039 (ADR-0038 §4): gate FORM for the listing markSold buyer-counter-confirmation path. Off in MVP.
+('sale_buyer_confirmation', 'Гейт подтверждения сделки покупателем на пути listing markSold (ADR-0038 §4): продавец отмечает продано + номинирует покупателя → PENDING_CONFIRMATION → покупатель подтверждает → CONFIRMED. Форма заведена, поведение отложено — в MVP ВЫКЛЮЧЕНО (пассивно пишутся только авто-CONFIRMED строки с пути передачи владения).', false, 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- ========== Application-level validations ==========
