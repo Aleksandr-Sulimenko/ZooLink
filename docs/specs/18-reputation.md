@@ -147,10 +147,33 @@ unlock reviews**.
 > in `database_schema.sql` + a migration **after** the owner forks (§10) and an ADR (§11). Column
 > choices marked *(fork)* depend on an owner answer. All entities are **append-only** and carry the
 > actor-snapshot pair per ADR-0006.
+>
+> **(round-4, normative — AUDIT5 gate-pass 2026-08-04; migrations 0039–0041) — the FACT / STATE split.**
+> The §3.1/§3.2 sketches modelled a *state machine on an append-only table* — a self-contradiction the
+> canonical schema resolves by separating the **immutable FACT** from the **mutable STATE** (ADR-0038 §4
+> Amendment, ADR-0039 §3 Amendment):
+> - **`confirmed_sales` is a CONFIRMED-only FACT** — a row exists iff a sale is confirmed (`CHECK
+>   (status='CONFIRMED')`, no DEFAULT; the full vocabulary and the intent columns
+>   `nominated_buyer_user_id`/`seller_confirmed_at`/`buyer_confirmed_at`/`expires_at` were removed). The
+>   full `UNIQUE(ownership_transfer_id)` stays. `confirm_expires_at` in the §3.1 sketch was always
+>   `expires_at` in schema — and it now lives on `sale_confirmations`, not here.
+> - **`sale_confirmations` (NEW, mutable)** carries the `markSold` PENDING→CONFIRMED/EXPIRED/CANCELLED/
+>   DISPUTED lifecycle (`expires_at`, `seller_/buyer_confirmed_at`, `nominated_buyer_user_id`), the
+>   biconditional `chk_sale_conf_confirmed_link`, and `uq_sale_conf_live_per_listing` (one live per listing).
+>   The TRANSFER path never writes here.
+> - **`reviews`** uses a **backward** `supersedes_review_id` (not the §3.2 forward `superseded_by_id`); "current"
+>   resolves via the **`reviews_current`** view (`uq_reviews_supersedes` linear chain + `uq_reviews_root_per_direction`
+>   one root). **Mutable `moderation_status`/`is_visible` moved to the companion `review_states`.**
+>
+> The §4 state machine below is normatively read as operating on **`sale_confirmations`** (negotiation);
+> reaching CONFIRMED writes the immutable `confirmed_sales` fact row.
 
 ### 3.1 `confirmed_sales` — record of truth (FORM-now candidate)
+> **SUPERSEDED by the round-4 FACT/STATE split (see the normative note above; migrations 0039–0041).** The
+> canonical `confirmed_sales` is CONFIRMED-only (no `status` machine, no `confirm_expires_at`); the negotiation
+> lifecycle below lives in `sale_confirmations`. This block is kept only as the historical starting shape.
 ```sql
--- SKETCH — not canonical. Append-only sale record; the signal we currently lose irreversibly.
+-- SKETCH — not canonical (SUPERSEDED, round-4). Append-only sale record; the signal we currently lose irreversibly.
 CREATE TABLE confirmed_sales (
     id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     -- What was sold (polymorphic subject so the same primitive later serves services/goods)
@@ -190,8 +213,12 @@ CREATE INDEX idx_confirmed_sales_confirm_scan
 ```
 
 ### 3.2 `reviews` — append-only, proof-of-transaction-gated (behaviour behind toggle)
+> **SUPERSEDED by the round-4 FACT/STATE split (see the normative note above; migrations 0040–0041).** The
+> canonical `reviews` uses a **backward** `supersedes_review_id` (not the forward `superseded_by_id` below), with
+> `uq_reviews_supersedes` + `uq_reviews_root_per_direction` + the `reviews_current` view; `moderation_status`/
+> `is_visible` live in `review_states`. This block is kept only as the historical starting shape.
 ```sql
--- SKETCH — not canonical. One review per (sale, direction). Append-only (edits = new superseding row).
+-- SKETCH — not canonical (SUPERSEDED, round-4). One review per (sale, direction). Append-only (edits = new superseding row).
 CREATE TABLE reviews (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     confirmed_sale_id UUID NOT NULL REFERENCES confirmed_sales(id) ON DELETE CASCADE, -- proof-of-txn
@@ -244,34 +271,39 @@ CREATE TABLE reputation_aggregates (
 
 ## 4. State Machine — sale confirmation flow
 
-**Entity:** a `confirmed_sales` row. **Triggers/guards** below. Terminal states: `CONFIRMED`,
+**Entity (round-4, normative):** a **`sale_confirmations`** row (the mutable negotiation; ADR-0038 §4
+Amendment). Reaching `CONFIRMED` births — in the **same transaction** — the immutable `confirmed_sales`
+**fact** row and sets `sale_confirmations.confirmed_sale_id` to it (biconditional
+`chk_sale_conf_confirmed_link`). The **TRANSFER anchor** skips the negotiation entirely: it writes a
+born-`CONFIRMED` `confirmed_sales` fact directly (no `sale_confirmations` row). Terminal states: `CONFIRMED`,
 `EXPIRED`, `CANCELLED` (and `DISPUTED` → resolves back to CONFIRMED or CANCELLED via moderation).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING_CONFIRMATION: seller markSold + nominate buyer  (anchor=LISTING_MARK_SOLD)
-    [*] --> CONFIRMED: ownership_transfers COMPLETED  (anchor=TRANSFER — already two-sided)
-    PENDING_CONFIRMATION --> CONFIRMED: buyer counter-confirms (now <= confirm_expires_at)
+    [*] --> PENDING_CONFIRMATION: seller markSold + nominate buyer  (sale_confirmations, anchor=LISTING_MARK_SOLD)
+    [*] --> CONFIRMED: ownership_transfers COMPLETED  (confirmed_sales fact born directly, anchor=TRANSFER)
+    PENDING_CONFIRMATION --> CONFIRMED: buyer counter-confirms (now <= expires_at) → writes confirmed_sales fact in-tx
     PENDING_CONFIRMATION --> DISPUTED: either party disputes ("this deal did not happen")
-    PENDING_CONFIRMATION --> EXPIRED: now > confirm_expires_at (no counter-confirm) → weak/unconfirmed
+    PENDING_CONFIRMATION --> EXPIRED: now > expires_at (no counter-confirm) → weak/unconfirmed
     PENDING_CONFIRMATION --> CANCELLED: seller retracts before confirmation
-    DISPUTED --> CONFIRMED: moderation upholds the sale
+    DISPUTED --> CONFIRMED: moderation upholds the sale → writes confirmed_sales fact in-tx
     DISPUTED --> CANCELLED: moderation voids the sale
     CONFIRMED --> [*]: review window opens (see review lifecycle)
     EXPIRED --> [*]: signal captured; NO reviews
-    CANCELLED --> [*]: terminal (a new sale record may be created)
+    CANCELLED --> [*]: terminal (uq_sale_conf_live_per_listing frees the listing for a new attempt)
 ```
 
-**Transition guards (normative):**
+**Transition guards (normative):** — the negotiation transitions mutate `sale_confirmations`; the CONFIRMED
+edges additionally INSERT the `confirmed_sales` fact in the same tx.
 | From → To | Trigger | Guard (all must hold) |
 |---|---|---|
-| ∅ → CONFIRMED | `OwnershipTransfer.Accepted` (transfer completion = accept, §10) | anchor=`TRANSFER`; both parties are the transfer's from/to; auto-confirm (transfer already two-sided per ADR-0013) |
-| ∅ → PENDING_CONFIRMATION | seller `markSold` | caller owns the listing; a buyer is nominated; listing was `ACTIVE`; no existing live sale for this listing |
-| PENDING → CONFIRMED | buyer confirm | caller = nominated buyer; `now <= confirm_expires_at`; status still PENDING |
+| ∅ → CONFIRMED (fact) | `OwnershipTransfer.Accepted` (transfer completion = accept, §10) | anchor=`TRANSFER`; both parties are the transfer's from/to; auto-confirm (transfer already two-sided per ADR-0013); born-CONFIRMED `confirmed_sales`, no `sale_confirmations` row |
+| ∅ → PENDING_CONFIRMATION | seller `markSold` | caller owns the listing; a buyer is nominated; listing was `ACTIVE`; no existing live `sale_confirmations` for this listing (`uq_sale_conf_live_per_listing`) |
+| PENDING → CONFIRMED | buyer confirm | caller = nominated buyer; `now <= expires_at`; status still PENDING; INSERT the `confirmed_sales` fact + set `confirmed_sale_id` in the same tx |
 | PENDING → DISPUTED | dispute | caller is a party; status PENDING; reason supplied → moderation reason code |
-| PENDING → EXPIRED | scheduler tick | `now > confirm_expires_at` (idempotent-emission marker, mirrors transfer-expiry sweeper H3) |
+| PENDING → EXPIRED | scheduler tick | `now > expires_at` (idempotent-emission marker, mirrors transfer-expiry sweeper H3) |
 | PENDING → CANCELLED | seller retract | caller = seller; status PENDING |
-| DISPUTED → CONFIRMED/CANCELLED | moderation decision | actor has moderation ability; decision recorded in `moderation_decisions` (actor-snapshot) |
+| DISPUTED → CONFIRMED/CANCELLED | moderation decision | actor has moderation ability; decision recorded in `moderation_decisions` (actor-snapshot); CONFIRMED writes the `confirmed_sales` fact in-tx |
 
 **Review lifecycle (per direction, opens on CONFIRMED):**
 `ELIGIBLE (window open) → SUBMITTED (pending moderation) → APPROVED+released (double-blind) →`
@@ -305,13 +337,15 @@ Feature: Two-sided confirmed sale
 
   Scenario: Listing mark-sold requires buyer counter-confirmation
     Given seller S marks listing L SOLD and nominates buyer B
-    Then a confirmed_sales row is created with status 'PENDING_CONFIRMATION'
-    And confirm_expires_at is set to now + <confirm_window> days
-    When buyer B confirms before confirm_expires_at
-    Then status becomes 'CONFIRMED' and the review window opens
-    When buyer B never confirms and now > confirm_expires_at
-    Then a scheduler tick sets status 'EXPIRED'
-    And the sale signal is captured but NO review may be created
+    Then a sale_confirmations row is created with status 'PENDING_CONFIRMATION'
+    And expires_at is set to now + <confirm_window> days
+    When buyer B confirms before expires_at
+    Then a confirmed_sales fact row is written in the same tx, sale_confirmations.status becomes 'CONFIRMED'
+    And sale_confirmations.confirmed_sale_id points to that fact (chk_sale_conf_confirmed_link)
+    And the review window opens
+    When buyer B never confirms and now > expires_at
+    Then a scheduler tick sets sale_confirmations.status 'EXPIRED'
+    And the sale signal is captured but NO confirmed_sales fact and NO review are created
 
   Scenario: Proof-of-transaction blocks a fake review
     Given a user U who is not a party to any confirmed sale with subject X
@@ -367,8 +401,8 @@ Feature: Two-sided confirmed sale
   the read.
 - **Reliability:** confirmation-expiry and double-blind-window-close run on the **existing
   scheduler/sweeper pattern** (transfer-expiry sweeper, H3; SLA-tick advisory lock) — never lazy-on-read
-  (avoids the F4 residual defect). Idempotent emission markers (`confirmed_at`/`confirm_expires_at`
-  mirror `escalated_at`).
+  (avoids the F4 residual defect). Idempotent emission markers (`confirmed_sales.confirmed_at` /
+  `sale_confirmations.expires_at` mirror `escalated_at`).
 - **Consistency / concurrency:** confirmed-sale creation from a transfer is written **in the same tx**
   as the transfer completion (transactional-outbox), so the signal is never lost. `UNIQUE
   (ownership_transfer_id)` prevents a duplicate sale per transfer (mirror of transfer INV-4).
@@ -449,21 +483,22 @@ dormant `user_roles` (mig 0034), signal-first `view_count` (mig 0031, D1 reserve
 2. **✅ SHIPPED-form (2026-07-10, migration 0040 / ADR-0039).** **`reviews` + `reputation_aggregates`
    created DORMANT** (on top of `confirmed_sales`, FORM-item 1 / migration 0039), with the append-only
    trigger reused. No read/write endpoints, no recompute path. `reviews` is append-only
-   (`trg_reviews_immutable`), one-CURRENT-per-(sale, direction) via the partial-unique
-   `uq_reviews_current_per_direction … WHERE superseded_by_id IS NULL` (transfer INV-4 shape — a plain 3-col
-   `UNIQUE(sale,direction,superseded_by_id)` is ineffective because NULLs are distinct), current/supersession
-   resolving on the monotonic `seq BIGINT GENERATED ALWAYS AS IDENTITY` (migration-0036 lesson, **not**
-   `created_at`); `reputation_aggregates` PK `(subject_user_id, market)` with `rating_avg` a Postgres
+   (`trg_reviews_immutable`); **current/supersession resolve via the backward `supersedes_review_id` pointer +
+   the `reviews_current` view** (round-4 amendment, migration 0041 — see the §3 normative note): `uq_reviews_supersedes`
+   (≤1 successor → linear chain) + `uq_reviews_root_per_direction` (one root per (sale,direction) → one head)
+   keep "one current" a DB invariant; `seq BIGINT GENERATED ALWAYS AS IDENTITY` is the reserved deterministic
+   tiebreak (migration-0036 lesson, **not** `created_at`); mutable `moderation_status`/`is_visible` live in
+   `review_states`. `reputation_aggregates` PK `(subject_user_id, market)` with `rating_avg` a Postgres
    `GENERATED … STORED` derived column (recompute-only, unforgeable — fork 7/TP-8). Reviews scope their
    offering **through the `confirmed_sale_id` FK** (the sale carries `offering_type`) — no duplicate
    `offering_type` column on `reviews` (item 5 satisfied via the sale, not a copy).
-   > **Implementation note (backend-engineer, 2026-07-10).** The ADR §3/§7-named **forward** pointer
-   > `superseded_by_id` conflicts with the reused append-only trigger — marking a predecessor superseded
-   > needs an UPDATE the trigger blocks. This FORM slice ships the ADR-named column + the correct-and-inert
-   > head partial-unique; the behaviour slice must pick (i) resolve "current" purely by `seq DESC` (à la
-   > `consents` — then drop the partial-unique), or (ii) invert to a **backward** `supersedes_review_id` set
-   > at INSERT (à la `moderation_decisions.supersedes_decision_id`) with `UNIQUE(supersedes_review_id)`.
-   > Flagged to architect (mirrors the migration-0039 markSold-transition flag).
+   > **Resolution note (backend-engineer, 2026-08-04 — AUDIT5 gate-pass).** The migration-0040 flag below was
+   > RESOLVED by migration 0041 with option (ii): the FORWARD `superseded_by_id` (which the append-only trigger
+   > could never set) was replaced by a **backward `supersedes_review_id`** set at INSERT (à la
+   > `moderation_decisions.supersedes_decision_id`), with `UNIQUE(supersedes_review_id)` (deliberately stricter —
+   > the review edit chain is linear, Q5) + `uq_reviews_root_per_direction` + the `reviews_current` view. The
+   > original flag, for the record: the ADR §3/§7-named forward pointer `superseded_by_id` conflicted with the
+   > reused append-only trigger — marking a predecessor superseded needed a blocked UPDATE.
    >
    > **Doc-change triple. WHAT:** marked FORM-item 2 (reviews + reputation_aggregates) SHIPPED-form and
    > pinned the built storage decisions (partial-unique head over the sketch's ineffective 3-col UNIQUE;

@@ -1,6 +1,6 @@
 # ADR-0021: First real outbox consumer — the in-app notification path (end the silent event layer)
 
-**Status**: Proposed
+**Status**: **Accepted** (C-3, 2026-08-04 — reconciled to reality: implemented and live. Migration 0030 (`notification_logs.type` +`IN_APP`, 5 transfer templates) landed; the worker `NotificationConsumer` is the first real `OUTBOX_CONSUMERS` entry and materialises the IN_APP path. An Accepted downstream ADR — 0039 "Builds on ADR-0020…0021" — cannot rest on a Proposed upstream; this flip closes that drift.)
 **Date**: 2026-07-03
 
 ## Context and Problem Statement

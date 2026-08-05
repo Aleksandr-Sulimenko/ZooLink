@@ -325,7 +325,10 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
       await expect(prisma.$executeRaw`INSERT INTO confirmed_sales(anchor_type, market, status) VALUES('WHOLESALE','pet','CONFIRMED')`).rejects.toThrow(/chk_confirmed_sales_anchor/i);
     });
 
-    it('CHECK chk_confirmed_sales_status: a bogus status is rejected', async () => {
+    it('CHECK chk_confirmed_sales_status: PENDING_CONFIRMATION is rejected — CONFIRMED-only fact (ADR-0038 §4 Amendment)', async () => {
+      // The narrowed CHECK (= 'CONFIRMED', migration 0041) is the Q2 gravestone: PENDING/DISPUTED/EXPIRED/
+      // CANCELLED live in sale_confirmations now; confirmed_sales holds only the CONFIRMED fact.
+      await expect(prisma.$executeRaw`INSERT INTO confirmed_sales(anchor_type, market, status) VALUES('TRANSFER','pet','PENDING_CONFIRMATION')`).rejects.toThrow(/chk_confirmed_sales_status/i);
       await expect(prisma.$executeRaw`INSERT INTO confirmed_sales(anchor_type, market, status) VALUES('TRANSFER','pet','SETTLED')`).rejects.toThrow(/chk_confirmed_sales_status/i);
     });
 
@@ -343,7 +346,8 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
 
     it('positive control: an AGENT actor_principal_type is accepted (agent-as-principal, ADR-0006)', async () => {
       // Cleanup-safe: written with anchor=LISTING_MARK_SOLD / transfer_id NULL, removed inline via the trigger toggle.
-      await prisma.$executeRaw`INSERT INTO confirmed_sales(anchor_type, market, status, actor_principal_type) VALUES('LISTING_MARK_SOLD','livestock','PENDING_CONFIRMATION','AGENT')`;
+      // status is CONFIRMED — the only value the narrowed CHECK admits (migration 0041 CONFIRMED-only fact).
+      await prisma.$executeRaw`INSERT INTO confirmed_sales(anchor_type, market, status, actor_principal_type) VALUES('LISTING_MARK_SOLD','livestock','CONFIRMED','AGENT')`;
       await prisma.$executeRaw`ALTER TABLE confirmed_sales DISABLE TRIGGER trg_confirmed_sales_immutable`.catch(() => undefined);
       await prisma.$executeRaw`DELETE FROM confirmed_sales WHERE anchor_type='LISTING_MARK_SOLD' AND actor_principal_type='AGENT' AND ownership_transfer_id IS NULL`.catch(() => undefined);
       await prisma.$executeRaw`ALTER TABLE confirmed_sales ENABLE TRIGGER trg_confirmed_sales_immutable`.catch(() => undefined);

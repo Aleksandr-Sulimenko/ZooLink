@@ -110,13 +110,19 @@ A flag (`feature_toggles`) gating phased/paid/experimental capabilities (e.g., `
 A row in `outbox_events` implementing the **Outbox pattern** for reliable event publishing to external systems.
 
 **Confirmed Sale** (`confirmed_sales`)  
-A record that a real deal closed between two identified parties, acknowledged by **both** sides (or auto-acknowledged when anchored to a COMPLETED `ownership_transfers`). The proof-of-transaction root that every **Review** must reference (FORM-first, spec 18).
+An **append-only, CONFIRMED-only FACT** that a real deal closed between two identified parties (auto-written when anchored to a COMPLETED `ownership_transfers`, or written when a **Sale Confirmation** negotiation reaches CONFIRMED). A row exists iff the sale is confirmed (`CHECK (status='CONFIRMED')`). The proof-of-transaction root every **Review** must reference (FORM-first, spec 18; ADR-0038 §4 Amendment, migration 0041).
+
+**Sale Confirmation** (`sale_confirmations`)  
+The **mutable** `markSold` negotiation lifecycle (`PENDING_CONFIRMATION → CONFIRMED/EXPIRED/CANCELLED/DISPUTED`) — the "mutable state" companion to the immutable **Confirmed Sale** fact. Reaching CONFIRMED writes the fact row (biconditional `chk_sale_conf_confirmed_link`). The `TRANSFER` anchor skips it (born-CONFIRMED). One live negotiation per listing (spec 18; ADR-0038 §4 Amendment, migration 0041).
 
 **Sale Anchor**  
-The upstream event a **Confirmed Sale** is derived from: `TRANSFER` (a COMPLETED `ownership_transfers`, strongest — animals) or `LISTING_MARK_SOLD` (seller `markSold` + buyer counter-confirmation) (spec 18).
+The upstream event a **Confirmed Sale** is derived from: `TRANSFER` (a COMPLETED `ownership_transfers`, strongest — animals; born-CONFIRMED) or `LISTING_MARK_SOLD` (seller `markSold` + buyer counter-confirmation via a **Sale Confirmation**) (spec 18).
 
 **Review** (`reviews`)  
-An append-only, one-per-(sale, direction) rating + optional text authored by one party of a **Confirmed Sale** about the other. Requires a CONFIRMED sale (proof-of-transaction) (FORM-first, spec 18).
+An append-only, one-current-per-(sale, direction) rating + optional text authored by one party of a **Confirmed Sale** about the other. Requires a CONFIRMED sale (proof-of-transaction). An edit-in-grace is a new row naming its predecessor via the backward `supersedes_review_id`; the current one is resolved by the `reviews_current` view (FORM-first, spec 18; ADR-0039 §3 Amendment, migration 0041).
+
+**Review State** (`review_states`)  
+The **mutable** per-review moderation status (`PENDING/APPROVED/REJECTED/CHANGES_REQUESTED`) + double-blind `is_visible` — the "mutable state" companion to the immutable **Review** fact; keyed on `review_id`, read by join (spec 18; ADR-0039 §3 Amendment β, migration 0041).
 
 **Review Direction**  
 `BUYER_ON_SELLER` or `SELLER_ON_BUYER` — reputation is **two-sided**; both parties can rate each other (spec 18).

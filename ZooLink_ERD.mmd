@@ -189,18 +189,40 @@ erDiagram
         UUID seller_organization_id FK "reserved org side"
         UUID buyer_organization_id FK "reserved org side"
         VARCHAR_20 anchor_type "TRANSFER|LISTING_MARK_SOLD"
-        UUID ownership_transfer_id FK "UNIQUE — one sale per transfer (mirror INV-4); set when anchor=TRANSFER"
-        VARCHAR_24 status "PENDING_CONFIRMATION|CONFIRMED|DISPUTED|EXPIRED|CANCELLED"
-        UUID nominated_buyer_user_id FK "RESERVED form-now (markSold counter-confirm path)"
-        TIMESTAMPTZ seller_confirmed_at
-        TIMESTAMPTZ buyer_confirmed_at "auto-set on the TRANSFER anchor"
-        TIMESTAMPTZ confirmed_at
-        TIMESTAMPTZ expires_at "PENDING_CONFIRMATION horizon (markSold path)"
+        UUID ownership_transfer_id FK "UNIQUE (full, Q1) — one sale per transfer (mirror INV-4); set when anchor=TRANSFER"
+        VARCHAR_24 status "CONFIRMED-only (chk=CONFIRMED, Q2 gravestone); lifecycle lives in sale_confirmations"
+        TIMESTAMPTZ confirmed_at "instant the fact was born"
         BIGINT amount_minor "RESERVED, off-record default (owner 2026-07-09); NO path writes it"
         UUID actor_id FK "actor snapshot (ADR-0006/0011): the accepting actor on the transfer path"
         VARCHAR_10 actor_principal_type "HUMAN|AGENT"
         TIMESTAMPTZ created_at
-        %% Append-only (trg_confirmed_sales_immutable, reused). DORMANT capture: no consumer, no endpoint reads it. Auto-CONFIRMED in-tx at transfer completion (ADR-0038 §1/§3).
+        %% Append-only CONFIRMED-only FACT (trg_confirmed_sales_immutable, reused; ADR-0038 §4 Amendment / mig 0041). DORMANT capture: no consumer. Auto-CONFIRMED in-tx at transfer completion. Negotiation lifecycle → sale_confirmations.
+    }
+
+    %% sale_confirmations: ADR-0038 §4 Amendment (migration 0041). MUTABLE markSold negotiation companion. DORMANT.
+    sale_confirmations {
+        UUID id PK
+        VARCHAR_30 offering_type "polymorphic subject (mig 0032 dialect)"
+        UUID offering_id
+        UUID listing_id FK "markSold anchor listing"
+        UUID animal_id FK
+        VARCHAR_9 market "pet|livestock (ADR-0002)"
+        UUID seller_user_id FK
+        UUID buyer_user_id FK
+        UUID seller_organization_id FK
+        UUID buyer_organization_id FK
+        UUID nominated_buyer_user_id FK "markSold buyer nomination"
+        VARCHAR_20 anchor_type "LISTING_MARK_SOLD"
+        VARCHAR_24 status "MUTABLE PENDING_CONFIRMATION|CONFIRMED|DISPUTED|EXPIRED|CANCELLED"
+        TIMESTAMPTZ seller_confirmed_at
+        TIMESTAMPTZ buyer_confirmed_at
+        TIMESTAMPTZ expires_at "PENDING horizon (uq_sale_conf_live_per_listing frees a cancelled/expired listing)"
+        UUID confirmed_sale_id FK "back-pointer to the FACT, set at CONFIRM (biconditional chk_sale_conf_confirmed_link)"
+        UUID actor_id FK "actor snapshot (ADR-0006/0011)"
+        VARCHAR_10 actor_principal_type "HUMAN|AGENT"
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at "MUTABLE (update_updated_at_column trigger)"
+        %% Mutable negotiation state (the "mutable state" half of fact+state). TRANSFER path never writes here. DORMANT behind feature_toggles.sale_buyer_confirmation.
     }
 
     %% reviews: ADR-0039 reputation FORM-slice #2 (migration 0040). Append-only, one-current-per-(sale,direction). DORMANT.
@@ -213,17 +235,28 @@ erDiagram
         VARCHAR_9 market "copied from the sale; pet|livestock (ADR-0002)"
         SMALLINT rating "1..5 (chk_reviews_rating)"
         TEXT body "optional; moderated like listing content (ADR-0040 §2)"
-        VARCHAR_20 moderation_status "PENDING|APPROVED|REJECTED|CHANGES_REQUESTED"
-        BOOLEAN is_visible "double-blind release gate (fork 2); DEFAULT false"
-        UUID superseded_by_id FK "edit-within-grace = new row (fork 3); see mig 0040 DESIGN NOTE"
+        UUID supersedes_review_id FK "BACKWARD supersede pointer (ADR-0039 §3 Amendment / mig 0041); RESTRICT; moderation_decisions model"
         SMALLINT facet_description_accuracy "RESERVED DORMANT facet (fork 5)"
         SMALLINT facet_communication "RESERVED DORMANT facet"
         SMALLINT facet_as_described "RESERVED DORMANT facet"
         UUID actor_id FK "actor snapshot (ADR-0006/0011)"
         VARCHAR_10 actor_principal_type "HUMAN|AGENT (authoring OFF, ADR-0040 §3)"
-        BIGINT seq "GENERATED — monotonic current/supersede order (mig 0036 lesson), NOT created_at"
+        BIGINT seq "GENERATED — reserved deterministic tiebreak (mig 0036 lesson), NOT created_at"
         TIMESTAMPTZ created_at
-        %% Append-only (trg_reviews_immutable, reused). ONE head per (sale,direction) via partial-unique WHERE superseded_by_id IS NULL. DORMANT — behaviour behind feature_toggles.reputation_reviews.
+        %% Append-only (trg_reviews_immutable). uq_reviews_supersedes (≤1 successor, LINEAR, Q5) + uq_reviews_root_per_direction (one root, Q6) ⇒ one head; VIEW reviews_current resolves it. Moderation/visibility → review_states. DORMANT.
+    }
+
+    %% review_states: ADR-0039 §3 Amendment β (migration 0041). MUTABLE moderation + visibility companion. DORMANT.
+    review_states {
+        UUID review_id PK "FK reviews ON DELETE CASCADE"
+        VARCHAR_20 moderation_status "MUTABLE PENDING|APPROVED|REJECTED|CHANGES_REQUESTED"
+        BOOLEAN is_visible "double-blind release gate (fork 2); DEFAULT false"
+        TIMESTAMPTZ moderated_at
+        UUID actor_id FK "who moved the state (moderator/agent)"
+        VARCHAR_10 actor_principal_type "HUMAN|AGENT"
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at "MUTABLE (update_updated_at_column trigger)"
+        %% Mutable per-review state (the "mutable state" half of fact+state, symmetric with sale_confirmations). reviews.id stays stable; reads join. DORMANT behind feature_toggles.reputation_reviews.
     }
 
     %% reputation_aggregates: ADR-0039 §1/§2 derived per-(subject,market) rating cache (migration 0040). NOT append-only. DORMANT.
@@ -618,8 +651,12 @@ erDiagram
     animals ||..o{ confirmed_sales : "sale of (transfer anchor)"
     users ||..o{ confirmed_sales : "seller/buyer/actor"
     confirmed_sales ||..o{ reviews : "proof-of-transaction root (ADR-0039)"
+    confirmed_sales |o..o{ sale_confirmations : "fact produced by a CONFIRMED negotiation (ADR-0038 §4 Amendment)"
+    listings ||..o{ sale_confirmations : "markSold negotiation subject"
+    users ||..o{ sale_confirmations : "seller/buyer/nominated/actor"
     users ||..o{ reviews : "reviewer/subject/actor"
-    reviews |o..o| reviews : "superseded by (edit-within-grace)"
+    reviews |o..o| reviews : "supersedes (edit-within-grace, backward pointer)"
+    reviews ||..|| review_states : "mutable moderation + visibility state (ADR-0039 §3 Amendment β)"
     users ||..o{ reputation_aggregates : "per-market rating subject (ADR-0002)"
     animals ||..o{ digital_assets : "tokenized as"
     animals }o..|| animals : "mother of"

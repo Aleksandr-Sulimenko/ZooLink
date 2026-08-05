@@ -752,8 +752,9 @@ export class TransferService {
         buyer_user_id: row.to_user_id,
         buyer_organization_id: row.to_organization_id,
         status: 'CONFIRMED',
-        seller_confirmed_at: now,
-        buyer_confirmed_at: now, // auto-set on the TRANSFER anchor (already two-sided; no counter-confirm)
+        // confirmed_sales is a CONFIRMED-ONLY fact (ADR-0038 §4 Amendment / migration 0041): the negotiation
+        // timestamps (seller_/buyer_confirmed_at) moved to sale_confirmations; the transfer path is born CONFIRMED,
+        // and confirmed_at alone marks when the fact came into being.
         confirmed_at: now,
         // actor snapshot (ADR-0006/0011): the responding (accepting) actor.
         actor_id: actor.userId,

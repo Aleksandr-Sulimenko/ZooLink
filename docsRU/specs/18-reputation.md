@@ -151,10 +151,33 @@ Append-only, один-на-(сделку,направление) рейтинг 
 > `database_schema.sql` + миграции **после** развилок владельца (§10) и ADR (§11). Столбцы, помеченные
 > *(развилка)*, зависят от ответа владельца. Все сущности **append-only** и несут пару снимка актёра по
 > ADR-0006.
+>
+> **(раунд-4, нормативно — AUDIT5 gate-pass 2026-08-04; миграции 0039–0041) — разделение ФАКТ / СОСТОЯНИЕ.**
+> Эскизы §3.1/§3.2 моделировали *машину состояний на append-only таблице* — самопротиворечие, которое
+> канонная схема снимает, разделяя **неизменяемый ФАКТ** и **изменяемое СОСТОЯНИЕ** (ADR-0038 §4 Дополнение,
+> ADR-0039 §3 Дополнение):
+> - **`confirmed_sales` — это только-CONFIRMED ФАКТ** — строка существует тогда и только тогда, когда сделка
+>   подтверждена (`CHECK (status='CONFIRMED')`, без DEFAULT; полный словарь и колонки намерения
+>   `nominated_buyer_user_id`/`seller_confirmed_at`/`buyer_confirmed_at`/`expires_at` удалены). Полный
+>   `UNIQUE(ownership_transfer_id)` остаётся. `confirm_expires_at` из эскиза §3.1 всегда был `expires_at`
+>   в схеме — и теперь он живёт на `sale_confirmations`, не здесь.
+> - **`sale_confirmations` (НОВАЯ, изменяемая)** несёт жизненный цикл `markSold` PENDING→CONFIRMED/EXPIRED/CANCELLED/
+>   DISPUTED (`expires_at`, `seller_/buyer_confirmed_at`, `nominated_buyer_user_id`), биусловие
+>   `chk_sale_conf_confirmed_link` и `uq_sale_conf_live_per_listing` (одни живые на листинг).
+>   Путь TRANSFER сюда никогда не пишет.
+> - **`reviews`** использует **обратный** `supersedes_review_id` (не прямой `superseded_by_id` из §3.2); «текущая»
+>   разрешается через view **`reviews_current`** (`uq_reviews_supersedes` линейная цепочка + `uq_reviews_root_per_direction`
+>   один корень). **Изменяемые `moderation_status`/`is_visible` перенесены в спутника `review_states`.**
+>
+> Машина состояний §4 ниже нормативно читается как оперирующая над **`sale_confirmations`** (переговоры);
+> достижение CONFIRMED записывает неизменяемую строку-факт `confirmed_sales`.
 
 ### 3.1 `confirmed_sales` — источник истины (кандидат FORM-сейчас)
+> **ЗАМЕЩЕНО раунд-4 разделением ФАКТ/СОСТОЯНИЕ (см. нормативную заметку выше; миграции 0039–0041).**
+> Канонный `confirmed_sales` — только-CONFIRMED (без машины `status`, без `confirm_expires_at`); переговорный
+> жизненный цикл ниже живёт в `sale_confirmations`. Этот блок сохранён лишь как историческая исходная форма.
 ```sql
--- ЭСКИЗ — не канон. Append-only запись сделки; сигнал, который мы сегодня безвозвратно теряем.
+-- ЭСКИЗ — не канон (ЗАМЕЩЕНО, раунд-4). Append-only запись сделки; сигнал, который мы сегодня безвозвратно теряем.
 CREATE TABLE confirmed_sales (
     id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     -- Что продано (полиморфный субъект, чтобы тот же примитив позже обслуживал услуги/товары)
@@ -194,8 +217,12 @@ CREATE INDEX idx_confirmed_sales_confirm_scan
 ```
 
 ### 3.2 `reviews` — append-only, под гейтом доказательства транзакции (поведение под гейтом)
+> **ЗАМЕЩЕНО раунд-4 разделением ФАКТ/СОСТОЯНИЕ (см. нормативную заметку выше; миграции 0040–0041).**
+> Канонный `reviews` использует **обратный** `supersedes_review_id` (не прямой `superseded_by_id` ниже), с
+> `uq_reviews_supersedes` + `uq_reviews_root_per_direction` + view `reviews_current`; `moderation_status`/
+> `is_visible` живут в `review_states`. Этот блок сохранён лишь как историческая исходная форма.
 ```sql
--- ЭСКИЗ — не канон. Один отзыв на (сделку, направление). Append-only (правка = новая замещающая строка).
+-- ЭСКИЗ — не канон (ЗАМЕЩЕНО, раунд-4). Один отзыв на (сделку, направление). Append-only (правка = новая замещающая строка).
 CREATE TABLE reviews (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     confirmed_sale_id UUID NOT NULL REFERENCES confirmed_sales(id) ON DELETE CASCADE, -- доказательство txn
@@ -248,34 +275,39 @@ CREATE TABLE reputation_aggregates (
 
 ## 4. Машина состояний — поток подтверждения сделки
 
-**Сущность:** строка `confirmed_sales`. **Триггеры/условия** ниже. Терминальные состояния: `CONFIRMED`,
+**Сущность (раунд-4, нормативно):** строка **`sale_confirmations`** (изменяемые переговоры; ADR-0038 §4
+Дополнение). Достижение `CONFIRMED` рождает — в **той же транзакции** — неизменяемую строку-**факт**
+`confirmed_sales` и ставит `sale_confirmations.confirmed_sale_id` на неё (биусловие
+`chk_sale_conf_confirmed_link`). **Якорь TRANSFER** пропускает переговоры целиком: он пишет рождённую-`CONFIRMED`
+строку-факт `confirmed_sales` напрямую (без строки `sale_confirmations`). Терминальные состояния: `CONFIRMED`,
 `EXPIRED`, `CANCELLED` (и `DISPUTED` → возвращается в CONFIRMED или CANCELLED через модерацию).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING_CONFIRMATION: продавец markSold + номинирует покупателя  (anchor=LISTING_MARK_SOLD)
-    [*] --> CONFIRMED: ownership_transfers COMPLETED  (anchor=TRANSFER — уже двусторонне)
-    PENDING_CONFIRMATION --> CONFIRMED: покупатель встречно подтверждает (now <= confirm_expires_at)
+    [*] --> PENDING_CONFIRMATION: продавец markSold + номинирует покупателя  (sale_confirmations, anchor=LISTING_MARK_SOLD)
+    [*] --> CONFIRMED: ownership_transfers COMPLETED  (строка-факт confirmed_sales рождается напрямую, anchor=TRANSFER)
+    PENDING_CONFIRMATION --> CONFIRMED: покупатель встречно подтверждает (now <= expires_at) → пишет факт confirmed_sales in-tx
     PENDING_CONFIRMATION --> DISPUTED: любая сторона оспаривает («этой сделки не было»)
-    PENDING_CONFIRMATION --> EXPIRED: now > confirm_expires_at (нет подтверждения) → слабая/неподтверждённая
+    PENDING_CONFIRMATION --> EXPIRED: now > expires_at (нет подтверждения) → слабая/неподтверждённая
     PENDING_CONFIRMATION --> CANCELLED: продавец отзывает до подтверждения
-    DISPUTED --> CONFIRMED: модерация подтверждает сделку
+    DISPUTED --> CONFIRMED: модерация подтверждает сделку → пишет факт confirmed_sales in-tx
     DISPUTED --> CANCELLED: модерация аннулирует сделку
     CONFIRMED --> [*]: открывается окно отзывов (см. жизненный цикл отзыва)
     EXPIRED --> [*]: сигнал захвачен; отзывов НЕТ
-    CANCELLED --> [*]: терминал (можно создать новую запись сделки)
+    CANCELLED --> [*]: терминал (uq_sale_conf_live_per_listing освобождает листинг для новой попытки)
 ```
 
-**Условия переходов (нормативно):**
+**Условия переходов (нормативно):** — переговорные переходы мутируют `sale_confirmations`; CONFIRMED-рёбра
+дополнительно делают INSERT факта `confirmed_sales` в той же транзакции.
 | Из → В | Триггер | Условие (все должны выполняться) |
 |---|---|---|
-| ∅ → CONFIRMED | `OwnershipTransfer.Accepted` (завершение передачи = accept, §10) | anchor=`TRANSFER`; стороны = from/to передачи; авто-подтверждение (передача уже двусторонняя по ADR-0013) |
-| ∅ → PENDING_CONFIRMATION | продавец `markSold` | вызывающий владеет объявлением; покупатель номинирован; объявление было `ACTIVE`; нет живой сделки по этому объявлению |
-| PENDING → CONFIRMED | подтверждение покупателя | вызывающий = номинированный покупатель; `now <= confirm_expires_at`; статус ещё PENDING |
+| ∅ → CONFIRMED (факт) | `OwnershipTransfer.Accepted` (завершение передачи = accept, §10) | anchor=`TRANSFER`; стороны = from/to передачи; авто-подтверждение (передача уже двусторонняя по ADR-0013); рождённая-CONFIRMED `confirmed_sales`, без строки `sale_confirmations` |
+| ∅ → PENDING_CONFIRMATION | продавец `markSold` | вызывающий владеет объявлением; покупатель номинирован; объявление было `ACTIVE`; нет живой `sale_confirmations` по этому объявлению (`uq_sale_conf_live_per_listing`) |
+| PENDING → CONFIRMED | подтверждение покупателя | вызывающий = номинированный покупатель; `now <= expires_at`; статус ещё PENDING; INSERT факта `confirmed_sales` + установка `confirmed_sale_id` в той же транзакции |
 | PENDING → DISPUTED | спор | вызывающий — сторона; статус PENDING; указана причина → reason code модерации |
-| PENDING → EXPIRED | тик планировщика | `now > confirm_expires_at` (маркер идемпотентной эмиссии, по образцу transfer-expiry sweeper H3) |
+| PENDING → EXPIRED | тик планировщика | `now > expires_at` (маркер идемпотентной эмиссии, по образцу transfer-expiry sweeper H3) |
 | PENDING → CANCELLED | отзыв продавцом | вызывающий = продавец; статус PENDING |
-| DISPUTED → CONFIRMED/CANCELLED | решение модерации | у актёра есть ability модерации; решение записано в `moderation_decisions` (снимок актёра) |
+| DISPUTED → CONFIRMED/CANCELLED | решение модерации | у актёра есть ability модерации; решение записано в `moderation_decisions` (снимок актёра); CONFIRMED пишет факт `confirmed_sales` in-tx |
 
 **Жизненный цикл отзыва (на направление, открывается при CONFIRMED):**
 `ELIGIBLE (окно открыто) → SUBMITTED (в ожидании модерации) → APPROVED+раскрыт (double-blind) →`
@@ -309,13 +341,15 @@ Feature: Двусторонняя подтверждённая сделка
 
   Scenario: markSold по объявлению требует встречного подтверждения покупателя
     Given продавец S помечает объявление L SOLD и номинирует покупателя B
-    Then создаётся строка confirmed_sales со статусом 'PENDING_CONFIRMATION'
-    And confirm_expires_at устанавливается в now + <confirm_window> дней
-    When покупатель B подтверждает до confirm_expires_at
-    Then статус становится 'CONFIRMED' и открывается окно отзывов
-    When покупатель B никогда не подтверждает и now > confirm_expires_at
-    Then тик планировщика ставит статус 'EXPIRED'
-    And сигнал сделки захвачен, но отзыв создать НЕЛЬЗЯ
+    Then создаётся строка sale_confirmations со статусом 'PENDING_CONFIRMATION'
+    And expires_at устанавливается в now + <confirm_window> дней
+    When покупатель B подтверждает до expires_at
+    Then строка-факт confirmed_sales пишется в той же транзакции, sale_confirmations.status становится 'CONFIRMED'
+    And sale_confirmations.confirmed_sale_id указывает на этот факт (chk_sale_conf_confirmed_link)
+    And открывается окно отзывов
+    When покупатель B никогда не подтверждает и now > expires_at
+    Then тик планировщика ставит sale_confirmations.status 'EXPIRED'
+    And сигнал сделки захвачен, но факт confirmed_sales НЕ создаётся и отзыв создать НЕЛЬЗЯ
 
   Scenario: Доказательство транзакции блокирует фейковый отзыв
     Given пользователь U не является стороной ни одной подтверждённой сделки с субъектом X
@@ -371,8 +405,8 @@ Feature: Двусторонняя подтверждённая сделка
   на пути события, не на чтении.
 - **Надёжность:** истечение подтверждения и закрытие окна double-blind работают на **существующем
   паттерне планировщика/sweeper** (transfer-expiry sweeper, H3; SLA-tick advisory lock) — никогда не
-  lazy-on-read (избегаем дефекта-остатка F4). Маркеры идемпотентной эмиссии (`confirmed_at`/
-  `confirm_expires_at` по образцу `escalated_at`).
+  lazy-on-read (избегаем дефекта-остатка F4). Маркеры идемпотентной эмиссии (`confirmed_sales.confirmed_at` /
+  `sale_confirmations.expires_at` по образцу `escalated_at`).
 - **Согласованность / конкурентность:** создание подтверждённой сделки из передачи пишется **в той же
   транзакции**, что и завершение передачи (transactional-outbox), поэтому сигнал не теряется. `UNIQUE
   (ownership_transfer_id)` предотвращает дубликат сделки на передачу (по образцу INV-4).
@@ -457,21 +491,23 @@ Feature: Двусторонняя подтверждённая сделка
 2. **✅ ОТГРУЖЕНО-form (2026-07-10, миграция 0040 / ADR-0039).** **`reviews` + `reputation_aggregates`
    созданы СПЯЩИМИ** (поверх `confirmed_sales`, FORM-пункт 1 / миграция 0039), с переиспользованием
    append-only-триггера. Эндпоинтов чтения/записи нет, пути пересчёта нет. `reviews` — append-only
-   (`trg_reviews_immutable`), один-ТЕКУЩИЙ-на-(сделку, направление) через частичный уникальный
-   `uq_reviews_current_per_direction … WHERE superseded_by_id IS NULL` (форма transfer INV-4 — простой
-   3-колоночный `UNIQUE(sale,direction,superseded_by_id)` неэффективен, т.к. NULL-ы различны),
-   текущий/замещение разрешаются по монотонному `seq BIGINT GENERATED ALWAYS AS IDENTITY` (урок миграции
-   0036, **не** `created_at`); `reputation_aggregates` PK `(subject_user_id, market)`, `rating_avg` —
+   (`trg_reviews_immutable`); **текущий/замещение разрешаются через обратный указатель `supersedes_review_id` +
+   view `reviews_current`** (дополнение раунд-4, миграция 0041 — см. нормативную заметку §3): `uq_reviews_supersedes`
+   (≤1 преемник → линейная цепочка) + `uq_reviews_root_per_direction` (один корень на (sale,direction) → одна голова)
+   держат «один текущий» DB-инвариантом; `seq BIGINT GENERATED ALWAYS AS IDENTITY` — зарезервированный
+   детерминированный tie-break (урок миграции 0036, **не** `created_at`); изменяемые
+   `moderation_status`/`is_visible` живут в `review_states`. `reputation_aggregates` PK
+   `(subject_user_id, market)`, `rating_avg` —
    производная колонка Postgres `GENERATED … STORED` (только-пересчёт, неподделываемая — форк 7/TP-8).
    Отзывы определяют своё предложение **через FK `confirmed_sale_id`** (сделка несёт `offering_type`) —
    без дублирующей колонки `offering_type` на `reviews` (пункт 5 выполнен через сделку, не копией).
-   > **Примечание по реализации (backend-engineer, 2026-07-10).** Named в ADR §3/§7 **прямой** указатель
-   > `superseded_by_id` конфликтует с переиспользованным append-only-триггером — пометка предшественника
-   > замещённым требует UPDATE, который триггер блокирует. Этот FORM-слайс отгружает ADR-именованную
-   > колонку + корректный-и-инертный head partial-unique; слайс поведения выбирает (i) разрешать «текущий»
-   > чисто по `seq DESC` (как `consents` — тогда убрать partial-unique) или (ii) инвертировать в **обратный**
-   > `supersedes_review_id`, ставящийся при INSERT (как `moderation_decisions.supersedes_decision_id`), с
-   > `UNIQUE(supersedes_review_id)`. Отмечено архитектору (зеркалит флаг перехода markSold из миграции 0039).
+   > **Примечание о разрешении (backend-engineer, 2026-08-04 — AUDIT5 gate-pass).** Флаг миграции 0040 ниже
+   > РАЗРЕШЁН миграцией 0041 вариантом (ii): ПРЯМОЙ `superseded_by_id` (который append-only-триггер никогда не
+   > мог установить) заменён на **обратный `supersedes_review_id`**, ставящийся при INSERT (как
+   > `moderation_decisions.supersedes_decision_id`), с `UNIQUE(supersedes_review_id)` (намеренно строже — цепочка
+   > правок отзыва линейна, Q5) + `uq_reviews_root_per_direction` + view `reviews_current`. Исходный флаг, для
+   > протокола: named в ADR §3/§7 прямой указатель `superseded_by_id` конфликтовал с переиспользованным
+   > append-only-триггером — пометка предшественника замещённым требовала заблокированного UPDATE.
    >
    > **Триплет изменения доков. ЧТО:** пункт 2 FORM (reviews + reputation_aggregates) помечен
    > ОТГРУЖЕНО-form, зафиксированы построенные решения хранения (head partial-unique вместо неэффективного

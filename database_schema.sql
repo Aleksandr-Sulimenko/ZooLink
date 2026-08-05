@@ -631,10 +631,13 @@ CREATE INDEX idx_owntransfer_to_user  ON ownership_transfers(to_user_id)        
 -- with the transfer accept so the strongest sale signal is never lost) or a listing markSold (buyer
 -- counter-confirmation, deferred behind feature_toggles.sale_buyer_confirmation). DORMANT capture in MVP
 -- (no consumer, no endpoint reads it). Immutable via the REUSED trg_block_modify_append_only trigger.
--- APPEND-ONLY vs the status machine: in the FORM slice the transfer path writes a single terminal
--- CONFIRMED row that never transitions (append-only holds byte-for-byte); the markSold
--- PENDING_CONFIRMATION → CONFIRMED transition mechanics (superseding-row vs. relaxed guard) are deferred
--- to the behaviour slice — the full status vocabulary is reserved in the CHECK now, only CONFIRMED is produced.
+-- CONFIRMED-ONLY FACT (ADR-0038 §4 Amendment, migration 0041): a confirmed_sales row EXISTS iff a sale is a
+-- CONFIRMED fact — append-only + suffices with the single terminal status. The PENDING/negotiation lifecycle
+-- (markSold buyer counter-confirmation) does NOT live here; it lives in the mutable companion `sale_confirmations`
+-- (the project pattern "immutable fact + mutable state", symmetric with reviews/review_states). A row is born
+-- CONFIRMED and never transitions, so the append-only trigger holds byte-for-byte and no status-machine edge is
+-- ever blocked. `status` keeps a narrowed CHECK (= 'CONFIRMED') as a Q2 gravestone: a value that once existed and
+-- was NARROWED (not silently dropped) tells a future reader where PENDING went.
 CREATE TABLE confirmed_sales (
     id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     -- What was sold (polymorphic subject; migration 0032 dialect / ADR-0014 seam / ADR-0038 §2). No FK on
@@ -656,17 +659,15 @@ CREATE TABLE confirmed_sales (
     buyer_user_id          UUID REFERENCES users(id) ON DELETE SET NULL,
     seller_organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     buyer_organization_id  UUID REFERENCES organizations(id) ON DELETE SET NULL,
-    -- Anchor + lifecycle (spec 18 §4 state machine).
+    -- Anchor (ADR-0038 §1). A row is a CONFIRMED fact — no lifecycle columns here (they moved to
+    -- sale_confirmations, ADR-0038 §4 Amendment / migration 0041).
     anchor_type            VARCHAR(20) NOT NULL,
     ownership_transfer_id  UUID REFERENCES ownership_transfers(id) ON DELETE SET NULL, -- set when anchor='TRANSFER'
-    status                 VARCHAR(24) NOT NULL DEFAULT 'PENDING_CONFIRMATION',
-    -- markSold buyer-nomination — RESERVED form-now (ADR-0038 §4 item 3); the counter-confirmation flow
-    -- (feature_toggles.sale_buyer_confirmation) uses it without a schema change. Unused by the transfer path.
-    nominated_buyer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    seller_confirmed_at    TIMESTAMP WITH TIME ZONE,  -- markSold / transfer-complete time (asserting side)
-    buyer_confirmed_at     TIMESTAMP WITH TIME ZONE,  -- buyer counter-confirm (auto-set on the TRANSFER anchor)
-    confirmed_at           TIMESTAMP WITH TIME ZONE,  -- set once status→CONFIRMED (both acked)
-    expires_at             TIMESTAMP WITH TIME ZONE,  -- PENDING_CONFIRMATION timeout horizon (markSold path)
+    -- status is NO LONGER a machine: a row EXISTS iff the sale is confirmed. Kept (narrowed CHECK, no DEFAULT)
+    -- as a Q2 gravestone — the writer must state 'CONFIRMED' explicitly. The PENDING/DISPUTED/EXPIRED/CANCELLED
+    -- lifecycle lives in sale_confirmations.
+    status                 VARCHAR(24) NOT NULL,
+    confirmed_at           TIMESTAMP WITH TIME ZONE,  -- the instant the fact was born (status is CONFIRMED)
     -- RESERVED nullable, OFF-record default (owner decision 2026-07-09, ADR-0038 Open-Q1): NO code path
     -- writes it in the FORM slice. Capture behaviour decided with finance + legal at payments activation.
     amount_minor           BIGINT,
@@ -679,32 +680,95 @@ CREATE TABLE confirmed_sales (
     CONSTRAINT chk_confirmed_sales_offering_type CHECK (offering_type IN ('ANIMAL_LISTING')),
     CONSTRAINT chk_confirmed_sales_market        CHECK (market IN ('pet','livestock')),
     CONSTRAINT chk_confirmed_sales_anchor        CHECK (anchor_type IN ('TRANSFER','LISTING_MARK_SOLD')),
-    CONSTRAINT chk_confirmed_sales_status        CHECK (status IN
-        ('PENDING_CONFIRMATION','CONFIRMED','DISPUTED','EXPIRED','CANCELLED')),
+    -- Q2 gravestone (ADR-0038 §4 Amendment): a confirmed_sales row IS a confirmed fact — narrowed from the old
+    -- 5-value machine to the single terminal value. PENDING/DISPUTED/EXPIRED/CANCELLED now live in sale_confirmations.
+    CONSTRAINT chk_confirmed_sales_status        CHECK (status = 'CONFIRMED'),
     CONSTRAINT chk_confirmed_sales_actor_ptype   CHECK (actor_principal_type IN ('HUMAN','AGENT')),
-    -- One confirmed sale per anchored transfer (mirror of ownership_transfers INV-4). NULLs are distinct in
-    -- Postgres, so the markSold path (ownership_transfer_id NULL) is unconstrained — correct.
+    -- One confirmed sale per anchored transfer (mirror of ownership_transfers INV-4). FULL UNIQUE (Q1): on a
+    -- CONFIRMED-only fact a confirmed transfer-sale is permanent and is never replaced (cancel/dispute AFTER
+    -- confirmation is a NEW record about the fact, never a mutation of it — ADR-0040 dispute = content_report).
+    -- NULLs are distinct in Postgres, so the markSold path (ownership_transfer_id NULL) is unconstrained — correct.
     CONSTRAINT uq_confirmed_sales_transfer       UNIQUE (ownership_transfer_id)
 );
 CREATE INDEX idx_confirmed_sales_subject      ON confirmed_sales(offering_type, offering_id);
 CREATE INDEX idx_confirmed_sales_parties      ON confirmed_sales(seller_user_id, buyer_user_id);
 CREATE INDEX idx_confirmed_sales_animal       ON confirmed_sales(animal_id);
-CREATE INDEX idx_confirmed_sales_confirm_scan ON confirmed_sales(expires_at) WHERE status = 'PENDING_CONFIRMATION';
+-- (idx_confirmed_sales_confirm_scan dropped — it predicated on status='PENDING_CONFIRMATION' + expires_at, both
+--  of which moved to sale_confirmations, ADR-0038 §4 Amendment / migration 0041.)
 -- Append-only immutability — REUSE the shared trigger function (ADR-0038 §5; do NOT invent a second path).
 CREATE TRIGGER trg_confirmed_sales_immutable
 BEFORE UPDATE OR DELETE ON confirmed_sales
 FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
-COMMENT ON TABLE confirmed_sales IS 'ADR-0038: first-class, append-only record-of-truth that a real deal happened (proof-of-transaction root for reputation, ADR-0039). Anchored to a COMPLETED ownership_transfers (auto-CONFIRMED, in-tx) or a listing markSold (deferred). DORMANT capture in MVP.';
+COMMENT ON TABLE confirmed_sales IS 'ADR-0038: first-class, append-only, CONFIRMED-ONLY record-of-truth that a real deal happened (proof-of-transaction root for reputation, ADR-0039). A row EXISTS iff the sale is a confirmed fact (§4 Amendment / migration 0041); the PENDING/negotiation lifecycle lives in the mutable companion sale_confirmations. Anchored to a COMPLETED ownership_transfers (auto-CONFIRMED, in-tx) or a listing markSold CONFIRM (deferred). DORMANT capture in MVP.';
+COMMENT ON CONSTRAINT chk_confirmed_sales_status ON confirmed_sales IS 'Q2 gravestone (ADR-0038 §4 Amendment): PENDING/DISPUTED/EXPIRED/CANCELLED live in sale_confirmations — confirmed_sales holds only the CONFIRMED fact. Narrowed (not dropped) from the former 5-value machine so a future reader sees where PENDING went.';
+
+-- ========== sale_confirmations — MUTABLE negotiation companion (ADR-0038 §4 Amendment; migration 0041) ==========
+-- FORM/DORMANT: the markSold buyer-counter-confirmation lifecycle (PENDING_CONFIRMATION → CONFIRMED/EXPIRED/
+-- CANCELLED/DISPUTED). Behaviour behind feature_toggles.sale_buyer_confirmation (OFF). This is the "mutable
+-- state" half of the project's "immutable fact + mutable state" pattern (symmetric with reviews/review_states):
+-- confirmed_sales holds the append-only FACT, sale_confirmations holds the in-flight NEGOTIATION.
+-- The TRANSFER path NEVER writes here — a completed transfer is born CONFIRMED directly in confirmed_sales.
+-- When a negotiation resolves to CONFIRMED, the SAME transaction INSERTs the confirmed_sales fact row and sets
+-- confirmed_sale_id here; the biconditional chk_sale_conf_confirmed_link (mirror of chk_moddec_override) makes
+-- "CONFIRMED negotiation ⇔ has produced its fact row" a checkable one-query invariant.
+CREATE TABLE sale_confirmations (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- Deal-in-negotiation subject — same polymorphic shape as confirmed_sales (migration 0032 dialect).
+    offering_type           VARCHAR(30) NOT NULL DEFAULT 'ANIMAL_LISTING',
+    offering_id             UUID,
+    listing_id              UUID REFERENCES listings(id) ON DELETE SET NULL,
+    animal_id               UUID REFERENCES animals(id)  ON DELETE SET NULL,
+    market                  VARCHAR(9)  NOT NULL,
+    -- Parties (exactly-one-of user/org per side enforced by the writer, form-now — no DB CHECK, mirrors confirmed_sales).
+    seller_user_id          UUID REFERENCES users(id) ON DELETE SET NULL,
+    buyer_user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    seller_organization_id  UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    buyer_organization_id   UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    nominated_buyer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    anchor_type             VARCHAR(20) NOT NULL DEFAULT 'LISTING_MARK_SOLD',
+    -- MUTABLE lifecycle — the whole point of the split.
+    status                  VARCHAR(24) NOT NULL DEFAULT 'PENDING_CONFIRMATION',
+    seller_confirmed_at     TIMESTAMP WITH TIME ZONE,  -- markSold time (seller side)
+    buyer_confirmed_at      TIMESTAMP WITH TIME ZONE,  -- buyer counter-confirm
+    expires_at              TIMESTAMP WITH TIME ZONE,  -- PENDING_CONFIRMATION timeout horizon
+    -- Back-pointer to the FACT, set once negotiation resolves to CONFIRMED (NULL before that).
+    confirmed_sale_id       UUID REFERENCES confirmed_sales(id) ON DELETE SET NULL,
+    -- Actor snapshot (ADR-0006/0011).
+    actor_id                UUID REFERENCES users(id) ON DELETE SET NULL,
+    actor_principal_type    VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- MUTABLE: updated_at trigger auto-attached below
+    CONSTRAINT chk_sale_conf_status      CHECK (status IN
+        ('PENDING_CONFIRMATION','CONFIRMED','DISPUTED','EXPIRED','CANCELLED')),
+    CONSTRAINT chk_sale_conf_anchor      CHECK (anchor_type IN ('LISTING_MARK_SOLD')),
+    CONSTRAINT chk_sale_conf_actor_ptype CHECK (actor_principal_type IN ('HUMAN','AGENT')),
+    -- Biconditional (mirror of chk_moddec_override): a CONFIRMED negotiation has produced its fact row; others have not.
+    CONSTRAINT chk_sale_conf_confirmed_link CHECK (
+        (status =  'CONFIRMED' AND confirmed_sale_id IS NOT NULL) OR
+        (status <> 'CONFIRMED' AND confirmed_sale_id IS NULL))
+);
+-- One LIVE negotiation per listing — CANCELLED/EXPIRED/CONFIRMED release the listing for a new attempt
+-- (spec 18 §4 "a cancelled one may be replaced" now lives HERE, not on the append-only fact — Q1).
+CREATE UNIQUE INDEX uq_sale_conf_live_per_listing ON sale_confirmations(listing_id)
+    WHERE status IN ('PENDING_CONFIRMATION','DISPUTED');
+CREATE INDEX idx_sale_conf_confirm_scan ON sale_confirmations(expires_at) WHERE status = 'PENDING_CONFIRMATION';
+-- MUTABLE: the update_<tbl>_updated_at trigger is auto-attached by the derived DO-block near the end of this
+-- file (every table with an updated_at column gets it) — do NOT add a second explicit trigger here.
+COMMENT ON TABLE sale_confirmations IS 'ADR-0038 §4 Amendment (migration 0041): MUTABLE markSold buyer-counter-confirmation lifecycle (PENDING_CONFIRMATION→CONFIRMED/EXPIRED/CANCELLED/DISPUTED). The "mutable state" companion to the append-only confirmed_sales FACT (project pattern: immutable fact + mutable state). The TRANSFER path never writes here. FORM/DORMANT behind feature_toggles.sale_buyer_confirmation.';
+COMMENT ON CONSTRAINT chk_sale_conf_confirmed_link ON sale_confirmations IS 'Biconditional (mirror of chk_moddec_override): status=CONFIRMED ⇔ confirmed_sale_id IS NOT NULL — a CONFIRMED negotiation has produced exactly one confirmed_sales fact row; a non-CONFIRMED one has produced none.';
 
 -- ========== Reputation — reviews + reputation_aggregates (ADR-0039; migration 0040) ==========
 -- FORM-slice #2 (DORMANT): the storage the review/reputation loop hangs off. No endpoints, no recompute, no
 -- consumer → byte-identical HUMAN behaviour; behaviour behind feature_toggles.reputation_reviews.
 -- reviews: append-only, one-CURRENT-per-(sale,direction) rating (1..5) + optional text authored by a party of
--- a CONFIRMED sale about the other (proof-of-transaction — FK to confirmed_sales). "Current"/supersession
--- resolve on the monotonic `seq` (mig 0036 lesson), NEVER created_at. Double-blind is_visible gate (fork 2).
--- Facet columns reserved DORMANT (fork 5). Party FKs ON DELETE SET NULL (ФЗ-152 pseudonymise, fork 8). One
--- head per (sale,direction) via the partial unique uq_reviews_current_per_direction (transfer INV-4 shape;
--- a plain 3-col UNIQUE is ineffective — NULLs are distinct). Immutable via the REUSED trg_block_modify_append_only.
+-- a CONFIRMED sale about the other (proof-of-transaction — FK to confirmed_sales). Content (rating/body) is
+-- IMMUTABLE; an edit-within-grace is a NEW superseding row that NAMES its predecessor via the BACKWARD pointer
+-- supersedes_review_id (ADR-0039 §3 Amendment / migration 0041 — the moderation_decisions model, append-only-safe
+-- because you write about yourself, not about an older row). "Current" resolves via the VIEW reviews_current (the
+-- head of a chain = a row no one supersedes); `seq` (mig 0036 lesson) is the reserved deterministic tiebreak.
+-- Party FKs ON DELETE SET NULL (ФЗ-152 pseudonymise, fork 8). Facet columns reserved DORMANT (fork 5).
+-- Moderation state + double-blind visibility are MUTABLE by design → they live in the companion review_states
+-- (ADR-0039 §3 Amendment β), NOT here. Immutable via the REUSED trg_block_modify_append_only.
 CREATE TABLE reviews (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     confirmed_sale_id UUID NOT NULL REFERENCES confirmed_sales(id) ON DELETE CASCADE, -- proof-of-transaction root
@@ -716,9 +780,11 @@ CREATE TABLE reviews (
     market            VARCHAR(9) NOT NULL,            -- copied from the sale's derived market (ADR-0002)
     rating            SMALLINT NOT NULL,              -- 1..5 (chk_reviews_rating)
     body              TEXT,                           -- optional; moderated like listing content (ADR-0040 §2)
-    moderation_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    is_visible        BOOLEAN NOT NULL DEFAULT FALSE, -- double-blind release gate (fork 2)
-    superseded_by_id  UUID REFERENCES reviews(id) ON DELETE SET NULL, -- edit-within-grace = new row (fork 3)
+    -- moderation_status + is_visible moved to review_states (ADR-0039 §3 Amendment β) — they are mutable state.
+    -- BACKWARD supersede pointer (ADR-0039 §3 Amendment / migration 0041): the NEW (edit-in-grace) row names the
+    -- row it replaces. Written at INSERT (about self) → append-only-safe. ON DELETE RESTRICT: a superseded row is
+    -- never deleted out from under its successor (matches moderation_decisions.supersedes_decision_id).
+    supersedes_review_id UUID REFERENCES reviews(id) ON DELETE RESTRICT,
     -- Reserved DORMANT facet columns (fork 5) — no facet behaviour; scale decided in the facet phase (no CHECK).
     facet_description_accuracy SMALLINT,
     facet_communication        SMALLINT,
@@ -730,19 +796,55 @@ CREATE TABLE reviews (
     CONSTRAINT chk_reviews_direction         CHECK (direction IN ('BUYER_ON_SELLER','SELLER_ON_BUYER')),
     CONSTRAINT chk_reviews_market            CHECK (market IN ('pet','livestock')),
     CONSTRAINT chk_reviews_rating            CHECK (rating BETWEEN 1 AND 5),
-    CONSTRAINT chk_reviews_moderation_status CHECK (moderation_status IN
-        ('PENDING','APPROVED','REJECTED','CHANGES_REQUESTED')),
     CONSTRAINT chk_reviews_actor_ptype       CHECK (actor_principal_type IN ('HUMAN','AGENT'))
 );
-CREATE UNIQUE INDEX uq_reviews_current_per_direction ON reviews(confirmed_sale_id, direction) WHERE superseded_by_id IS NULL;
-CREATE INDEX idx_reviews_subject_market ON reviews(subject_user_id, market)
-    WHERE moderation_status = 'APPROVED' AND is_visible = TRUE AND superseded_by_id IS NULL;
+-- (1) A predecessor has AT MOST ONE successor → the edit chain is LINEAR (no history fork). This is STRICTER
+--     than moderation_decisions (which allows an override to branch) — see the COMMENT below; do NOT "unify".
+CREATE UNIQUE INDEX uq_reviews_supersedes ON reviews(supersedes_review_id) WHERE supersedes_review_id IS NOT NULL;
+-- (2) One ROOT chain per (sale, direction). Root = a row that supersedes nothing. Linear chain (1) ⇒ one head ⇒
+--     the "one CURRENT per (sale, direction)" invariant is preserved as a DB invariant (Q6), not pushed to app.
+CREATE UNIQUE INDEX uq_reviews_root_per_direction ON reviews(confirmed_sale_id, direction) WHERE supersedes_review_id IS NULL;
+-- Trust-read support: subject+market lookup (the moderation_status='APPROVED' AND is_visible=TRUE predicate now
+-- lives in review_states → the visibility filter is a join/projection in the behaviour slice, ADR-0039 §3 β).
+CREATE INDEX idx_reviews_subject_market ON reviews(subject_user_id, market);
 CREATE INDEX idx_reviews_current_seq ON reviews(confirmed_sale_id, direction, seq DESC);
 CREATE INDEX idx_reviews_agent_actor ON reviews(actor_principal_type) WHERE actor_principal_type = 'AGENT';
 CREATE TRIGGER trg_reviews_immutable
 BEFORE UPDATE OR DELETE ON reviews
 FOR EACH ROW EXECUTE FUNCTION trg_block_modify_append_only();
-COMMENT ON TABLE reviews IS 'ADR-0039: append-only, one-current-per-(sale,direction) proof-of-transaction review (1..5 + optional body). Current/supersede resolve on seq DESC (mig 0036 lesson). Double-blind is_visible gate. Immutable (trg_reviews_immutable, reused). DORMANT — behaviour behind feature_toggles.reputation_reviews.';
+COMMENT ON TABLE reviews IS 'ADR-0039: append-only, one-current-per-(sale,direction) proof-of-transaction review (1..5 + optional body). Edit-in-grace = a NEW row naming its predecessor via BACKWARD supersedes_review_id (§3 Amendment / migration 0041 — moderation_decisions model). "Current" = head of the chain, resolved by the VIEW reviews_current. Moderation/visibility state lives in review_states (mutable companion, §3 β). Immutable (trg_reviews_immutable, reused). DORMANT — behaviour behind feature_toggles.reputation_reviews.';
+COMMENT ON INDEX uq_reviews_supersedes IS 'ADR-0039 §3 Amendment (Q5) — DELIBERATELY STRICTER than moderation_decisions.supersedes_decision_id (which has NO such UNIQUE): a review EDIT is LINEAR (each version replaces exactly one prior), whereas a moderation OVERRIDE may branch. This UNIQUE forbids a forked edit history (two rows superseding one predecessor). Do NOT drop it to "unify" with moderation_decisions — the two model different things.';
+
+-- reviews_current — the SINGLE named place where "the current review" resolves. The head of an edit chain is a
+-- row that no other row supersedes; uq_reviews_supersedes (≤1 successor) makes that head unique. Readers use
+-- this view; they do NOT re-implement the NOT EXISTS in code (ADR-0039 §3 Amendment).
+CREATE VIEW reviews_current AS
+    SELECT r.*
+    FROM reviews r
+    WHERE NOT EXISTS (SELECT 1 FROM reviews s WHERE s.supersedes_review_id = r.id);
+COMMENT ON VIEW reviews_current IS 'ADR-0039 §3 Amendment: the one named resolver of "current review" = the head of each edit chain (a row nothing supersedes). Linearity (uq_reviews_supersedes) guarantees a single head per chain. Behaviour-slice readers query this, not a hand-rolled NOT EXISTS.';
+
+-- ========== review_states — MUTABLE moderation + visibility companion (ADR-0039 §3 Amendment β; migration 0041) ==========
+-- FORM/DORMANT: the mutable per-review moderation state + double-blind visibility. These change BY DESIGN
+-- (PENDING→APPROVED/REJECTED/CHANGES_REQUESTED; is_visible flips on double-blind release by the scheduler) and so
+-- cannot live on the append-only reviews. Symmetric with sale_confirmations (fact+state) — one canon-wide pattern.
+-- reviews.id stays stable (state hangs off it via the PK FK); reads join. DORMANT — behaviour behind feature_toggles.reputation_reviews.
+CREATE TABLE review_states (
+    review_id            UUID PRIMARY KEY REFERENCES reviews(id) ON DELETE CASCADE,
+    moderation_status    VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    is_visible           BOOLEAN     NOT NULL DEFAULT FALSE, -- double-blind release gate (fork 2)
+    moderated_at         TIMESTAMP WITH TIME ZONE,
+    actor_id             UUID REFERENCES users(id) ON DELETE SET NULL, -- WHO moved the state (moderator/agent)
+    actor_principal_type VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
+    created_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), -- MUTABLE: updated_at trigger auto-attached below
+    CONSTRAINT chk_review_states_mod_status  CHECK (moderation_status IN
+        ('PENDING','APPROVED','REJECTED','CHANGES_REQUESTED')),
+    CONSTRAINT chk_review_states_actor_ptype CHECK (actor_principal_type IN ('HUMAN','AGENT'))
+);
+CREATE INDEX idx_review_states_visible ON review_states(review_id) WHERE moderation_status = 'APPROVED' AND is_visible = TRUE;
+-- MUTABLE: the update_<tbl>_updated_at trigger is auto-attached by the derived DO-block near the end of this file.
+COMMENT ON TABLE review_states IS 'ADR-0039 §3 Amendment β (migration 0041): MUTABLE per-review moderation state (PENDING→APPROVED/REJECTED/CHANGES_REQUESTED) + double-blind is_visible. The "mutable state" companion to the append-only reviews FACT (project pattern: immutable fact + mutable state, symmetric with sale_confirmations). reviews.id stays stable; reads join. FORM/DORMANT behind feature_toggles.reputation_reviews.';
 
 -- reputation_aggregates: DERIVED per-(subject, market) rating cache (count/sum/avg/histogram), recomputed
 -- (never hand-written) on the review-state event path; read as a single indexed PK lookup. PK (subject_user_id,

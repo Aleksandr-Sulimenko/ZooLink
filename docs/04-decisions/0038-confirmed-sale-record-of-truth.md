@@ -1,6 +1,6 @@
 # ADR-0038: Confirmed-Sale record of truth — a first-class append-only entity (not a projection), polymorphic subject, event-emitting
 
-**Status**: Accepted (owner, 2026-07-09 — section-by-section review; Open Q1 resolved per recommendation)
+**Status**: Accepted (owner, 2026-07-09 — section-by-section review; Open Q1 resolved per recommendation). **Amended 2026-08-04 (AUDIT5 gate-pass — §4 Amendment below): `confirmed_sales` is a CONFIRMED-only FACT; the PENDING/negotiation lifecycle moved to the mutable companion `sale_confirmations` (migration 0041).**
 **Date**: 2026-07-09
 **Refines / builds on**: [ADR-0013](0013-mvp-ownership-transfer.md) (a COMPLETED `ownership_transfers` is the strongest, already-two-sided sale signal — the auto-confirm anchor), [ADR-0014](0014-offering-supertype-polymorphic-seam.md) (the polymorphic Offering seam this entity's subject reuses), [ADR-0018](0018-cross-aggregate-access-rule.md)/[ADR-0015](0015-market-scope-refines-0002.md) (derived-`market` cache discipline — mirror of `listings.market`, migration 0033), [ADR-0021](0021-first-outbox-consumer-notification-path.md) (transactional-outbox emission the events ride).
 **Related**: [ADR-0002](0002-hard-split-markets.md) (per-market scope, never mixed), [ADR-0004](0004-animal-as-aggregate.md) (animal aggregate root the transfer re-attributes), [ADR-0006](0006-ai-agents-operate-platform.md)/[ADR-0011](0011-agent-principal-actor-model.md) (actor-snapshot on every append-only row), [ADR-0039](0039-reputation-storage-model.md) (the reviews/aggregate that hang off this record), [ADR-0040](0040-reputation-trust-integrity-governance.md) (dispute/abuse governance of the record).
@@ -179,9 +179,24 @@ Table count **+1** (`confirmed_sales`) when the slice lands. All columns nullabl
 
 ---
 
+## §4 Amendment (2026-08-04, AUDIT5 gate-pass m-20260804-234834) — CONFIRMED-only FACT; the PENDING lifecycle moves to `sale_confirmations`
+
+**Status of the amendment:** Accepted (держатель gate-pass, 2026-08-04). Realised in migration 0041 (reputation-pack COMMIT-1). This narrows the §1/§4 vocabulary and moves columns; it does **not** re-open the Option-2 first-class-entity decision.
+
+**What was wrong.** The FORM slice (migration 0039) modelled a **state machine on an APPEND-ONLY table**: `confirmed_sales.status` carried the full `PENDING_CONFIRMATION|CONFIRMED|DISPUTED|EXPIRED|CANCELLED` vocabulary with intent columns (`nominated_buyer_user_id`, `seller_confirmed_at`, `buyer_confirmed_at`, `expires_at`), yet the reused append-only trigger allowed exactly **one** of the seven state edges (born-CONFIRMED). The `markSold` `PENDING → CONFIRMED` transition was structurally unbuildable — a self-contradiction *inside* this ADR (§4 "hybrid lifecycle carried natively" vs §5 "reuse append-only, do not invent a second immutability path").
+
+**Decision (WHAT).** Split the immutable **FACT** from the mutable **STATE**:
+- `confirmed_sales` becomes a **CONFIRMED-only fact** — a row EXISTS iff a sale is confirmed. `status` keeps a **narrowed `CHECK (status = 'CONFIRMED')`** (no `DEFAULT`) as a Q2 **gravestone** (a narrowed value tells a future reader where PENDING went; a silently-dropped column would not). The negotiation columns and `idx_confirmed_sales_confirm_scan` are dropped. `confirmed_at` and the **FULL** `UNIQUE(ownership_transfer_id)` stay (Q1 — a confirmed transfer-sale is permanent; cancel/dispute *after* confirmation is a NEW record about the fact, never a mutation of it → the full UNIQUE is correct, not a constraint).
+- A NEW **mutable companion `sale_confirmations`** carries the `markSold` PENDING→CONFIRMED/EXPIRED/CANCELLED/DISPUTED lifecycle (its own `updated_at` trigger). The biconditional `chk_sale_conf_confirmed_link` (mirror of `chk_moddec_override`) makes "a CONFIRMED negotiation ⇔ has produced its one fact row" a one-query invariant; `uq_sale_conf_live_per_listing` keeps one live negotiation per listing. The **TRANSFER path never writes here** — a completed transfer is born CONFIRMED directly in `confirmed_sales` (byte-identical to the pre-amendment transfer capture, minus the two synthetic timestamps `confirmed_at` already covers).
+
+**Why (WHY).** Append-only and a multi-edge state machine are incompatible on one table; the reform is cheapest now (0 `markSold` rows, all transfer rows already CONFIRMED). **Q3:** a dispute *after* confirmation is an ADR-0040 `content_report` subtype (a third-party assertion), **not** a state key on the companion — the fact happened and is never erased; a dispute is a new record *about* it.
+
+**Why better (WHY-BETTER).** One canon-wide pattern — **immutable fact + mutable companion** — now covers sales (`confirmed_sales`/`sale_confirmations`) and reviews (`reviews`/`review_states`, ADR-0039 §3 Amendment β), symmetric with the existing `moderation_decisions` (decision) and `reputation_aggregates` (cache). Every change is additive/guarded → N-1 safe; DORMANT → zero MVP behaviour change. Alternative rejected: keeping the machine on the append-only table (leaves 6 of 7 edges unbuildable) or relaxing the append-only trigger (destroys the record-of-truth guarantee reviews anchor to).
+
 ## Consequences
 
 ### Positive
+- The immutable-fact / mutable-state split resolves the append-only-vs-machine self-contradiction structurally, with one pattern reused across the reputation subsystem (amendment, migration 0041).
 - The irreversibly-lost confirmed-sale signal (esp. the strongest — a COMPLETED transfer) is captured at the instant it exists, dormant, with zero MVP behaviour change — the deepest AUDIT4 P3-1 strategic gap starts closing structurally.
 - Reputation gets a durable, immutable, uniquely-identified proof-of-transaction root (reviews FK target).
 - The subject is Offering-seam-ready (services/goods) via one additive CHECK, reusing the migration-0032 dialect — no future rewrite of the sensitive tables.

@@ -3,9 +3,11 @@
  * the real stack (host PG). This is a DORMANT form slice: there are NO endpoints, NO recompute, NO consumer —
  * so the tests exercise the STORAGE INVARIANTS directly (the project bar is a negative test per invariant).
  *
- *  reviews (m2): append-only UPDATE+DELETE rejected · one-CURRENT-per-(sale,direction) partial-unique ·
- *    FK confirmed_sale_id · every named CHECK (direction / market / rating 0 & 6 grani / moderation_status /
- *    actor_principal_type) · GENERATED `seq` rejects a direct value · positive controls (defaults, AGENT actor).
+ *  reviews (m2): append-only UPDATE+DELETE rejected · the FACT/STATE split (ADR-0038/0039 Amendments, mig 0041) —
+ *    BACKWARD supersedes_review_id, uq_reviews_root_per_direction [M-1] + uq_reviews_supersedes [M-3] (linear chain),
+ *    the reviews_current VIEW resolves the head; moderation_status/is_visible moved to the MUTABLE review_states ·
+ *    FK confirmed_sale_id · named CHECKs (direction / market / rating 0 & 6 grani / actor_principal_type) ·
+ *    GENERATED `seq` rejects a direct value · confirmed_sales is CONFIRMED-only (mkSale writes CONFIRMED).
  *  reputation_aggregates (m3): PK(subject,market) duplicate · GENERATED `rating_avg` rejects a direct value +
  *    derives correctly (sum/count, NULL at 0) · nonneg CHECK · market CHECK · the cache IS mutable (NOT
  *    append-only — the recompute path UPDATEs it and the generated avg follows).
@@ -34,8 +36,9 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
 
   /** A fresh confirmed_sales row (INSERT allowed; append-only only blocks UPDATE/DELETE). Tracked for cleanup. */
   const mkSale = async (): Promise<string> => {
+    // confirmed_sales is a CONFIRMED-only fact now (ADR-0038 §4 Amendment / migration 0041).
     const rows = await prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO confirmed_sales(anchor_type, market, status) VALUES('LISTING_MARK_SOLD','pet','PENDING_CONFIRMATION') RETURNING id`;
+      INSERT INTO confirmed_sales(anchor_type, market, status) VALUES('LISTING_MARK_SOLD','pet','CONFIRMED') RETURNING id`;
     const id = rows[0].id;
     sales.push(id);
     return id;
@@ -55,7 +58,10 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
 
   afterAll(async () => {
     // reviews is append-only (trg_reviews_immutable) — disable the trigger for cleanup only (consents idiom).
+    // supersedes_review_id is ON DELETE RESTRICT (migration 0041), so delete the superseding CHILDREN before their
+    // ROOTS (review_states cascades off reviews). Two-pass covers the 1-level chains these tests create.
     await prisma.$executeRaw`ALTER TABLE reviews DISABLE TRIGGER trg_reviews_immutable`.catch(() => undefined);
+    for (const id of sales) await prisma.reviews.deleteMany({ where: { confirmed_sale_id: id, NOT: { supersedes_review_id: null } } }).catch(() => undefined);
     for (const id of sales) await prisma.reviews.deleteMany({ where: { confirmed_sale_id: id } }).catch(() => undefined);
     await prisma.$executeRaw`ALTER TABLE reviews ENABLE TRIGGER trg_reviews_immutable`.catch(() => undefined);
 
@@ -70,15 +76,14 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
 
   // ── m2: reviews storage invariants ──────────────────────────────────────────────────────────────
   describe('reviews (m2)', () => {
-    it('positive control: a valid review inserts with seq populated + double-blind/pending defaults', async () => {
+    it('positive control: a valid review inserts as a ROOT (supersedes nothing) with seq populated', async () => {
       const saleId = await mkSale();
       await prisma.$executeRaw`
         INSERT INTO reviews(confirmed_sale_id, direction, market, rating, subject_user_id, reviewer_user_id)
         VALUES(${saleId}::uuid, 'BUYER_ON_SELLER', 'pet', 5, ${subjectId}::uuid, ${reviewerId}::uuid)`;
       const row = await prisma.reviews.findFirstOrThrow({ where: { confirmed_sale_id: saleId } });
       expect(row.rating).toBe(5);
-      expect(row.is_visible).toBe(false); // double-blind gate defaults FALSE (fork 2)
-      expect(row.moderation_status).toBe('PENDING');
+      expect(row.supersedes_review_id).toBeNull(); // a root supersedes nothing (mutable moderation/visibility → review_states now)
       expect(row.actor_principal_type).toBe('HUMAN');
       expect(typeof row.seq).toBe('bigint'); // GENERATED ALWAYS AS IDENTITY populated
       expect(row.seq).toBeGreaterThan(0n);
@@ -92,12 +97,39 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
       await expect(prisma.$executeRaw`DELETE FROM reviews WHERE id = ${row.id}::uuid`).rejects.toThrow(/append-only/i);
     });
 
-    it('one-CURRENT-per-(sale,direction): a second head (superseded_by_id NULL) is rejected (transfer INV-4 shape)', async () => {
+    it('[M-1] uq_reviews_root_per_direction: a second ROOT (supersedes nothing) per (sale,direction) is rejected', async () => {
+      // The new "one current" mechanism (ADR-0039 §3 Amendment): one root chain per (sale,direction).
       const saleId = await mkSale();
       await prisma.$executeRaw`INSERT INTO reviews(confirmed_sale_id, direction, market, rating) VALUES(${saleId}::uuid,'SELLER_ON_BUYER','pet',5)`;
       await expect(
         prisma.$executeRaw`INSERT INTO reviews(confirmed_sale_id, direction, market, rating) VALUES(${saleId}::uuid,'SELLER_ON_BUYER','pet',3)`,
       ).rejects.toThrow(/already exists|unique|23505/i);
+    });
+
+    it('[M-3] uq_reviews_supersedes: a second successor of one predecessor is rejected (LINEAR edit chain, Q5)', async () => {
+      // Backward supersede pointer (ADR-0039 §3 Amendment). A first edit (child) superseding the root is fine;
+      // a second child of the same predecessor would FORK the history → rejected (stricter than moderation_decisions).
+      const saleId = await mkSale();
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO reviews(confirmed_sale_id, direction, market, rating) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',5) RETURNING id`;
+      const rootId = rows[0].id;
+      await prisma.$executeRaw`INSERT INTO reviews(confirmed_sale_id, direction, market, rating, supersedes_review_id) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',4,${rootId}::uuid)`;
+      await expect(
+        prisma.$executeRaw`INSERT INTO reviews(confirmed_sale_id, direction, market, rating, supersedes_review_id) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',2,${rootId}::uuid)`,
+      ).rejects.toThrow(/already exists|unique|23505/i);
+    });
+
+    it('reviews_current VIEW: the head of an edit chain is current, the superseded predecessor is not', async () => {
+      const saleId = await mkSale();
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO reviews(confirmed_sale_id, direction, market, rating) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',5) RETURNING id`;
+      const rootId = rows[0].id;
+      const child = await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO reviews(confirmed_sale_id, direction, market, rating, supersedes_review_id) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',4,${rootId}::uuid) RETURNING id`;
+      const childId = child[0].id;
+      const current = await prisma.$queryRaw<{ id: string }[]>`SELECT id FROM reviews_current WHERE confirmed_sale_id = ${saleId}::uuid AND direction = 'BUYER_ON_SELLER'`;
+      expect(current).toHaveLength(1); // exactly one head
+      expect(current[0].id).toBe(childId); // the edit is current, the root is superseded
     });
 
     it('FK confirmed_sale_id: a review with no confirmed sale is rejected (proof-of-transaction root)', async () => {
@@ -130,11 +162,26 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
       ).rejects.toThrow(/chk_reviews_market/i);
     });
 
-    it('CHECK chk_reviews_moderation_status: a bogus moderation_status is rejected', async () => {
+    it('review_states: moderation_status/is_visible live in the mutable companion, NOT on the append-only reviews (ADR-0039 §3 β)', async () => {
+      // The mutable state moved out of reviews (migration 0041). A row is created in review_states keyed on review_id;
+      // its CHECK is chk_review_states_mod_status; and — being mutable — it accepts UPDATE (unlike append-only reviews).
       const saleId = await mkSale();
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO reviews(confirmed_sale_id, direction, market, rating) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',4) RETURNING id`;
+      const reviewId = rows[0].id;
+      await prisma.$executeRaw`INSERT INTO review_states(review_id) VALUES(${reviewId}::uuid)`;
+      const st = await prisma.review_states.findUniqueOrThrow({ where: { review_id: reviewId } });
+      expect(st.moderation_status).toBe('PENDING'); // default
+      expect(st.is_visible).toBe(false); // double-blind default (fork 2)
+      // bogus moderation_status is rejected by the companion's CHECK
       await expect(
-        prisma.$executeRaw`INSERT INTO reviews(confirmed_sale_id, direction, market, rating, moderation_status) VALUES(${saleId}::uuid,'BUYER_ON_SELLER','pet',4,'SHRUG')`,
-      ).rejects.toThrow(/chk_reviews_moderation_status/i);
+        prisma.$executeRaw`INSERT INTO review_states(review_id, moderation_status) VALUES(gen_random_uuid(),'SHRUG')`,
+      ).rejects.toThrow(/chk_review_states_mod_status|foreign key|23503/i);
+      // MUTABLE: the moderation/visibility transition is a normal UPDATE (distinct from the append-only reviews)
+      await prisma.$executeRaw`UPDATE review_states SET moderation_status='APPROVED', is_visible=TRUE, moderated_at=NOW() WHERE review_id=${reviewId}::uuid`;
+      const after = await prisma.review_states.findUniqueOrThrow({ where: { review_id: reviewId } });
+      expect(after.moderation_status).toBe('APPROVED');
+      expect(after.is_visible).toBe(true);
     });
 
     it('CHECK chk_reviews_actor_ptype: a bogus actor_principal_type is rejected; AGENT is accepted (agent-as-principal)', async () => {
