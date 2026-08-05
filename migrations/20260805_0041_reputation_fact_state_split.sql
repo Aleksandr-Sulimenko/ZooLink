@@ -79,7 +79,10 @@ CREATE TABLE IF NOT EXISTS sale_confirmations (
     seller_confirmed_at     TIMESTAMP WITH TIME ZONE,
     buyer_confirmed_at      TIMESTAMP WITH TIME ZONE,
     expires_at              TIMESTAMP WITH TIME ZONE,
-    confirmed_sale_id       UUID REFERENCES confirmed_sales(id) ON DELETE SET NULL,
+    -- ON DELETE RESTRICT (not SET NULL): SET NULL would null this pointer on fact-deletion, violating
+    -- chk_sale_conf_confirmed_link for a CONFIRMED row → an opaque CHECK error instead of an honest FK-restrict.
+    -- RESTRICT matches the fact's append-only immutability + reviews.supersedes_review_id RESTRICT (holder 2026-08-05).
+    confirmed_sale_id       UUID REFERENCES confirmed_sales(id) ON DELETE RESTRICT,
     actor_id                UUID REFERENCES users(id) ON DELETE SET NULL,
     actor_principal_type    VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
     created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),

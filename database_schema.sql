@@ -732,7 +732,11 @@ CREATE TABLE sale_confirmations (
     buyer_confirmed_at      TIMESTAMP WITH TIME ZONE,  -- buyer counter-confirm
     expires_at              TIMESTAMP WITH TIME ZONE,  -- PENDING_CONFIRMATION timeout horizon
     -- Back-pointer to the FACT, set once negotiation resolves to CONFIRMED (NULL before that).
-    confirmed_sale_id       UUID REFERENCES confirmed_sales(id) ON DELETE SET NULL,
+    -- ON DELETE RESTRICT (not SET NULL): SET NULL would UPDATE this row to confirmed_sale_id=NULL, which for a
+    -- CONFIRMED row violates chk_sale_conf_confirmed_link → the delete would fail anyway, but as a CHECK error on
+    -- THIS table instead of an honest FK-restrict. RESTRICT says exactly what happens, and matches the fact's
+    -- append-only immutability (a confirmed_sales row is never deleted). Consistent with reviews.supersedes RESTRICT.
+    confirmed_sale_id       UUID REFERENCES confirmed_sales(id) ON DELETE RESTRICT,
     -- Actor snapshot (ADR-0006/0011).
     actor_id                UUID REFERENCES users(id) ON DELETE SET NULL,
     actor_principal_type    VARCHAR(10) NOT NULL DEFAULT 'HUMAN',
