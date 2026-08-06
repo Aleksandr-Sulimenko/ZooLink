@@ -8,6 +8,8 @@ function makeHost() {
   const setHeader = jest.fn().mockReturnThis();
   const status = jest.fn().mockReturnValue({ setHeader, json });
   const res = { status, setHeader, json, getHeader: jest.fn().mockReturnValue('req-123') };
+  // Fixture URL only — NOT an assertion about the API base path. The public base is the single source
+  // config/api-base.ts (`/api/v1`); this mock req is never routed, so its value is arbitrary.
   const req = { method: 'GET', originalUrl: '/v1/listings' };
   const host = {
     switchToHttp: () => ({ getResponse: () => res, getRequest: () => req }),

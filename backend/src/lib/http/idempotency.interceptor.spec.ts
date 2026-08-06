@@ -13,6 +13,8 @@ import type { RedisService } from '../redis/redis.service';
  */
 
 const METHOD = 'POST';
+// Fixture URL only — NOT an assertion about the API base path. The public base is the single source
+// config/api-base.ts (`/api/v1`); this mock is never routed, so its value is arbitrary.
 const URL = '/v1/listings/abc/contact-reveal';
 const BODY = { note: 'hi' };
 
