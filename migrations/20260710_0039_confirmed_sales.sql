@@ -117,8 +117,21 @@ COMMENT ON COLUMN confirmed_sales.offering_id IS
   'ADR-0038 §2: polymorphic offering-instance pointer (migration 0032 dialect). NULL for a pure TRANSFER anchor (no listing); == listing_id for the markSold path. No FK — polymorphic target.';
 COMMENT ON COLUMN confirmed_sales.market IS
   'ADR-0018/0033 discipline: DERIVED market (species.market via the animal), cached at capture, ADR-0002 hard split. Never re-derived on read.';
+-- Guarded (migration 0041 §A drops confirmed_sales.nominated_buyer_user_id): on a canon-first replay
+-- (database_schema.sql is post-0041, so CREATE TABLE IF NOT EXISTS above is a no-op and the column is
+-- absent) → skip; on the historical incremental path the column exists here → COMMENT exactly as before.
+-- Dollar-quoted EXECUTE body ($q$) so the comment's own single quotes need no doubling. Idempotent.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'confirmed_sales'
+               AND column_name = 'nominated_buyer_user_id') THEN
+    EXECUTE $q$
 COMMENT ON COLUMN confirmed_sales.nominated_buyer_user_id IS
-  'ADR-0038 §4 item 3: RESERVED form-now for the listing markSold buyer-nomination; the counter-confirmation flow (feature_toggles.sale_buyer_confirmation) uses it without a schema change. Unused by the transfer path.';
+  'ADR-0038 §4 item 3: RESERVED form-now for the listing markSold buyer-nomination; the counter-confirmation flow (feature_toggles.sale_buyer_confirmation) uses it without a schema change. Unused by the transfer path.'
+$q$;
+  END IF;
+END $do$;
 COMMENT ON COLUMN confirmed_sales.amount_minor IS
   'ADR-0038 Open-Q1 (owner 2026-07-09): RESERVED nullable, OFF-record default — NO code path writes it. Capture behaviour decided with finance + legal at payments activation (never monetises reputation).';
 COMMENT ON COLUMN confirmed_sales.actor_id IS
@@ -128,8 +141,19 @@ CREATE INDEX IF NOT EXISTS idx_confirmed_sales_subject      ON confirmed_sales(o
 CREATE INDEX IF NOT EXISTS idx_confirmed_sales_parties      ON confirmed_sales(seller_user_id, buyer_user_id);
 CREATE INDEX IF NOT EXISTS idx_confirmed_sales_animal       ON confirmed_sales(animal_id);
 -- Scan support for the (deferred) confirmation-expiry sweeper — mirrors idx_listings_escalation_scan.
+-- Guarded (migration 0041 §A drops confirmed_sales.expires_at and this index): absent on a canon-first
+-- replay → skip; present on the historical incremental path → create exactly as before. Idempotent.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'confirmed_sales'
+               AND column_name = 'expires_at') THEN
+    EXECUTE $q$
 CREATE INDEX IF NOT EXISTS idx_confirmed_sales_confirm_scan ON confirmed_sales(expires_at)
-    WHERE status = 'PENDING_CONFIRMATION';
+    WHERE status = 'PENDING_CONFIRMATION'
+$q$;
+  END IF;
+END $do$;
 
 -- Append-only immutability — REUSE the shared trigger function (ADR-0038 §5; do NOT invent a second path).
 -- Same discipline as consents / moderation_decisions. Idempotent (DROP IF EXISTS).

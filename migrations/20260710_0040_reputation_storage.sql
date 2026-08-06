@@ -128,18 +128,54 @@ COMMENT ON TABLE reviews IS
   'ADR-0039: append-only, one-current-per-(sale,direction) proof-of-transaction review (rating 1..5 + optional body). Current/supersede resolve on seq DESC (mig 0036 lesson), NOT created_at. Double-blind is_visible gate (fork 2). Immutable (trg_reviews_immutable, reused). Facet columns reserved DORMANT (fork 5). Party FKs ON DELETE SET NULL (ФЗ-152 pseudonymise, fork 8/legal-gated). DORMANT in MVP — no endpoints, behaviour behind feature_toggles.reputation_reviews.';
 COMMENT ON COLUMN reviews.seq IS
   'ADR-0039 §3 / mig 0036 lesson: monotonic DB-assigned order. Resolve current-per-(sale,direction) and supersession by seq DESC — the fail-SAFE causal order, never a tie-breakable created_at. GENERATED ALWAYS = never app-written.';
+-- Guarded (migration 0041 §C drops reviews.superseded_by_id → backward supersedes_review_id): on a
+-- canon-first replay (database_schema.sql is post-0041 → CREATE TABLE IF NOT EXISTS above no-ops → column
+-- absent) skip; on the historical incremental path the column exists → COMMENT exactly as before. Idempotent.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'reviews'
+               AND column_name = 'superseded_by_id') THEN
+    EXECUTE $q$
 COMMENT ON COLUMN reviews.superseded_by_id IS
-  'ADR-0039 §3 forward supersede pointer (edit = new row within 72h grace, fork 3). See migration 0040 DESIGN NOTE: conflicts with the append-only trigger (marking a predecessor needs a blocked UPDATE) — the behaviour slice picks seq-DESC resolution OR a backward supersedes_review_id pointer. FORM slice ships the head partial-unique only.';
+  'ADR-0039 §3 forward supersede pointer (edit = new row within 72h grace, fork 3). See migration 0040 DESIGN NOTE: conflicts with the append-only trigger (marking a predecessor needs a blocked UPDATE) — the behaviour slice picks seq-DESC resolution OR a backward supersedes_review_id pointer. FORM slice ships the head partial-unique only.'
+$q$;
+  END IF;
+END $do$;
 COMMENT ON COLUMN reviews.facet_description_accuracy IS
   'ADR-0039 §3 fork 5: RESERVED DORMANT facet column — no facet behaviour built; the scale is decided in the later facet phase (hence no CHECK now). Reserved so that phase needs no schema change.';
 
 -- One CURRENT (head) review per (sale, direction) — transfer INV-4 shape; NULLs-distinct makes a plain
 -- 3-col UNIQUE ineffective (see DESIGN NOTE), so a partial unique index on the heads is the honest form.
+-- Guarded (migration 0041 §C drops both superseded_by_id and this index): absent on a canon-first replay
+-- → skip; present on the historical incremental path → create exactly as before. Idempotent.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'reviews'
+               AND column_name = 'superseded_by_id') THEN
+    EXECUTE $q$
 CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_current_per_direction
-    ON reviews(confirmed_sale_id, direction) WHERE superseded_by_id IS NULL;
+    ON reviews(confirmed_sale_id, direction) WHERE superseded_by_id IS NULL
+$q$;
+  END IF;
+END $do$;
 -- Trust-read support (spec §3.2): visible+approved current reviews for a subject in a market.
+-- Guarded on superseded_by_id (migration 0041 §C drops moderation_status, is_visible AND superseded_by_id
+-- together, then rebuilds idx_reviews_subject_market WITHOUT the departed predicate): all three predicate
+-- columns are co-managed, so one existence check gates the whole predicated form. Absent on a canon-first
+-- replay → skip (0041 later rebuilds the clean index); present on the incremental path → create as before.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'reviews'
+               AND column_name = 'superseded_by_id') THEN
+    EXECUTE $q$
 CREATE INDEX IF NOT EXISTS idx_reviews_subject_market ON reviews(subject_user_id, market)
-    WHERE moderation_status = 'APPROVED' AND is_visible = TRUE AND superseded_by_id IS NULL;
+    WHERE moderation_status = 'APPROVED' AND is_visible = TRUE AND superseded_by_id IS NULL
+$q$;
+  END IF;
+END $do$;
 -- Monotonic ordered-lookup for "current review per (sale, direction)" by seq DESC (mig 0036 idiom).
 CREATE INDEX IF NOT EXISTS idx_reviews_current_seq ON reviews(confirmed_sale_id, direction, seq DESC);
 CREATE INDEX IF NOT EXISTS idx_reviews_agent_actor ON reviews(actor_principal_type) WHERE actor_principal_type = 'AGENT';
