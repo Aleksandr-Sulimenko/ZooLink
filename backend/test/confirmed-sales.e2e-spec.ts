@@ -26,11 +26,17 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
+import { provisionCanonicalDatabase, type CanonicalDb } from './support/canonical-db';
+
+// Р10-A: the append-only negative-invariant checks (m1) must measure the ARTIFACT — run the suite
+// against a throwaway DB built from database_schema.sql (fixtures are all created inline; no seed).
+const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 describe('ADR-0038 confirmed-sale capture (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let redis: RedisService['client'];
+  let canon: CanonicalDb;
   const animals: string[] = [];
   const transfers: string[] = [];
   let ownerId: string;
@@ -86,6 +92,9 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
   };
 
   beforeAll(async () => {
+    // Р10-A: provision + point Prisma at the canon-built throwaway BEFORE AppModule compiles.
+    canon = provisionCanonicalDatabase();
+    process.env.DATABASE_URL = canon.url;
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
@@ -128,6 +137,9 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     if (speciesId) await prisma.species.delete({ where: { id: speciesId } }).catch(() => undefined);
     for (const id of [ownerId, recipId]) if (id) await prisma.users.delete({ where: { id } }).catch(() => undefined);
     await app.close();
+    // Restore env for the next suite (--runInBand shares the process) and drop the throwaway DB.
+    if (ORIGINAL_DATABASE_URL !== undefined) process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+    canon?.teardown();
   });
 
   beforeEach(async () => {

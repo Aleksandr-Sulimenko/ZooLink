@@ -104,6 +104,17 @@ jobs:
   #    fails the build). Promoted from advisory → blocking once the ownership_transfers principal_type
   #    CHECK-name drift (migration 0023 vs database_schema.sql) was reconciled to a single canonical
   #    constraint pair (migration 0026, fix-wave 1.1) — both bootstrap paths are now byte-identical.
+  #
+  # KNOWN LIMITATION (AUDIT5 Р-9): both paths START from database_schema.sql (path 2 = canon + replay),
+  # so a change that lives ONLY in canon appears on BOTH sides of the diff and cancels out — this diff
+  # is one-sided by construction and is blind to a canon-only removal. The ideal fix (Р9-A: a frozen,
+  # independent pre-audit baseline as a true second reconstruction path) is NOT achievable — the
+  # pre-audit baseline does not converge under migration replay (ordering forward-refs + unconditional
+  # PostGIS geography with no bridging migration; see AUDIT5/PACK-PROPOSAL.md §Р-9 / Q7). The accepted
+  # Q7-FALLBACK is the `schema-invariants` job below (registry existence-assert + Q8 meta-gate), an
+  # INDEPENDENT compensating gate that catches canon-only removals of NAMED invariants. Р9-A remains
+  # OWED (a dedicated ADR) — the residue it alone would catch (a canon-only ADD of an UNNAMED object)
+  # is the recorded debt, not dissolved into "done".
   migration-drift:
     runs-on: ubuntu-latest
     env:
@@ -161,6 +172,48 @@ jobs:
             echo "::error::schema↔migrations DDL drift detected (diff above) — reconcile database_schema.sql with migrations/ per ADR-0007 (fix the document first, then re-run)"
             exit 1
           fi
+
+  # Schema-invariant gate (AUDIT5 commit-2 · Р9-B / Р10-B / Q8). The AUTHORITATIVE, independent
+  # check that every NAMED critical invariant (chk_/uq_/trg_) the schema promises actually EXISTS in
+  # the applied schema — and that the canon and the registry cannot drift apart. It closes the two
+  # holes the other gates cannot:
+  #   - Р-9: migration-drift's DDL diff is one-sided (both paths start from canon) → blind to a
+  #     canon-only removal. Here the registry is a THIRD artifact, independent of both bootstrap
+  #     paths: dropping a named invariant from canon (+ its migration) → the canon-built DB lacks it
+  #     → the existence-assert REDs (it is not cancelled by any diff).
+  #   - Р-10: DB-invariant e2e can silently measure a stale dev DB; this job builds a THROWAWAY DB
+  #     from database_schema.sql (migration-drift's proven machinery) so it always measures the
+  #     artifact, and asserts by NAME against pg_constraint/pg_class/pg_trigger/pg_proc.
+  #   - Q8 META-GATE: every chk_/uq_/trg_ DEFINED in canon must be in scripts/schema-invariants.txt,
+  #     so a hand-maintained registry cannot silently lose items.
+  # HARD GATE. Self-tested (evidence in the commit): a canon constraint outside the registry REDs the
+  # meta-gate; a dropped registered invariant REDs the existence-assert.
+  schema-invariants:
+    runs-on: ubuntu-latest
+    env:
+      PGUSER: zoolink
+      PGPASSWORD: ci
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: canonical
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: zoolink
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build throwaway canonical DB from database_schema.sql
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE canonical;'
+          psql -d canonical -v ON_ERROR_STOP=1 -f database_schema.sql
+      - name: Schema-invariant gate (existence-assert Р9-B/Р10-B + meta-gate Q8)
+        run: bash scripts/check-schema-invariants.sh
 
   # Migration BACKFILL-on-populated-data gate (AUDIT4 P2-3). The migration-drift job proves DDL
   # idempotency + schema convergence on EMPTY tables — where every backfill-then-`SET NOT NULL`

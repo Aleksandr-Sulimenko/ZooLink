@@ -24,10 +24,16 @@ import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { provisionCanonicalDatabase, type CanonicalDb } from './support/canonical-db';
+
+// Р10-A: this DB-invariant suite runs against a THROWAWAY DB built from database_schema.sql (not the
+// introspect-only dev DB), so removing a named invariant from canon reflects here → the mutation REDs.
+const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregates (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let canon: CanonicalDb;
   const suffix = Math.random().toString(36).slice(2, 8);
   const sales: string[] = []; // confirmed_sales ids to clean
   const subjects: string[] = []; // aggregate subject user ids to clean
@@ -45,6 +51,9 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
   };
 
   beforeAll(async () => {
+    // Р10-A: provision + point Prisma at the canon-built throwaway BEFORE AppModule compiles.
+    canon = provisionCanonicalDatabase();
+    process.env.DATABASE_URL = canon.url;
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
@@ -72,6 +81,9 @@ describe('ADR-0039 reputation storage — dormant reviews + reputation_aggregate
     for (const id of subjects) await prisma.reputation_aggregates.deleteMany({ where: { subject_user_id: id } }).catch(() => undefined);
     for (const id of [subjectId, reviewerId, ...subjects]) await prisma.users.delete({ where: { id } }).catch(() => undefined);
     await app.close();
+    // Restore env for the next suite (--runInBand shares the process) and drop the throwaway DB.
+    if (ORIGINAL_DATABASE_URL !== undefined) process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+    canon?.teardown();
   });
 
   // ── m2: reviews storage invariants ──────────────────────────────────────────────────────────────

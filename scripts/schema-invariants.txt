@@ -1,0 +1,116 @@
+# scripts/schema-invariants.txt — REGISTRY of named critical schema invariants (AUDIT5, commit-2 gates)
+#
+# WHAT: the authoritative, committed list of the DB's named critical invariants — every
+#   CHECK constraint (chk_*), UNIQUE constraint / unique index (uq_*), and trigger / trigger-
+#   function (trg_*) defined in database_schema.sql. One name per line; '#' comments and blank
+#   lines are ignored by the loader.
+#
+# WHY: it is the shared spine of TWO gates that together close AUDIT5 Р-9 + Р-10:
+#   (1) EXISTENCE-ASSERT (Р9-B / Р10-B) — scripts/check-schema-invariants.sh and
+#       backend/test/schema-invariants.e2e-spec.ts assert each name below EXISTS in the APPLIED
+#       schema (pg_constraint / pg_class-index / pg_trigger / pg_proc). Removing a named invariant
+#       from database_schema.sql AND its migration → the applied schema loses it → assert RED.
+#       This is independent of the migration-drift diff (which, per Р-9, is one-sided by
+#       construction), so it catches a canon-only removal the drift diff is blind to.
+#   (2) META-GATE (Q8) — the same script greps database_schema.sql for every DEFINED chk_/uq_/trg_
+#       and asserts each is present in THIS file (canon ⊆ registry). A hand-maintained list would
+#       silently lose items (lesson-handwritten-worklist-loses-items); the meta-gate makes adding
+#       an invariant to canon WITHOUT registering it a RED build.
+#
+# GOVERNANCE: this file was GENERATED from database_schema.sql (defining occurrences) and is then
+#   STATIC. When you add/rename a chk_/uq_/trg_ in canon, add/rename it here in the same change —
+#   the meta-gate enforces it. Do NOT list conditional objects (e.g. the PostGIS idx_listings_location
+#   created only when the extension is present); the registry is unconditional-existence only, and
+#   those are idx_* (out of the chk_/uq_/trg_ scope) anyway.
+#
+# ── Р9-A DEBT (Q7-fallback, do NOT dissolve into "done") ────────────────────────────────────────
+#   The ideal Р9-A (a frozen pre-audit baseline giving the drift job a SECOND, independent
+#   reconstruction path) is NOT achievable: the pre-audit database_schema.sql (git 1d99fbf, parent
+#   of the first migration f32ab6a) (a) has table-ordering forward-refs and (b) declares an
+#   UNCONDITIONAL PostGIS geography column while canon uses conditional lat/lng — and NO migration
+#   bridges that difference (0001 does not touch geo). So `baseline + replay(0001..NNNN)` cannot
+#   converge to canon; freezing it would be a broken, non-loading fixture. This registry + its
+#   existence-assert is the Q7-fallback: a compensating INDEPENDENT layer (not a second path).
+#   Р9-A remains OWED. Address: AUDIT5/PACK-PROPOSAL.md §Р-9 / Q7; resolve via a dedicated ADR that
+#   either (i) writes a fresh, loadable, frozen baseline hand-reconciled to converge, or (ii)
+#   formally records that ADR-0007's SQL-canonical bootstrap has a single source and the
+#   existence-registry is the accepted compensating control.
+#
+# GENERATED-FROM: database_schema.sql · COUNT below must equal the meta-gate's canon count.
+chk_animal_ownership
+chk_animals_breed_dep
+chk_animals_nickname_lang
+chk_aoh_owner_party
+chk_confirmed_sales_actor_ptype
+chk_confirmed_sales_anchor
+chk_confirmed_sales_market
+chk_confirmed_sales_offering_type
+chk_confirmed_sales_status
+chk_consents_consent_type
+chk_favorites_offering_type
+chk_listing_ownership
+chk_listings_currency_iso
+chk_listings_latlng
+chk_listings_market
+chk_listings_price_nonneg
+chk_listings_quantity_pos
+chk_listings_view_count_nonneg
+chk_moddec_override
+chk_notiflog_type
+chk_org_user_role
+chk_owntransfer_from_party
+chk_owntransfer_initiated_ptype
+chk_owntransfer_responded_ptype
+chk_owntransfer_to_party
+chk_reputation_aggregates_market
+chk_reputation_aggregates_nonneg
+chk_reviews_actor_ptype
+chk_reviews_direction
+chk_reviews_market
+chk_reviews_rating
+chk_review_states_actor_ptype
+chk_review_states_mod_status
+chk_sale_conf_actor_ptype
+chk_sale_conf_anchor
+chk_sale_conf_confirmed_link
+chk_sale_conf_status
+chk_saved_searches_latlng
+chk_saved_searches_offering_type
+chk_user_roles_actor_ptype
+chk_user_roles_role
+trg_animals_immutable_and_owner
+trg_audit_log_append_only
+trg_block_modify_append_only
+trg_cascade_animal_deactivation
+trg_cascade_user_deactivation
+trg_confirmed_sales_immutable
+trg_consents_immutable
+trg_enforce_pedigree_integrity
+trg_listing_active_requires_approval
+trg_moderation_decisions_immutable
+trg_reviews_immutable
+uq_active_listing_per_type
+uq_agent_capability_profiles_code
+uq_animals_microchip
+uq_animals_tattoo
+uq_branch_one_hq
+uq_breeds_id_species
+uq_confirmed_sales_transfer
+uq_contact_reveals_viewer_listing
+uq_digital_asset_per_type
+uq_favorite_user_listing
+uq_notification_idempotency
+uq_open_report_per_reporter_entity
+uq_organizations_inn
+uq_organization_user
+uq_org_user_primary
+uq_owntransfer_one_pending
+uq_reviews_root_per_direction
+uq_reviews_supersedes
+uq_sale_conf_live_per_listing
+uq_user_roles_user_role
+uq_users_oauth_apple
+uq_users_oauth_google
+uq_users_oauth_telegram
+uq_users_oauth_vk
+uq_users_phone_hash

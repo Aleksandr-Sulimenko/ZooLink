@@ -133,11 +133,21 @@ describe('H4 — saved-search → notify (e2e)', () => {
     attempts: 1,
   });
 
+  // The saved_search_matched EMAIL source templates (ru + en) the IN_APP alert rows carry.
+  let matchedTemplateIds: string[] = [];
+
   const key = (searchId: string, listingId: string) => `saved_search_matched:${searchId}:${listingId}`;
   const rowFor = (searchId: string, listingId: string) =>
     prisma.notification_logs.findFirst({ where: { idempotency_key: key(searchId, listingId) } });
   const countFor = (searchId: string, listingId: string) =>
     prisma.notification_logs.count({ where: { idempotency_key: key(searchId, listingId) } });
+  // T5 (reviewer-qa axis 13): `countFor` filters by the CANONICAL idempotency_key, and idempotency_key
+  // carries a UNIQUE index → the count is structurally ∈ {0,1}. It can prove PRESENCE/ABSENCE but is
+  // BLIND to a duplicate written under a DIFFERENT key (a real dedup-break). The dedup proof must count
+  // a value that CAN reach ≥2: all saved_search_matched rows for the (fresh) owner (by template, either
+  // language — the row's template_id is the recipient-language source template).
+  const matchedRowsForUser = (userId: string) =>
+    prisma.notification_logs.count({ where: { user_id: userId, template_id: { in: matchedTemplateIds } } });
 
   beforeAll(async () => {
     ctx = await Test.createTestingModule({ imports: [WorkerModule] }).compile();
@@ -148,6 +158,10 @@ describe('H4 — saved-search → notify (e2e)', () => {
     consumer = ctx.get(SavedSearchMatchConsumer);
 
     seller = await mkUser();
+    // T5: ids of the EMAIL source templates (ru+en) the IN_APP alert rows carry (seeded by migration 0037).
+    matchedTemplateIds = (
+      await prisma.notification_templates.findMany({ where: { name: 'saved_search_matched', type: 'EMAIL' }, select: { id: true } })
+    ).map((t) => t.id);
 
     const sPet = await prisma.species.create({ data: { code: `h4_sp_pet_${suffix}`, name_localized: { en: 'P', ru: 'П' }, market: 'pet' } });
     const sLiv = await prisma.species.create({ data: { code: `h4_sp_liv_${suffix}`, name_localized: { en: 'L', ru: 'Л' }, market: 'livestock' } });
@@ -225,7 +239,11 @@ describe('H4 — saved-search → notify (e2e)', () => {
     await consumer.handle(ev);
     await consumer.handle(ev); // at-least-once redelivery (same event.id)
     await consumer.handle(activated(listing, seller)); // even a DIFFERENT event id → still per-pair
-    expect(await countFor(s, listing)).toBe(1);
+    // Dedup proof by a value that CAN be ≥2 (matchedRowsForUser), NOT by the unique idempotency_key.
+    // A dedup-break that writes the canonical key once then a random key on redelivery would leave
+    // countFor==1 (blind) but matchedRowsForUser==3 → this assertion is the one that REDs the mutant.
+    expect(await matchedRowsForUser(u)).toBe(1);
+    expect(await countFor(s, listing)).toBe(1); // canonical row present (presence check, retained)
   });
 
   // ── H4-4: self-exclusion ────────────────────────────────────────────────────────────────────────
