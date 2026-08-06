@@ -105,7 +105,15 @@ export class NotificationWriter {
     });
   }
 
-  /** Resolve each localized entry to the recipient's language value, falling back to ru, then ''. */
+  /**
+   * Resolve each localized entry to the recipient's language value, falling back to ru, then to ANY
+   * populated locale, then ''. Uses `||` (not `??`) deliberately: an EMPTY-STRING locale must fall
+   * through, not win. The producer (SavedSearchMatchConsumer.localizedTitle) emits BOTH keys with ''
+   * for a missing locale — so an en-only listing arrives as `{ ru: '', en: 'Puppy' }`; with `??` a
+   * ru-preferring recipient would render a BLANK title. Falling through to `en` renders 'Puppy'.
+   * (AUDIT5 Б2 / F1e — notification content quality; the fallback policy lives HERE, the one place
+   * that already owns recipient-language resolution.)
+   */
   private resolveLocalized(
     localized: Record<string, Record<string, string>> | undefined,
     language: string,
@@ -113,7 +121,7 @@ export class NotificationWriter {
     if (!localized) return {};
     const out: Record<string, string> = {};
     for (const [key, byLang] of Object.entries(localized)) {
-      out[key] = byLang[language] ?? byLang.ru ?? '';
+      out[key] = byLang[language] || byLang.ru || Object.values(byLang).find((v) => v) || '';
     }
     return out;
   }

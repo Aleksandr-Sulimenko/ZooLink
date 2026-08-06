@@ -59,6 +59,19 @@ describe('NotificationWriter', () => {
     expect(renderedContent($executeRaw.mock.calls[0][0])).toContain('Щенок');
   });
 
+  // AUDIT5 Б2 / F1e: an en-only listing arrives as { ru: '', en: 'Puppy' } (localizedTitle emits BOTH
+  // keys, '' for the missing locale). A ru-preferring recipient must NOT get a blank title — the empty
+  // ru value must fall THROUGH to the populated en. With the old `??` this rendered '' (nullish
+  // coalescing does not skip empty strings); with `||` + any-locale fallback it renders 'Puppy'.
+  it('en-only content: an empty recipient-language value falls through to a populated locale (never blank)', async () => {
+    const enOnly = { listing_title: { en: 'Puppy', ru: '' } };
+    const { writer, $executeRaw } = make({ language: 'ru' }); // ru recipient, ru value is ''
+    await writer.materialize('u1', 'saved_search_matched', { listing_id: 'l-1' }, 'k1', { localized: enOnly });
+    const content = renderedContent($executeRaw.mock.calls[0][0]);
+    expect(content).toContain('Puppy'); // non-empty title, resolved from en
+    expect(content).not.toBe('Hi  (l-1)'); // guard against the blank-title regression
+  });
+
   it('no analytics event → single INSERT, no transaction (unchanged path); returns true on insert', async () => {
     const { writer, $executeRaw, $transaction } = make({ affected: 1 });
     const inserted = await writer.materialize('u1', 'saved_search_matched', { listing_id: 'l-1' }, 'k1');
