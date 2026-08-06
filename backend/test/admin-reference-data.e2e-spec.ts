@@ -16,6 +16,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Admin Reference Data (e2e)', () => {
   let app: INestApplication;
@@ -34,7 +35,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     return res.body.accessToken as string;
   };
 
@@ -43,6 +44,7 @@ describe('Admin Reference Data (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -71,18 +73,18 @@ describe('Admin Reference Data (e2e)', () => {
   });
 
   it('lists species publicly (no auth) with the standard envelope', async () => {
-    const res = await request(server()).get('/v1/reference-data/species').expect(200);
+    const res = await request(server()).get('/api/v1/reference-data/species').expect(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(res.body.meta).toEqual(expect.objectContaining({ page: 1, limit: 20, total: expect.any(Number) }));
   });
 
   it('400s on an unknown dataset', async () => {
-    await request(server()).get('/v1/reference-data/traits').expect(400);
+    await request(server()).get('/api/v1/reference-data/traits').expect(400);
   });
 
   it('rejects a create from a normal USER with 403', async () => {
     await request(server())
-      .post('/v1/reference-data/species')
+      .post('/api/v1/reference-data/species')
       .set('Authorization', `Bearer ${userToken}`)
       .send({ code: speciesCode, nameLocalized: { ru: 'Тест', en: 'Test' } })
       .expect(403);
@@ -90,7 +92,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('ADMIN creates a species (201)', async () => {
     const res = await request(server())
-      .post('/v1/reference-data/species')
+      .post('/api/v1/reference-data/species')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ code: speciesCode, nameLocalized: { ru: 'Тестовид', en: 'TestSpecies' }, market: 'pet' })
       .expect(201);
@@ -106,13 +108,13 @@ describe('Admin Reference Data (e2e)', () => {
     const key = `idem-${suffix}`;
     const body = { code: `${speciesCode}_idem`, nameLocalized: { ru: 'Идем', en: 'Idem' } };
     const first = await request(server())
-      .post('/v1/reference-data/species')
+      .post('/api/v1/reference-data/species')
       .set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', key)
       .send(body)
       .expect(201);
     const replay = await request(server())
-      .post('/v1/reference-data/species')
+      .post('/api/v1/reference-data/species')
       .set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', key)
       .send(body)
@@ -124,7 +126,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('rejects a breed referencing a non-existent species (400)', async () => {
     await request(server())
-      .post('/v1/reference-data/breeds')
+      .post('/api/v1/reference-data/breeds')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ code: breedCode, speciesId: 2147483000, nameLocalized: { ru: 'X', en: 'X' } })
       .expect(400);
@@ -132,7 +134,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('ADMIN creates a breed under the new species', async () => {
     const res = await request(server())
-      .post('/v1/reference-data/breeds')
+      .post('/api/v1/reference-data/breeds')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ code: breedCode, speciesId: createdSpeciesId, nameLocalized: { ru: 'Тестпорода', en: 'TestBreed' } })
       .expect(201);
@@ -142,7 +144,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('rejects a code on a city create (400)', async () => {
     await request(server())
-      .post('/v1/reference-data/cities')
+      .post('/api/v1/reference-data/cities')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ code: 'nope', nameLocalized: { ru: 'Городок', en: 'Town' } })
       .expect(400);
@@ -150,7 +152,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('ADMIN creates a city (no code)', async () => {
     const res = await request(server())
-      .post('/v1/reference-data/cities')
+      .post('/api/v1/reference-data/cities')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ nameLocalized: { ru: `Город ${suffix}`, en: `City ${suffix}` } })
       .expect(201);
@@ -160,14 +162,14 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('public GET by id resolves the name for Accept-Language (en fallback)', async () => {
     const en = await request(server())
-      .get(`/v1/reference-data/species/${createdSpeciesId}`)
+      .get(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .set('Accept-Language', 'en')
       .expect(200);
     expect(en.body.name).toBe('TestSpecies');
     expect(en.body.nameLocalized).toBeNull();
 
     const ru = await request(server())
-      .get(`/v1/reference-data/species/${createdSpeciesId}`)
+      .get(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .set('Accept-Language', 'ru')
       .expect(200);
     expect(ru.body.name).toBe('Тестовид');
@@ -175,27 +177,27 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('GET by id returns an ETag; PATCH without If-Match is 428; stale is 412; valid succeeds', async () => {
     const get = await request(server())
-      .get(`/v1/reference-data/species/${createdSpeciesId}`)
+      .get(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .expect(200);
     const etag = get.headers['etag'];
     expect(etag).toBeTruthy();
 
     const body = { nameLocalized: { ru: 'Переименовано', en: 'Renamed' } };
     await request(server())
-      .patch(`/v1/reference-data/species/${createdSpeciesId}`)
+      .patch(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send(body)
       .expect(428);
 
     await request(server())
-      .patch(`/v1/reference-data/species/${createdSpeciesId}`)
+      .patch(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .set('If-Match', 'W/"deadbeef"')
       .send(body)
       .expect(412);
 
     const patched = await request(server())
-      .patch(`/v1/reference-data/species/${createdSpeciesId}`)
+      .patch(`/api/v1/reference-data/species/${createdSpeciesId}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .set('If-Match', etag)
       .send(body)
@@ -206,20 +208,20 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('toggle-active deactivates then hides from the public active-only list', async () => {
     await request(server())
-      .patch(`/v1/reference-data/species/${createdSpeciesId}/toggle-active`)
+      .patch(`/api/v1/reference-data/species/${createdSpeciesId}/toggle-active`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect((r) => expect(r.body.isActive).toBe(false));
 
     const publicList = await request(server())
-      .get(`/v1/reference-data/species?limit=100`)
+      .get(`/api/v1/reference-data/species?limit=100`)
       .expect(200);
     const ids = (publicList.body.items as { id: number }[]).map((i) => i.id);
     expect(ids).not.toContain(createdSpeciesId);
 
     // ADMIN can still see it with includeInactive
     const adminList = await request(server())
-      .get(`/v1/reference-data/species?includeInactive=true&limit=100`)
+      .get(`/api/v1/reference-data/species?includeInactive=true&limit=100`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     const adminIds = (adminList.body.items as { id: number }[]).map((i) => i.id);
@@ -230,7 +232,7 @@ describe('Admin Reference Data (e2e)', () => {
     // Regression: @Type(() => Boolean) parsed the string "false" as true, silently INCLUDING inactive
     // rows. With the @Transform fix, includeInactive=false must behave as active-only.
     const res = await request(server())
-      .get(`/v1/reference-data/species?includeInactive=false&limit=100`)
+      .get(`/api/v1/reference-data/species?includeInactive=false&limit=100`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     const ids = (res.body.items as { id: number }[]).map((i) => i.id);
@@ -239,7 +241,7 @@ describe('Admin Reference Data (e2e)', () => {
 
   it('serves the create-form template to ADMIN', async () => {
     const res = await request(server())
-      .get('/v1/reference-data/breeds/new')
+      .get('/api/v1/reference-data/breeds/new')
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     expect(res.body.fields).toHaveProperty('speciesId');

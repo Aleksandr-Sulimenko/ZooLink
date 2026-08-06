@@ -22,6 +22,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Rate limiting 429 + headers (e2e)', () => {
   let app: INestApplication;
@@ -34,6 +35,7 @@ describe('Rate limiting 429 + headers (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
   });
@@ -51,7 +53,7 @@ describe('Rate limiting 429 + headers (e2e)', () => {
     const junk = { phone: '123' };
 
     // First request: allowed → headers present, advertising the cap.
-    const first = await request(server()).post('/v1/auth/register/phone').send(junk);
+    const first = await request(server()).post('/api/v1/auth/register/phone').send(junk);
     expect(first.status).not.toBe(429);
     expect(first.headers['x-ratelimit-limit']).toBe(String(REGISTER_LIMIT));
     expect(first.headers['x-ratelimit-remaining']).toBeDefined();
@@ -59,12 +61,12 @@ describe('Rate limiting 429 + headers (e2e)', () => {
 
     // Exhaust the rest of the window (requests 2..5 stay under the cap).
     for (let i = 2; i <= REGISTER_LIMIT; i++) {
-      const r = await request(server()).post('/v1/auth/register/phone').send(junk);
+      const r = await request(server()).post('/api/v1/auth/register/phone').send(junk);
       expect(r.status).not.toBe(429);
     }
 
     // The (limit+1)th request is blocked.
-    const blocked = await request(server()).post('/v1/auth/register/phone').send(junk).expect(429);
+    const blocked = await request(server()).post('/api/v1/auth/register/phone').send(junk).expect(429);
     expect(blocked.headers['content-type']).toContain('application/problem+json');
     expect(blocked.body.code).toBe('RATE_LIMITED');
     expect(blocked.body.status).toBe(429);

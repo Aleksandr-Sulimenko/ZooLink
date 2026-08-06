@@ -19,6 +19,7 @@ import type { SmsMessage, SmsSendResult, EmailMessage, EmailSendResult } from '.
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { CryptoService } from '../src/lib/crypto/crypto.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 /**
  * The refresh token is delivered ONLY as the HttpOnly `refresh_token` cookie (API_CONVENTIONS §2 /
@@ -71,6 +72,7 @@ describe('Identity phone OTP (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -91,7 +93,7 @@ describe('Identity phone OTP (e2e)', () => {
   let eraseUserId: string | undefined;
   const recoverEmail = `recover-${Math.random().toString(36).slice(2)}@example.com`;
   const devToken = async (userId: string): Promise<string> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId }).expect(201);
     return res.body.accessToken as string;
   };
 
@@ -99,14 +101,14 @@ describe('Identity phone OTP (e2e)', () => {
 
   it('rejects an invalid phone with 400', async () => {
     await request(server())
-      .post('/v1/auth/register/phone')
+      .post('/api/v1/auth/register/phone')
       .send({ phone: '123', fullName: 'Ann' })
       .expect(400);
   });
 
   it('registers (202) and sends a 6-digit OTP', async () => {
     const res = await request(server())
-      .post('/v1/auth/register/phone')
+      .post('/api/v1/auth/register/phone')
       .send({ phone, fullName: 'Ann Tester' })
       .expect(202);
     expect(res.body).toEqual({ status: 'VERIFICATION_REQUIRED', expiresInSeconds: 300 });
@@ -117,14 +119,14 @@ describe('Identity phone OTP (e2e)', () => {
   it('rejects a wrong code with 400', async () => {
     const wrong = sentCodes[0] === '000000' ? '111111' : '000000';
     await request(server())
-      .post('/v1/auth/verify-phone')
+      .post('/api/v1/auth/verify-phone')
       .send({ phone, code: wrong })
       .expect(400);
   });
 
   it('verifies the OTP, activates the account, and issues a usable session', async () => {
     const res = await request(server())
-      .post('/v1/auth/verify-phone')
+      .post('/api/v1/auth/verify-phone')
       .send({ phone, code: sentCodes[0] })
       .expect(200);
 
@@ -138,7 +140,7 @@ describe('Identity phone OTP (e2e)', () => {
 
     // the issued access token works on a protected route
     const who = await request(server())
-      .get('/v1/auth/whoami')
+      .get('/api/v1/auth/whoami')
       .set('Authorization', `Bearer ${res.body.accessToken as string}`)
       .expect(200);
     expect(who.body).toMatchObject({ userId: createdUserId, role: 'USER', principalType: 'HUMAN' });
@@ -146,14 +148,14 @@ describe('Identity phone OTP (e2e)', () => {
 
   it('rejects an unknown OAuth provider with 400', async () => {
     await request(server())
-      .post('/v1/auth/register/oauth/myspace')
+      .post('/api/v1/auth/register/oauth/myspace')
       .send({ code: 'x', fullName: 'X' })
       .expect(400);
   });
 
   it('registers a new OAuth user (201, ACTIVE) via the dev stub provider', async () => {
     const res = await request(server())
-      .post('/v1/auth/register/oauth/google')
+      .post('/api/v1/auth/register/oauth/google')
       .send({ code: oauthCode, fullName: 'Oauth User' })
       .expect(201);
     expect(res.body.accessToken).toEqual(expect.any(String));
@@ -165,7 +167,7 @@ describe('Identity phone OTP (e2e)', () => {
 
   it('logs in the same OAuth identity on a second call (200)', async () => {
     const res = await request(server())
-      .post('/v1/auth/register/oauth/google')
+      .post('/api/v1/auth/register/oauth/google')
       .send({ code: oauthCode, fullName: 'Oauth User' })
       .expect(200);
     expect(res.body.user.id).toBe(createdOauthUserId);
@@ -175,16 +177,16 @@ describe('Identity phone OTP (e2e)', () => {
   const bearer = () => `Bearer ${token ?? ''}`;
 
   it('GET /me requires auth (401 without token)', async () => {
-    await request(server()).get('/v1/me').expect(401);
+    await request(server()).get('/api/v1/me').expect(401);
   });
 
   it('GET /me returns the profile with an ETag, and 304 on If-None-Match', async () => {
-    const res = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    const res = await request(server()).get('/api/v1/me').set('Authorization', bearer()).expect(200);
     expect(res.body.id).toBe(createdUserId);
     const etag = res.headers.etag;
     expect(etag).toMatch(/^W\//);
     await request(server())
-      .get('/v1/me')
+      .get('/api/v1/me')
       .set('Authorization', bearer())
       .set('If-None-Match', etag)
       .expect(304);
@@ -192,12 +194,12 @@ describe('Identity phone OTP (e2e)', () => {
 
   it('PATCH /me requires If-Match (428) and rejects a stale one (412)', async () => {
     await request(server())
-      .patch('/v1/me')
+      .patch('/api/v1/me')
       .set('Authorization', bearer())
       .send({ fullName: 'Renamed' })
       .expect(428);
     await request(server())
-      .patch('/v1/me')
+      .patch('/api/v1/me')
       .set('Authorization', bearer())
       .set('If-Match', 'W/"stale"')
       .send({ fullName: 'Renamed' })
@@ -205,9 +207,9 @@ describe('Identity phone OTP (e2e)', () => {
   });
 
   it('PATCH /me updates with a valid If-Match', async () => {
-    const cur = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    const cur = await request(server()).get('/api/v1/me').set('Authorization', bearer()).expect(200);
     const res = await request(server())
-      .patch('/v1/me')
+      .patch('/api/v1/me')
       .set('Authorization', bearer())
       .set('If-Match', cur.headers.etag)
       .send({ fullName: 'Renamed User', preferredLanguage: 'en' })
@@ -217,12 +219,12 @@ describe('Identity phone OTP (e2e)', () => {
   });
 
   it('deactivates then reactivates the account', async () => {
-    await request(server()).post('/v1/me').set('Authorization', bearer()).expect(200);
-    const after = await request(server()).get('/v1/me').set('Authorization', bearer()).expect(200);
+    await request(server()).post('/api/v1/me').set('Authorization', bearer()).expect(200);
+    const after = await request(server()).get('/api/v1/me').set('Authorization', bearer()).expect(200);
     expect(after.body.status).toBe('DEACTIVATED');
 
     const re = await request(server())
-      .post('/v1/me/reactivate')
+      .post('/api/v1/me/reactivate')
       .set('Authorization', bearer())
       .expect(200);
     expect(re.body.status).toBe('ACTIVE');
@@ -248,14 +250,14 @@ describe('Identity phone OTP (e2e)', () => {
     recoverUserId = u.id;
 
     const req = await request(server())
-      .post('/v1/auth/recover/email/request')
+      .post('/api/v1/auth/recover/email/request')
       .send({ email: recoverEmail })
       .expect(202);
     expect(req.body).toEqual({ status: 'VERIFICATION_REQUIRED', expiresInSeconds: 300 });
     expect(sentEmailCodes).toHaveLength(1);
 
     const ver = await request(server())
-      .post('/v1/auth/recover/email/verify')
+      .post('/api/v1/auth/recover/email/verify')
       .send({ email: recoverEmail, code: sentEmailCodes[0] })
       .expect(200);
     expect(ver.body.accessToken).toEqual(expect.any(String));
@@ -267,7 +269,7 @@ describe('Identity phone OTP (e2e)', () => {
   it('does not enumerate accounts — unknown email still 202, no email sent', async () => {
     const before = sentEmailCodes.length;
     await request(server())
-      .post('/v1/auth/recover/email/request')
+      .post('/api/v1/auth/recover/email/request')
       .send({ email: `ghost-${Math.random().toString(36).slice(2)}@example.com` })
       .expect(202);
     expect(sentEmailCodes).toHaveLength(before);
@@ -275,7 +277,7 @@ describe('Identity phone OTP (e2e)', () => {
 
   it('rejects a wrong recovery code with 400', async () => {
     await request(server())
-      .post('/v1/auth/recover/email/verify')
+      .post('/api/v1/auth/recover/email/verify')
       .send({ email: recoverEmail, code: '000001' })
       .expect(400);
   });
@@ -283,7 +285,7 @@ describe('Identity phone OTP (e2e)', () => {
   // ---- Slice 4: admin role-elevation, rebind, erase ----
   it('ADMIN-only routes reject a normal USER with 403', async () => {
     await request(server())
-      .patch(`/v1/admin/users/${createdUserId ?? recoverUserId}/role`)
+      .patch(`/api/v1/admin/users/${createdUserId ?? recoverUserId}/role`)
       .set('Authorization', bearer())
       .send({ role: 'BREEDER' })
       .expect(403);
@@ -299,7 +301,7 @@ describe('Identity phone OTP (e2e)', () => {
     // a fresh USER target with a live session
     const targetToken = token as string; // createdUserId's session (reactivated above)
     const res = await request(server())
-      .patch(`/v1/admin/users/${createdUserId}/role`)
+      .patch(`/api/v1/admin/users/${createdUserId}/role`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ role: 'BREEDER' })
       .expect(200);
@@ -314,7 +316,7 @@ describe('Identity phone OTP (e2e)', () => {
     const adminToken = await devToken(adminId as string);
     const newPhone = `+7999${Math.floor(1000000 + Math.random() * 8999999)}`;
     await request(server())
-      .post(`/v1/admin/users/${createdUserId}/rebind`)
+      .post(`/api/v1/admin/users/${createdUserId}/rebind`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ newPhone, reason: 'lost SIM' })
       .expect(200);
@@ -342,7 +344,7 @@ describe('Identity phone OTP (e2e)', () => {
     eraseUserId = victim.id;
 
     await request(server())
-      .post(`/v1/admin/users/${victim.id}/erase`)
+      .post(`/api/v1/admin/users/${victim.id}/erase`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
 
@@ -358,7 +360,7 @@ describe('Identity phone OTP (e2e)', () => {
 
     // idempotent — second call is a no-op 200
     await request(server())
-      .post(`/v1/admin/users/${victim.id}/erase`)
+      .post(`/api/v1/admin/users/${victim.id}/erase`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
   });
@@ -366,7 +368,7 @@ describe('Identity phone OTP (e2e)', () => {
   it('an erased account can no longer be recovered (email released — no OTP sent)', async () => {
     const before = sentEmailCodes.length;
     await request(server())
-      .post('/v1/auth/recover/email/request')
+      .post('/api/v1/auth/recover/email/request')
       .send({ email: eraseEmail }) // belonged to the erased user; email is now NULL → no match
       .expect(202);
     expect(sentEmailCodes).toHaveLength(before); // no email sent (no enumeration, no leak)
@@ -376,7 +378,7 @@ describe('Identity phone OTP (e2e)', () => {
     // recoverUserId is ACTIVE again after recovery; mint a session and self-erase-request
     const selfToken = await devToken(recoverUserId as string);
     await request(server())
-      .post('/v1/me/erase')
+      .post('/api/v1/me/erase')
       .set('Authorization', `Bearer ${selfToken}`)
       .expect(202);
     const after = await prisma.users.findUnique({ where: { id: recoverUserId } });

@@ -48,6 +48,14 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_DOMAIN: z.string().min(1).default('localhost'),
 
+  // CORS allowlist for cross-origin browsers — comma-separated EXACT origins (e.g.
+  // "http://localhost:5173"). EMPTY (the default) = CORS disabled: the production topology is
+  // same-origin behind Caddy (ADR-0009), where no CORS header is needed. Set it ONLY for cross-origin
+  // LOCAL development (a SPA dev-server on another port). main.ts enables CORS with credentials:true
+  // when this is non-empty — never a wildcard, because the refresh cookie requires an exact origin.
+  // This lists the ALLOWED front-end origins only; the public base path itself lives in config/api-base.
+  CORS_ORIGINS: z.string().optional().default(''),
+
   // ADR-0017 dev-only escape hatch. Permits a NON-RF `*_REGION` value (e.g. a local MinIO left at
   // its native `us-east-1` default) ONLY when NODE_ENV!=='production'. Strict-parsed / fail-closed
   // (same discipline as ENABLE_DEV_TOKEN). In production this flag is IGNORED — the RF allowlist is

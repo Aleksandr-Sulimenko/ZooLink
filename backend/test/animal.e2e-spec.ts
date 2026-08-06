@@ -19,6 +19,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Animal Slice 1 (e2e)', () => {
   let app: INestApplication;
@@ -39,7 +40,7 @@ describe('Animal Slice 1 (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     return res.body.accessToken as string;
   };
 
@@ -50,6 +51,7 @@ describe('Animal Slice 1 (e2e)', () => {
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
     );
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -100,7 +102,7 @@ describe('Animal Slice 1 (e2e)', () => {
   });
 
   const create = (token: string, body: Record<string, unknown>) =>
-    request(server()).post('/v1/animals').set('Authorization', `Bearer ${token}`).send(body);
+    request(server()).post('/api/v1/animals').set('Authorization', `Bearer ${token}`).send(body);
 
   /** Body id as a typed string (avoids `any` leaking into typed args / arrays). */
   const idOf = (res: { body: { id?: unknown } }): string => res.body.id as string;
@@ -112,7 +114,7 @@ describe('Animal Slice 1 (e2e)', () => {
   };
 
   it('requires auth (401 without a bearer token)', async () => {
-    await request(server()).get('/v1/animals').expect(401);
+    await request(server()).get('/api/v1/animals').expect(401);
   });
 
   it('creates a personal-owned animal (201)', async () => {
@@ -216,14 +218,14 @@ describe('Animal Slice 1 (e2e)', () => {
     const key = `idem-ani-${suffix}`;
     const body = base({ nicknameLocalized: { en: 'IdemPet' } });
     const first = await request(server())
-      .post('/v1/animals')
+      .post('/api/v1/animals')
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', key)
       .send(body)
       .expect(201);
     created.push(idOf(first));
     const replay = await request(server())
-      .post('/v1/animals')
+      .post('/api/v1/animals')
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', key)
       .send(body)
@@ -236,27 +238,27 @@ describe('Animal Slice 1 (e2e)', () => {
     const c = await create(ownerToken, base()).expect(201);
     created.push(idOf(c));
     const get = await request(server())
-      .get(`/v1/animals/${c.body.id}`)
+      .get(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(200);
     const etag = get.headers['etag'];
     expect(etag).toBeTruthy();
 
     await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ colorCoat: 'black' })
       .expect(428);
 
     await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('If-Match', 'W/"deadbeef"')
       .send({ colorCoat: 'black' })
       .expect(412);
 
     const patched = await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('If-Match', etag)
       .send({ colorCoat: 'black', nicknameLocalized: { en: 'Renamed', ru: 'Переименован' } })
@@ -269,11 +271,11 @@ describe('Animal Slice 1 (e2e)', () => {
     const c = await create(ownerToken, base()).expect(201);
     created.push(idOf(c));
     const get = await request(server())
-      .get(`/v1/animals/${c.body.id}`)
+      .get(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(200);
     await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('If-Match', get.headers['etag'])
       .send({ speciesId: 2 })
@@ -284,17 +286,17 @@ describe('Animal Slice 1 (e2e)', () => {
     const c = await create(ownerToken, base()).expect(201);
     created.push(idOf(c));
     const get = await request(server())
-      .get(`/v1/animals/${c.body.id}`)
+      .get(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${modToken}`)
       .expect(200); // MODERATOR reads any
     await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${otherToken}`)
       .set('If-Match', get.headers['etag'])
       .send({ colorCoat: 'x' })
       .expect(403);
     await request(server())
-      .patch(`/v1/animals/${c.body.id}`)
+      .patch(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${modToken}`)
       .set('If-Match', get.headers['etag'])
       .send({ colorCoat: 'x' })
@@ -307,49 +309,49 @@ describe('Animal Slice 1 (e2e)', () => {
     const c = await create(ownerToken, base()).expect(201);
     created.push(idOf(c));
     const existing = await request(server())
-      .get(`/v1/animals/${c.body.id}`)
+      .get(`/api/v1/animals/${c.body.id}`)
       .set('Authorization', `Bearer ${otherToken}`);
     const missing = await request(server())
-      .get(`/v1/animals/${randomUUID()}`)
+      .get(`/api/v1/animals/${randomUUID()}`)
       .set('Authorization', `Bearer ${otherToken}`);
     expect(existing.status).toBe(404); // indistinguishable from a missing id
     expect(missing.status).toBe(404);
     // owner + operator still see it
-    await request(server()).get(`/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${ownerToken}`).expect(200);
-    await request(server()).get(`/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${modToken}`).expect(200);
+    await request(server()).get(`/api/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${ownerToken}`).expect(200);
+    await request(server()).get(`/api/v1/animals/${c.body.id}`).set('Authorization', `Bearer ${modToken}`).expect(200);
   });
 
   it('deactivate then reactivate, with 409 on a repeat', async () => {
     const c = await create(ownerToken, base()).expect(201);
     created.push(idOf(c));
     const off = await request(server())
-      .patch(`/v1/animals/${c.body.id}/deactivate`)
+      .patch(`/api/v1/animals/${c.body.id}/deactivate`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(200);
     expect(off.body.isActive).toBe(false);
     expect(off.body.deactivatedAt).toBeTruthy();
 
     await request(server())
-      .patch(`/v1/animals/${c.body.id}/deactivate`)
+      .patch(`/api/v1/animals/${c.body.id}/deactivate`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(409);
 
     const on = await request(server())
-      .patch(`/v1/animals/${c.body.id}/reactivate`)
+      .patch(`/api/v1/animals/${c.body.id}/reactivate`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(200);
     expect(on.body.isActive).toBe(true);
     expect(on.body.deactivatedAt).toBeNull();
 
     await request(server())
-      .patch(`/v1/animals/${c.body.id}/reactivate`)
+      .patch(`/api/v1/animals/${c.body.id}/reactivate`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(409);
   });
 
   it('lists with filters and the standard page envelope', async () => {
     const res = await request(server())
-      .get(`/v1/animals?owner_id=${ownerId}&species_id=${speciesId}&sex=Male&limit=100`)
+      .get(`/api/v1/animals?owner_id=${ownerId}&species_id=${speciesId}&sex=Male&limit=100`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(200);
     expect(Array.isArray(res.body.items)).toBe(true);
@@ -374,9 +376,9 @@ describe('Animal Slice 1 (e2e)', () => {
 
     const ids = (res: { body: { items: { id: string }[] } }): string[] => res.body.items.map((i) => i.id);
 
-    it("an UNSCOPED GET /v1/animals does NOT leak user B's animal to user A", async () => {
+    it("an UNSCOPED GET /api/v1/animals does NOT leak user B's animal to user A", async () => {
       const res = await request(server())
-        .get('/v1/animals?limit=100')
+        .get('/api/v1/animals?limit=100')
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       const got = ids(res);
@@ -389,7 +391,7 @@ describe('Animal Slice 1 (e2e)', () => {
 
     it("a user-supplied owner_id of user B cannot widen scope (still excludes B's animal)", async () => {
       const res = await request(server())
-        .get(`/v1/animals?owner_id=${otherId}&limit=100`)
+        .get(`/api/v1/animals?owner_id=${otherId}&limit=100`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       expect(ids(res)).not.toContain(bobAnimal);
@@ -397,7 +399,7 @@ describe('Animal Slice 1 (e2e)', () => {
 
     it('MODERATOR (unscoped) DOES see both animals', async () => {
       const res = await request(server())
-        .get('/v1/animals?limit=100')
+        .get('/api/v1/animals?limit=100')
         .set('Authorization', `Bearer ${modToken}`)
         .expect(200);
       const got = ids(res);
@@ -406,7 +408,7 @@ describe('Animal Slice 1 (e2e)', () => {
 
     it('ADMIN (unscoped) DOES see both animals', async () => {
       const res = await request(server())
-        .get('/v1/animals?limit=100')
+        .get('/api/v1/animals?limit=100')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       const got = ids(res);

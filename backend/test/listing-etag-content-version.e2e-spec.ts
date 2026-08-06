@@ -24,6 +24,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Listing ETag content-version (ADR-0035, e2e)', () => {
   let app: INestApplication;
@@ -40,7 +41,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (n: string, role = 'USER'): Promise<string> => {
     const u = await prisma.users.create({ data: { full_name: n, role, principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -73,18 +74,18 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     ...over,
   });
   const create = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post('/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post('/api/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const addPhoto = (tok: string, id: string) =>
-    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
+    request(server()).post(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
   /** GET as the seller (excluded from view-count) so the read does NOT itself increment. */
   const sellerGet = async (id: string): Promise<{ etag: string; body: Record<string, unknown> }> => {
-    const r = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    const r = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     return { etag: r.headers['etag'], body: r.body as Record<string, unknown> };
   };
   /** A distinct viewer GETs the listing → increments view_count once. */
   const viewOnce = async (id: string): Promise<void> => {
     const tok = await freshViewerTok();
-    await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
   };
   const viewCountOf = async (id: string): Promise<bigint> =>
     (await prisma.listings.findUnique({ where: { id }, select: { view_count: true } }))!.view_count;
@@ -97,9 +98,9 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     const id = (await create(sellerTok, baseBody({ animalId, listingType })).expect(201)).body.id as string;
     await addPhoto(sellerTok, id).expect(201);
     const { etag } = await sellerGet(id);
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-    await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-    await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
     expect((await prisma.listings.findUnique({ where: { id } }))?.status).toBe('ACTIVE');
     return id;
   };
@@ -116,6 +117,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -170,7 +172,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
 
     // The seller's If-Match PATCH with the pre-view ETag succeeds — NO spurious 412.
     await request(server())
-      .patch(`/v1/listings/${id}`)
+      .patch(`/api/v1/listings/${id}`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('If-Match', e1)
       .send({ priceCents: 9000 })
@@ -187,7 +189,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
 
     // The seller still holds a VALID validator — the edit-lockout lever is closed.
     await request(server())
-      .patch(`/v1/listings/${id}`)
+      .patch(`/api/v1/listings/${id}`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('If-Match', preFlood)
       .send({ priceCents: 12000 })
@@ -200,7 +202,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     const { etag: e1 } = await sellerGet(id);
 
     const patch1 = await request(server())
-      .patch(`/v1/listings/${id}`)
+      .patch(`/api/v1/listings/${id}`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('If-Match', e1)
       .send({ titleLocalized: { en: 'Renamed', ru: 'Переименовано' } })
@@ -210,7 +212,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
 
     // A second PATCH with the now-stale e1 correctly 412s.
     const stale = await request(server())
-      .patch(`/v1/listings/${id}`)
+      .patch(`/api/v1/listings/${id}`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('If-Match', e1)
       .send({ priceCents: 15000 })
@@ -222,7 +224,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
   it('submit changes the ETag', async () => {
     const id = await makeDraft();
     const { etag: e1 } = await sellerGet(id);
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', e1).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', e1).expect(200);
     const { etag: e2 } = await sellerGet(id);
     expect(e2).not.toBe(e1);
   });
@@ -230,7 +232,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
   it('withdraw changes the ETag', async () => {
     const id = await makeActive();
     const { etag: e1 } = await sellerGet(id);
-    await request(server()).delete(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).delete(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     const { etag: e2 } = await sellerGet(id); // seller can still read a DEACTIVATED listing
     expect(e2).not.toBe(e1);
   });
@@ -238,7 +240,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
   it('mark-sold changes the ETag', async () => {
     const id = await makeActive();
     const { etag: e1 } = await sellerGet(id);
-    await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', e1).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', e1).expect(200);
     const { etag: e2 } = await sellerGet(id);
     expect(e2).not.toBe(e1);
   });
@@ -275,7 +277,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     const animalId = (await prisma.listings.findUnique({ where: { id }, select: { animal_id: true } }))!.animal_id;
     const cua0 = await contentUpdatedAt(id);
     await new Promise((r) => setTimeout(r, 5)); // ensure now() is strictly later than cua0
-    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect((await prisma.listings.findUnique({ where: { id } }))?.status).toBe('DEACTIVATED');
     expect((await contentUpdatedAt(id)).getTime()).toBeGreaterThan(cua0.getTime());
   });
@@ -311,7 +313,7 @@ describe('Listing ETag content-version (ADR-0035, e2e)', () => {
     const id = await makeActive();
     await viewOnce(id);
     await viewOnce(id);
-    const analytics = await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    const analytics = await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect(analytics.body.views).toBe(Number(await viewCountOf(id)));
     expect(analytics.body.views).toBeGreaterThanOrEqual(2);
   });

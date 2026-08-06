@@ -26,6 +26,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('RBAC round-9 additive-model closure (e2e)', () => {
   let app: INestApplication;
@@ -49,7 +50,7 @@ describe('RBAC round-9 additive-model closure (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (name: string, role: string): Promise<string> => {
     const u = await prisma.users.create({ data: { full_name: name, role, principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -74,7 +75,7 @@ describe('RBAC round-9 additive-model closure (e2e)', () => {
   /** Build a DRAFT-listing POST as `tok` for a freshly-owned animal (WRITE_ROLES gate). */
   const postListing = (tok: string, animalId: string) =>
     request(server())
-      .post('/v1/listings')
+      .post('/api/v1/listings')
       .set('Authorization', `Bearer ${tok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ animalId, listingType: 'sale', titleLocalized: { en: 'R9', ru: 'Р9' }, priceCents: 5000 });
@@ -84,6 +85,7 @@ describe('RBAC round-9 additive-model closure (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -141,39 +143,39 @@ describe('RBAC round-9 additive-model closure (e2e)', () => {
   // ── Listings ANALYTICS_ROLES (listings-api.yaml :607/639 — form B, owner-scoped) ────────────────
   it('listing analytics: VETERINARIAN owner gets 200 (role gate passes, not 403)', async () => {
     const id = track(await postListing(vetTok, await newAnimal(vetId)).expect(201));
-    await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${vetTok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${vetTok}`).expect(200);
   });
 
   it('listing analytics: GROOMER owner gets 200 (role gate passes, not 403)', async () => {
     const id = track(await postListing(groomerTok, await newAnimal(groomerId)).expect(201));
-    await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${groomerTok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${groomerTok}`).expect(200);
   });
 
   // ── Moderation owner-result (moderation-api.yaml :291 — form B, owner-scoped) ────────────────────
   it('moderation-result: VETERINARIAN owner gets a non-403 (204 no-decision-yet)', async () => {
     const id = track(await postListing(vetTok, await newAnimal(vetId)).expect(201));
-    const res = await request(server()).get(`/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${vetTok}`);
+    const res = await request(server()).get(`/api/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${vetTok}`);
     expect(res.status).not.toBe(403);
     expect([200, 204]).toContain(res.status);
   });
 
   it('moderation-result: GROOMER owner gets a non-403 (204 no-decision-yet)', async () => {
     const id = track(await postListing(groomerTok, await newAnimal(groomerId)).expect(201));
-    const res = await request(server()).get(`/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${groomerTok}`);
+    const res = await request(server()).get(`/api/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${groomerTok}`);
     expect(res.status).not.toBe(403);
     expect([200, 204]).toContain(res.status);
   });
 
   // ── Notification own inbox (notification-api.yaml :69/155/167 — form B) ──────────────────────────
   it('notifications inbox: USER passes (200) — baseline', async () => {
-    await request(server()).get('/v1/me/notifications?limit=10').set('Authorization', `Bearer ${userTok}`).expect(200);
+    await request(server()).get('/api/v1/me/notifications?limit=10').set('Authorization', `Bearer ${userTok}`).expect(200);
   });
 
   it('notifications inbox: VETERINARIAN passes exactly where USER does (200, not 403)', async () => {
-    await request(server()).get('/v1/me/notifications?limit=10').set('Authorization', `Bearer ${vetTok}`).expect(200);
+    await request(server()).get('/api/v1/me/notifications?limit=10').set('Authorization', `Bearer ${vetTok}`).expect(200);
   });
 
   it('notifications inbox: GROOMER passes exactly where USER does (200, not 403)', async () => {
-    await request(server()).get('/v1/me/notifications?limit=10').set('Authorization', `Bearer ${groomerTok}`).expect(200);
+    await request(server()).get('/api/v1/me/notifications?limit=10').set('Authorization', `Bearer ${groomerTok}`).expect(200);
   });
 });

@@ -23,6 +23,7 @@ import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { FeatureToggleService } from '../src/lib/feature-toggle/feature-toggle.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 const MASTER_GATE = 'agent_service_auth';
 
@@ -66,16 +67,16 @@ describe('Agent-auth lifecycle (e2e)', () => {
   const createdCreds: string[] = [];
 
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const issue = (agentUserId: string, tok: string, body: Record<string, unknown> = {}) =>
     request(server())
-      .post(`/v1/admin/agents/${agentUserId}/credentials`)
+      .post(`/api/v1/admin/agents/${agentUserId}/credentials`)
       .set('Authorization', `Bearer ${tok}`)
       .send(body);
 
   const exchange = (credential: string) =>
-    request(server()).post('/v1/auth/agent/token').send({ credential });
+    request(server()).post('/api/v1/auth/agent/token').send({ credential });
 
   const setGate = (on: boolean) =>
     toggles.flip(MASTER_GATE, { isEnabled: on, rolloutPercentage: on ? 100 : 0 }, admin);
@@ -85,6 +86,7 @@ describe('Agent-auth lifecycle (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -153,12 +155,12 @@ describe('Agent-auth lifecycle (e2e)', () => {
     const i = await issue(agentId, agentAdminTok, { capabilityProfileId: moderationProfileId }).expect(403);
     expect(codeOf(i)).toBe('ISSUANCE_HUMAN_ONLY');
     await request(server())
-      .post(`/v1/admin/agents/${agentId}/credentials/${dummyCred}/rotate`)
+      .post(`/api/v1/admin/agents/${agentId}/credentials/${dummyCred}/rotate`)
       .set('Authorization', `Bearer ${agentAdminTok}`)
       .send({})
       .expect(403);
     await request(server())
-      .delete(`/v1/admin/agents/${agentId}/credentials/${dummyCred}`)
+      .delete(`/api/v1/admin/agents/${agentId}/credentials/${dummyCred}`)
       .set('Authorization', `Bearer ${agentAdminTok}`)
       .expect(403);
   });
@@ -167,12 +169,12 @@ describe('Agent-auth lifecycle (e2e)', () => {
   it('a non-ADMIN cannot rotate or revoke a credential (403)', async () => {
     const dummyCred = '00000000-0000-0000-0000-000000000000';
     await request(server())
-      .post(`/v1/admin/agents/${agentId}/credentials/${dummyCred}/rotate`)
+      .post(`/api/v1/admin/agents/${agentId}/credentials/${dummyCred}/rotate`)
       .set('Authorization', `Bearer ${userTok}`)
       .send({})
       .expect(403);
     await request(server())
-      .delete(`/v1/admin/agents/${agentId}/credentials/${dummyCred}`)
+      .delete(`/api/v1/admin/agents/${agentId}/credentials/${dummyCred}`)
       .set('Authorization', `Bearer ${userTok}`)
       .expect(403);
   });
@@ -216,14 +218,14 @@ describe('Agent-auth lifecycle (e2e)', () => {
     const agentJwt = tok.accessToken;
 
     // whoami resolves the source-agnostic AGENT principal, carrying the resolved scope.
-    const who = (await request(server()).get('/v1/auth/whoami').set('Authorization', `Bearer ${agentJwt}`).expect(200))
+    const who = (await request(server()).get('/api/v1/auth/whoami').set('Authorization', `Bearer ${agentJwt}`).expect(200))
       .body as WhoBody;
     expect(who.principalType).toBe('AGENT');
     expect(who.role).toBe('MODERATOR');
     expect(who.scope).toEqual(expect.arrayContaining([{ action: 'read', subject: 'ModerationQueue' }]));
 
     // operator-check needs role MODERATOR + policy can(read, ModerationQueue) — the scope grants it → 200.
-    await request(server()).get('/v1/auth/operator-check').set('Authorization', `Bearer ${agentJwt}`).expect(200);
+    await request(server()).get('/api/v1/auth/operator-check').set('Authorization', `Bearer ${agentJwt}`).expect(200);
   });
 
   it('a deny-by-default agent (no profile) exchanges but is denied the scoped operation (403 through PoliciesGuard)', async () => {
@@ -231,13 +233,13 @@ describe('Agent-auth lifecycle (e2e)', () => {
     createdCreds.push(b.id);
     const agentJwt = asToken(await exchange(b.secret).expect(200)).accessToken;
 
-    const who = (await request(server()).get('/v1/auth/whoami').set('Authorization', `Bearer ${agentJwt}`).expect(200))
+    const who = (await request(server()).get('/api/v1/auth/whoami').set('Authorization', `Bearer ${agentJwt}`).expect(200))
       .body as WhoBody;
     expect(who.principalType).toBe('AGENT');
     expect(who.scope).toBeUndefined(); // deny-by-default
 
     // role gate passes (MODERATOR) but the CASL policy has no scope → denied.
-    await request(server()).get('/v1/auth/operator-check').set('Authorization', `Bearer ${agentJwt}`).expect(403);
+    await request(server()).get('/api/v1/auth/operator-check').set('Authorization', `Bearer ${agentJwt}`).expect(403);
   });
 
   // ── Uniform 401 (no oracle) ────────────────────────────────────────────────────────────────
@@ -254,7 +256,7 @@ describe('Agent-auth lifecycle (e2e)', () => {
   it('a revoked credential no longer exchanges (401)', async () => {
     const credId = scopedSecret.slice('zlk_agent_'.length).split('_')[0];
     await request(server())
-      .delete(`/v1/admin/agents/${agentId}/credentials/${credId}`)
+      .delete(`/api/v1/admin/agents/${agentId}/credentials/${credId}`)
       .set('Authorization', `Bearer ${adminTok}`)
       .expect(204);
     expect(codeOf(await exchange(scopedSecret).expect(401))).toBe('INVALID_AGENT_CREDENTIAL');
@@ -272,7 +274,7 @@ describe('Agent-auth lifecycle (e2e)', () => {
 
     const rot = asIssued(
       await request(server())
-        .post(`/v1/admin/agents/${agentId}/credentials/${old.id}/rotate`)
+        .post(`/api/v1/admin/agents/${agentId}/credentials/${old.id}/rotate`)
         .set('Authorization', `Bearer ${adminTok}`)
         .send({})
         .expect(201),
@@ -301,9 +303,9 @@ describe('Agent-auth lifecycle (e2e)', () => {
     createdCreds.push(b.id);
     await exchange(b.secret).expect(200); // live before retirement
 
-    // ADMIN retires the agent account (POST /v1/admin/users/{id}/erase → eraseUser).
+    // ADMIN retires the agent account (POST /api/v1/admin/users/{id}/erase → eraseUser).
     await request(server())
-      .post(`/v1/admin/users/${agent2Id}/erase`)
+      .post(`/api/v1/admin/users/${agent2Id}/erase`)
       .set('Authorization', `Bearer ${adminTok}`)
       .expect(200);
 
@@ -320,9 +322,9 @@ describe('Agent-auth lifecycle (e2e)', () => {
     createdCreds.push(b.id);
     await exchange(b.secret).expect(200); // live before self-deactivation
 
-    // The agent deactivates its OWN account (POST /v1/me → profile.deactivateMe) using its own session.
+    // The agent deactivates its OWN account (POST /api/v1/me → profile.deactivateMe) using its own session.
     const agent3Tok = await devToken(agent3Id);
-    await request(server()).post('/v1/me').set('Authorization', `Bearer ${agent3Tok}`).expect(200);
+    await request(server()).post('/api/v1/me').set('Authorization', `Bearer ${agent3Tok}`).expect(200);
 
     const row = await prisma.service_credentials.findUnique({ where: { id: b.id } });
     expect(row!.is_active).toBe(false);

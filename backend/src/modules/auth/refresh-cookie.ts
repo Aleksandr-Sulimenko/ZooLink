@@ -1,4 +1,5 @@
 import type { CookieOptions, Request, Response } from 'express';
+import { API_BASE_PATH } from '../../config/api-base';
 
 /**
  * Refresh-token transport = an HttpOnly, Secure, SameSite=Strict cookie (API_CONVENTIONS.md §2,
@@ -9,12 +10,17 @@ import type { CookieOptions, Request, Response } from 'express';
 export const REFRESH_COOKIE = 'refresh_token';
 
 /**
- * Path scope = the auth namespace only. The cookie is sent to /v1/auth/refresh (rotation) and
- * /v1/auth/logout (targeted single-device revoke) but to nothing else — least-privilege, so the
- * credential never rides along on unrelated requests (listings, admin, …). URI versioning puts the
- * auth controller under /v1/auth.
+ * Path scope = the auth namespace only. The cookie is sent to `${API_BASE_PATH}/auth/refresh`
+ * (rotation) and `${API_BASE_PATH}/auth/logout` (targeted single-device revoke) but to nothing else —
+ * least-privilege, so the credential never rides along on unrelated requests (listings, admin, …).
+ *
+ * DERIVED from the single public-base source (config/api-base = `/api/v1`), NOT hardcoded: the browser
+ * only ever sends a cookie whose `Path` prefixes the PUBLIC request path (`/api/v1/auth/...`). Pinning
+ * this to the internal `/v1/auth` (as it was) meant the cookie never matched the public path → a silent
+ * re-login every ~15 min once the access token expired (AUDIT5 frontend-engineer Б-2). The set and the
+ * clear MUST use the identical attributes (below), or the browser will not drop the cookie on logout.
  */
-const REFRESH_COOKIE_PATH = '/v1/auth';
+const REFRESH_COOKIE_PATH = `${API_BASE_PATH}/auth`;
 
 /** Cookie attributes for setting the refresh cookie. `secure` is always on (Caddy terminates TLS). */
 function refreshCookieOptions(maxAgeMs: number): CookieOptions {

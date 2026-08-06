@@ -24,6 +24,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', () => {
   let app: INestApplication;
@@ -42,7 +43,7 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (name: string): Promise<string> => {
     const u = await prisma.users.create({ data: { full_name: name, role: 'USER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -73,6 +74,7 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     prisma = app.get(PrismaService);
@@ -100,7 +102,7 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
   it('favorites: favorite is idempotent, own-scoped, and carries the OfferingRef{type,id} pair (D11 + D2)', async () => {
     const listing = await seedActiveListing(sellerId);
     const add = await request(server())
-      .post(`/v1/listings/${listing}/favorite`)
+      .post(`/api/v1/listings/${listing}/favorite`)
       .set('Authorization', `Bearer ${buyerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send()
@@ -112,7 +114,7 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
 
     // Idempotent add (distinct key) → same row, no duplicate.
     const again = await request(server())
-      .post(`/v1/listings/${listing}/favorite`)
+      .post(`/api/v1/listings/${listing}/favorite`)
       .set('Authorization', `Bearer ${buyerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send()
@@ -120,9 +122,9 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
     expect(again.body.id).toBe(add.body.id);
 
     // Own-scoped list: the buyer sees it; the seller (a different principal) does not.
-    const mine = (await request(server()).get('/v1/favorites?limit=100').set('Authorization', `Bearer ${buyerTok}`).expect(200)).body.items as { listingId: string }[];
+    const mine = (await request(server()).get('/api/v1/favorites?limit=100').set('Authorization', `Bearer ${buyerTok}`).expect(200)).body.items as { listingId: string }[];
     expect(mine.map((r) => r.listingId)).toContain(listing);
-    const sellersFavs = (await request(server()).get('/v1/favorites?limit=100').set('Authorization', `Bearer ${sellerTok}`).expect(200)).body.items as { listingId: string }[];
+    const sellersFavs = (await request(server()).get('/api/v1/favorites?limit=100').set('Authorization', `Bearer ${sellerTok}`).expect(200)).body.items as { listingId: string }[];
     expect(sellersFavs.map((r) => r.listingId)).not.toContain(listing);
   });
 
@@ -130,9 +132,9 @@ describe('AUDIT2 forward stubs — NOW BUILT (revived to real passing tests)', (
   it('view-capture: a buyer detail-GET increments listings.view_count → owner analytics.views ≥ 1 (D1)', async () => {
     const listing = await seedActiveListing(sellerId);
     // A buyer (not the seller) reads the public detail → best-effort deduped +1 on view_count.
-    const get = await request(server()).get(`/v1/listings/${listing}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+    const get = await request(server()).get(`/api/v1/listings/${listing}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
     expect(get.body.viewCount).toBe(0); // pre-increment value returned to this reader
-    const analytics = await request(server()).get(`/v1/listings/${listing}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    const analytics = await request(server()).get(`/api/v1/listings/${listing}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect(analytics.body.views).toBeGreaterThanOrEqual(1); // the day-1 funnel signal is live (was hard-0)
   });
 });

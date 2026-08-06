@@ -22,6 +22,7 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Contact reveal + mark-sold + analytics (e2e)', () => {
   let app: INestApplication;
@@ -45,7 +46,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (name: string, role: string, extra: Record<string, unknown> = {}): Promise<string> => {
     const u = await prisma.users.create({
@@ -95,21 +96,21 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
   };
 
   const getEtag = async (tok: string, id: string): Promise<string> => {
-    const r = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
+    const r = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
     return r.headers['etag'];
   };
 
   /**
    * ADR-0020 honest opt-in path (kills the masking fixture): a seller sets their contact channels + visibility
-   * through the REAL PATCH /v1/me writer, which encrypts the phone (ADR-0019) and records the
+   * through the REAL PATCH /api/v1/me writer, which encrypts the phone (ADR-0019) and records the
    * CONTACT_DISTRIBUTION consent in the same transaction. No direct DB seeding of contact_phone/prefs.
    */
   const setContact = async (
     tok: string,
     body: { contactPhone?: string; contactTelegram?: string; showPhone?: boolean; showTelegram?: boolean },
   ): Promise<void> => {
-    const me = await request(server()).get('/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
-    await request(server()).patch('/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body).expect(200);
+    const me = await request(server()).get('/api/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
+    await request(server()).patch('/api/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body).expect(200);
   };
 
   beforeAll(async () => {
@@ -117,6 +118,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -160,16 +162,16 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
   });
 
   // ── Contact reveal ─────────────────────────────────────────────────────────────────────────
-  describe('POST /v1/listings/{id}/contact-reveal', () => {
+  describe('POST /api/v1/listings/{id}/contact-reveal', () => {
     it('requires auth (401)', async () => {
       const id = await activeListing();
-      await request(server()).post(`/v1/listings/${id}/contact-reveal`).expect(401);
+      await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).expect(401);
     });
 
     it('reveals the seller-enabled channels (phone decrypted at reveal, ADR-0019) and logs a row', async () => {
       const id = await activeListing();
       const res = await request(server())
-        .post(`/v1/listings/${id}/contact-reveal`)
+        .post(`/api/v1/listings/${id}/contact-reveal`)
         .set('Authorization', `Bearer ${buyerTok}`)
         .expect(200);
       expect(res.body).toMatchObject({ listingId: id, sellerId, sellerName: 'CSeller' });
@@ -184,7 +186,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     it('self-reveal → 422 SELF_REVEAL (nothing logged)', async () => {
       const id = await activeListing();
       const res = await request(server())
-        .post(`/v1/listings/${id}/contact-reveal`)
+        .post(`/api/v1/listings/${id}/contact-reveal`)
         .set('Authorization', `Bearer ${sellerTok}`)
         .expect(422);
       expect(res.body.code).toBe('SELF_REVEAL');
@@ -195,7 +197,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     it('a non-ACTIVE (DRAFT) listing → 404 (no existence leak)', async () => {
       const id = await activeListing({ status: 'DRAFT', moderation_status: 'PENDING', is_active: false });
       await request(server())
-        .post(`/v1/listings/${id}/contact-reveal`)
+        .post(`/api/v1/listings/${id}/contact-reveal`)
         .set('Authorization', `Bearer ${buyerTok}`)
         .expect(404);
     });
@@ -215,7 +217,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
         data: { animal_id: animalId, seller_id: phoneOnlySeller, listing_type: 'sale', market: 'pet', title_localized: { en: 'X', ru: 'X' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
       });
       listings.push(l.id);
-      const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      const res = await request(server()).post(`/api/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(res.body.channels).toEqual({ phone: '+70001112233' });
       expect(res.body.status).toBe('REVEALED');
     });
@@ -230,7 +232,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
         data: { animal_id: animalId, seller_id: silentSeller, listing_type: 'sale', market: 'pet', title_localized: { en: 'S', ru: 'С' }, price_cents: 5000, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true },
       });
       listings.push(l.id);
-      const res = await request(server()).post(`/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${noOptTok}`).expect(200);
+      const res = await request(server()).post(`/api/v1/listings/${l.id}/contact-reveal`).set('Authorization', `Bearer ${noOptTok}`).expect(200);
       expect(res.body.channels).toEqual({});
       expect(res.body.status).toBe('NO_CHANNELS');
       expect(res.body.revealedAt).toBeNull();
@@ -244,8 +246,8 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       const dedupTok = await devToken(dedupBuyer);
       await redis.client.del(`contact-reveal:pet:${dedupBuyer}`);
       const id = await activeListing();
-      const first = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
-      const second = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
+      const first = await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
+      const second = await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${dedupTok}`).expect(200);
       expect(second.body.channels).toEqual(first.body.channels);
       expect(second.body.revealedAt).toBe(first.body.revealedAt); // same row
       expect(Number(await redis.client.get(`contact-reveal:pet:${dedupBuyer}`))).toBe(1); // charged once
@@ -260,10 +262,10 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       await redis.client.del(`contact-reveal:pet:${limitBuyer}`);
       for (let i = 0; i < 10; i++) {
         const id = await activeListing();
-        await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(200);
+        await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(200);
       }
       const capped = await activeListing();
-      const res = await request(server()).post(`/v1/listings/${capped}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(429);
+      const res = await request(server()).post(`/api/v1/listings/${capped}/contact-reveal`).set('Authorization', `Bearer ${limitTok}`).expect(429);
       expect(res.body.code).toBe('RATE_LIMITED');
       expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
       // Exactly the 10 successful reveals are logged; the 11th (over-limit) logged nothing.
@@ -277,20 +279,20 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       await redis.client.del(`contact-reveal:pet:${idemBuyer}`);
       const id = await activeListing();
       const key = randomUUID();
-      await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${idemTok}`).set('Idempotency-Key', key).expect(200);
-      await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${idemTok}`).set('Idempotency-Key', key).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${idemTok}`).set('Idempotency-Key', key).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${idemTok}`).set('Idempotency-Key', key).expect(200);
       const count = await prisma.contact_reveals.count({ where: { listing_id: id, viewer_id: idemBuyer } });
       expect(count).toBe(1); // the replay did not execute a second reveal
     });
   });
 
   // ── Mark sold ──────────────────────────────────────────────────────────────────────────────
-  describe('POST /v1/listings/{id}/mark-sold', () => {
+  describe('POST /api/v1/listings/{id}/mark-sold', () => {
     it('owner marks an ACTIVE listing SOLD: sold_at set, removed from search, Listing.Sold emitted', async () => {
       const id = await activeListing();
       const etag = await getEtag(sellerTok, id);
       const res = await request(server())
-        .post(`/v1/listings/${id}/mark-sold`)
+        .post(`/api/v1/listings/${id}/mark-sold`)
         .set('Authorization', `Bearer ${sellerTok}`)
         .set('If-Match', etag)
         .expect(200);
@@ -307,7 +309,7 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
       const id = await activeListing();
       const animal = (await prisma.listings.findUnique({ where: { id } }))!.animal_id;
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).expect(200);
       const transfers = await prisma.ownership_transfers.count({ where: { animal_id: animal } });
       expect(transfers).toBe(0);
     });
@@ -315,30 +317,30 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     it('owner-only: a non-owner → 403', async () => {
       const id = await activeListing();
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${buyerTok}`).set('If-Match', etag).expect(403);
+      await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${buyerTok}`).set('If-Match', etag).expect(403);
     });
 
     it('missing If-Match → 428', async () => {
       const id = await activeListing();
-      await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).expect(428);
+      await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).expect(428);
     });
 
     it('a repeat mark-sold on an already-SOLD listing → 409 LISTING_NOT_ACTIVE', async () => {
       const id = await activeListing();
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).expect(200);
       const etag2 = await getEtag(sellerTok, id);
-      const res = await request(server()).post(`/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag2).expect(409);
+      const res = await request(server()).post(`/api/v1/listings/${id}/mark-sold`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag2).expect(409);
       expect(res.body.code).toBe('LISTING_NOT_ACTIVE');
     });
   });
 
   // ── Analytics ──────────────────────────────────────────────────────────────────────────────
-  describe('GET /v1/listings/{id}/analytics', () => {
+  describe('GET /api/v1/listings/{id}/analytics', () => {
     it('owner sees contactReveals sourced from the table; views reflects captured detail-views (0 here — reveal only, no GET); ETag + Cache-Control set', async () => {
       const id = await activeListing();
-      await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
-      const res = await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      const res = await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       // No public detail GET happened (only a POST reveal) → view_count is still 0; contactReveals is sourced.
       expect(res.body).toMatchObject({ listingId: id, views: 0, contactReveals: 1 });
       expect(res.body.lastActivityAt).not.toBeNull();
@@ -348,31 +350,31 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
 
     it('a non-owner → 404 (no-leak), even on a public ACTIVE listing', async () => {
       const id = await activeListing();
-      await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${buyerTok}`).expect(404);
+      await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${buyerTok}`).expect(404);
     });
 
     it('a MODERATOR (operator) may read analytics', async () => {
       const id = await activeListing();
-      await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${modTok}`).expect(200);
     });
 
     it('requires auth (401)', async () => {
       const id = await activeListing();
-      await request(server()).get(`/v1/listings/${id}/analytics`).expect(401);
+      await request(server()).get(`/api/v1/listings/${id}/analytics`).expect(401);
     });
   });
 
   // ── D1 views-capture (GAP-TRACE-006 · AUDIT3) — real HTTP GET → view_count ──────────────────
-  describe('GET /v1/listings/{id} — view capture (D1)', () => {
+  describe('GET /api/v1/listings/{id} — view capture (D1)', () => {
     const viewsOf = async (id: string): Promise<number> => {
-      const res = await request(server()).get(`/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      const res = await request(server()).get(`/api/v1/listings/${id}/analytics`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       return res.body.views as number;
     };
 
     it("a buyer's detail GET of an ACTIVE listing increments view_count; the response carries viewCount (pre-increment)", async () => {
       const id = await activeListing();
       await redis.client.del(`listing-view:${id}:u:${buyerId}`);
-      const get1 = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      const get1 = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(get1.body.viewCount).toBe(0); // pre-increment value returned to this reader
       expect(await viewsOf(id)).toBe(1); // the counter advanced
     });
@@ -380,23 +382,23 @@ describe('Contact reveal + mark-sold + analytics (e2e)', () => {
     it('a repeat GET by the same viewer inside the dedup window does NOT re-increment (F5 guard)', async () => {
       const id = await activeListing();
       await redis.client.del(`listing-view:${id}:u:${buyerId}`);
-      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
-      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
-      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(await viewsOf(id)).toBe(1); // three GETs, one dedup window → counted once
     });
 
     it('an anonymous detail GET is counted (deduped by client IP)', async () => {
       const id = await activeListing();
       const before = await viewsOf(id);
-      await request(server()).get(`/v1/listings/${id}`).expect(200); // no Authorization → anon, dedup by IP
+      await request(server()).get(`/api/v1/listings/${id}`).expect(200); // no Authorization → anon, dedup by IP
       expect(await viewsOf(id)).toBe(before + 1);
     });
 
     it('the seller viewing their own ACTIVE listing does NOT inflate the count (demand signal only)', async () => {
       const id = await activeListing();
       await redis.client.del(`listing-view:${id}:u:${sellerId}`);
-      await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       expect(await viewsOf(id)).toBe(0); // owner self-view excluded
     });
   });

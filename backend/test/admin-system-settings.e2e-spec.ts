@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Admin System Settings (e2e)', () => {
   let app: INestApplication;
@@ -32,13 +33,13 @@ describe('Admin System Settings (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     return res.body.accessToken as string;
   };
   /** The real client loop: GET the setting, read its ETag header (the PATCH's If-Match validator). */
   const fetchEtag = async (key: string): Promise<string> => {
     const res = await request(server())
-      .get(`/v1/system/settings/${key}`)
+      .get(`/api/v1/system/settings/${key}`)
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     return res.headers['etag'];
@@ -49,6 +50,7 @@ describe('Admin System Settings (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -79,18 +81,18 @@ describe('Admin System Settings (e2e)', () => {
     await app.close();
   });
 
-  describe('GET /v1/system/settings', () => {
+  describe('GET /api/v1/system/settings', () => {
     it('401 for an unauthenticated request', async () => {
-      await request(server()).get('/v1/system/settings').expect(401);
+      await request(server()).get('/api/v1/system/settings').expect(401);
     });
 
     it('403 for a non-ADMIN principal', async () => {
-      await request(server()).get('/v1/system/settings').set('Authorization', `Bearer ${userToken}`).expect(403);
+      await request(server()).get('/api/v1/system/settings').set('Authorization', `Bearer ${userToken}`).expect(403);
     });
 
     it('returns an object MAP keyed by setting key (not a {items,meta} page)', async () => {
       const res = await request(server())
-        .get('/v1/system/settings')
+        .get('/api/v1/system/settings')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       expect(res.body).not.toHaveProperty('items');
@@ -102,21 +104,21 @@ describe('Admin System Settings (e2e)', () => {
     });
   });
 
-  describe('GET /v1/system/settings/{key}', () => {
+  describe('GET /api/v1/system/settings/{key}', () => {
     it('401 for an unauthenticated request', async () => {
-      await request(server()).get(`/v1/system/settings/${settingKey}`).expect(401);
+      await request(server()).get(`/api/v1/system/settings/${settingKey}`).expect(401);
     });
 
     it('403 for a non-ADMIN principal', async () => {
       await request(server())
-        .get(`/v1/system/settings/${settingKey}`)
+        .get(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${userToken}`)
         .expect(403);
     });
 
     it('200: returns the SystemSetting + an ETag header + private,no-store Cache-Control', async () => {
       const res = await request(server())
-        .get(`/v1/system/settings/${settingKey}`)
+        .get(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       expect(res.body.key).toBe(settingKey);
@@ -127,19 +129,19 @@ describe('Admin System Settings (e2e)', () => {
 
     it('404 for an unknown setting key', async () => {
       await request(server())
-        .get('/v1/system/settings/does_not_exist_xyz')
+        .get('/api/v1/system/settings/does_not_exist_xyz')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(404);
     });
   });
 
-  describe('PATCH /v1/system/settings/{key}', () => {
+  describe('PATCH /api/v1/system/settings/{key}', () => {
     const body = { value: JSON.stringify({ isEnabled: true, rolloutPercentage: 100 }) };
 
     it('401 unauth / 403 non-admin', async () => {
-      await request(server()).patch(`/v1/system/settings/${settingKey}`).send(body).expect(401);
+      await request(server()).patch(`/api/v1/system/settings/${settingKey}`).send(body).expect(401);
       await request(server())
-        .patch(`/v1/system/settings/${settingKey}`)
+        .patch(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${userToken}`)
         .set('If-Match', 'W/"x"')
         .send(body)
@@ -148,7 +150,7 @@ describe('Admin System Settings (e2e)', () => {
 
     it('428 when If-Match is missing', async () => {
       await request(server())
-        .patch(`/v1/system/settings/${settingKey}`)
+        .patch(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .send(body)
         .expect(428);
@@ -156,7 +158,7 @@ describe('Admin System Settings (e2e)', () => {
 
     it('412 when If-Match is stale', async () => {
       await request(server())
-        .patch(`/v1/system/settings/${settingKey}`)
+        .patch(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('If-Match', 'W/"deadbeef"')
         .send(body)
@@ -165,7 +167,7 @@ describe('Admin System Settings (e2e)', () => {
 
     it('404 for an unknown setting key', async () => {
       await request(server())
-        .patch('/v1/system/settings/does_not_exist_xyz')
+        .patch('/api/v1/system/settings/does_not_exist_xyz')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('If-Match', 'W/"x"')
         .send(body)
@@ -177,7 +179,7 @@ describe('Admin System Settings (e2e)', () => {
       const etag = await fetchEtag(settingKey);
 
       const res = await request(server())
-        .patch(`/v1/system/settings/${settingKey}`)
+        .patch(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('If-Match', etag)
         .send(body)
@@ -192,7 +194,7 @@ describe('Admin System Settings (e2e)', () => {
 
       // the flip was audited (feature_toggle.flip on the feature-toggle entity).
       const audit = await request(server())
-        .get('/v1/audit/log?entityType=feature-toggle&actionType=feature_toggle.flip')
+        .get('/api/v1/audit/log?entityType=feature-toggle&actionType=feature_toggle.flip')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       const flipped = (audit.body.items as Record<string, unknown>[]).find(
@@ -205,7 +207,7 @@ describe('Admin System Settings (e2e)', () => {
     it('400 on a non-JSON value', async () => {
       const etag = await fetchEtag(settingKey);
       await request(server())
-        .patch(`/v1/system/settings/${settingKey}`)
+        .patch(`/api/v1/system/settings/${settingKey}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('If-Match', etag)
         .send({ value: 'not-json' })

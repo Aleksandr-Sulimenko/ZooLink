@@ -24,6 +24,7 @@ import { OutboxService } from '../src/lib/outbox/outbox.service';
 import { NotificationConsumer } from '../src/modules/notification/notification.consumer';
 import { NotificationWriter } from '../src/modules/notification/notification-writer.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Admin Slice 4a — moderation (e2e)', () => {
   let app: INestApplication;
@@ -42,7 +43,7 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   /** Create a listing via the real path and submit it → PENDING_MODERATION. Returns its id. */
   const newPending = async (): Promise<string> => {
@@ -51,27 +52,28 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
     });
     animalsCreated.push(animal.id);
     const created = await request(server())
-      .post('/v1/listings')
+      .post('/api/v1/listings')
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ animalId: animal.id, listingType: 'sale', titleLocalized: { en: 'ModItem', ru: 'Элемент' }, priceCents: 5000 })
       .expect(201);
     const id = created.body.id as string;
     listings.push(id);
-    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
-    const get = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', get.headers['etag']).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
+    const get = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', get.headers['etag']).expect(200);
     return id;
   };
 
-  const claim = (tok: string, id: string) => request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${tok}`);
-  const action = (tok: string, body: Record<string, unknown>) => request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${tok}`).send(body);
+  const claim = (tok: string, id: string) => request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${tok}`);
+  const action = (tok: string, body: Record<string, unknown>) => request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${tok}`).send(body);
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -105,13 +107,13 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
 
   // ── authz (M-11) ──────────────────────────────────────────────────────────────────────────────
   it('M-11: a USER hitting the queue → 403; unauthenticated → 401', async () => {
-    await request(server()).get('/v1/moderation/queue').set('Authorization', `Bearer ${sellerTok}`).expect(403);
-    await request(server()).get('/v1/moderation/queue').expect(401);
+    await request(server()).get('/api/v1/moderation/queue').set('Authorization', `Bearer ${sellerTok}`).expect(403);
+    await request(server()).get('/api/v1/moderation/queue').expect(401);
   });
 
   it('the queue lists PENDING items with meta.counts; a MODERATOR may read', async () => {
     await newPending();
-    const res = await request(server()).get('/v1/moderation/queue?market=pet&limit=100').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
+    const res = await request(server()).get('/api/v1/moderation/queue?market=pet&limit=100').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(res.body.meta.counts).toBeDefined();
     expect(res.body.meta.counts.byMarket).toHaveProperty('pet');
@@ -140,8 +142,8 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
   it('release: 409 NOT_LOCK_HOLDER for a non-holder; 204 for the holder', async () => {
     const id = await newPending();
     await claim(mod1Tok, id).expect(200);
-    await request(server()).delete(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${mod2Tok}`).expect(409);
-    await request(server()).delete(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${mod1Tok}`).expect(204);
+    await request(server()).delete(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${mod2Tok}`).expect(409);
+    await request(server()).delete(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${mod1Tok}`).expect(204);
   });
 
   // ── action: lock gate (M-4/M-5) ──────────────────────────────────────────────────────────────
@@ -298,8 +300,8 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
     const firstId = first.body.id as string;
 
     // Owner re-submits the DRAFT (back to PENDING_MODERATION).
-    const get = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', get.headers['etag']).expect(200);
+    const get = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', get.headers['etag']).expect(200);
 
     // A different moderator claims and overrides the earlier decision.
     await claim(mod2Tok, id).expect(200);
@@ -339,32 +341,32 @@ describe('Admin Slice 4a — moderation (e2e)', () => {
 
   // ── decisions / reasons / templates ───────────────────────────────────────────────────────────
   it('lists decisions (append-only ledger) and exposes principalType', async () => {
-    const res = await request(server()).get('/v1/moderation/decisions?entity_type=LISTING&limit=100').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
+    const res = await request(server()).get('/api/v1/moderation/decisions?entity_type=LISTING&limit=100').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     if (res.body.items.length) expect(res.body.items[0].actor).toHaveProperty('principalType');
   });
 
   it('lists reasons and decision-templates (seeded dictionaries)', async () => {
-    const reasons = await request(server()).get('/v1/moderation/reasons').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
+    const reasons = await request(server()).get('/api/v1/moderation/reasons').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
     expect(Array.isArray(reasons.body)).toBe(true);
-    await request(server()).get('/v1/moderation/decision-templates?appliesToDecision=CHANGES_REQUESTED').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
+    await request(server()).get('/api/v1/moderation/decision-templates?appliesToDecision=CHANGES_REQUESTED').set('Authorization', `Bearer ${mod1Tok}`).expect(200);
   });
 
   // ── M-12 owner result ─────────────────────────────────────────────────────────────────────────
   it('M-12: owner sees their moderation result with agent-transparency; a non-owner USER → 403; no decision → 204', async () => {
     const id = await newPending();
     // Before any decision → 204.
-    await request(server()).get(`/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${sellerTok}`).expect(204);
+    await request(server()).get(`/api/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${sellerTok}`).expect(204);
     await claim(mod1Tok, id).expect(200);
     await action(mod1Tok, { listingId: id, action: 'REJECT', reason: 'poor_photos' }).expect(200);
-    const owner = await request(server()).get(`/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    const owner = await request(server()).get(`/api/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect(owner.body.decision).toBe('REJECTED');
     expect(owner.body).toHaveProperty('decidedByAgent');
     expect(owner.body.decidedBy).toHaveProperty('principalType');
     // A non-owner USER cannot read it.
     const stranger = (await prisma.users.create({ data: { full_name: 'Stranger', role: 'USER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } }));
     const strangerTok = await devToken(stranger.id);
-    await request(server()).get(`/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${strangerTok}`).expect(403);
+    await request(server()).get(`/api/v1/listings/${id}/moderation-result`).set('Authorization', `Bearer ${strangerTok}`).expect(403);
     await prisma.users.delete({ where: { id: stranger.id } }).catch(() => undefined);
   });
 });

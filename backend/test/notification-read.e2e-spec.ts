@@ -1,5 +1,5 @@
 /**
- * Slice H3 / AUDIT4 P2-5 — GET /v1/me/notifications (the IN_APP read side) against the real HTTP stack.
+ * Slice H3 / AUDIT4 P2-5 — GET /api/v1/me/notifications (the IN_APP read side) against the real HTTP stack.
  * The IN_APP write path (worker consumer) is proven separately in notification-consumer.e2e-spec.ts; here
  * we seed IN_APP `notification_logs` rows directly and prove the READ contract:
  *   - own-scope only (a user sees ONLY their own IN_APP rows — IDOR closed; no operator widening)
@@ -20,6 +20,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('GET /me/notifications (P2-5, e2e)', () => {
   let app: INestApplication;
@@ -33,7 +34,7 @@ describe('GET /me/notifications (P2-5, e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (name: string): Promise<string> => {
     const u = await prisma.users.create({ data: { full_name: name, role: 'USER', principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -48,13 +49,14 @@ describe('GET /me/notifications (P2-5, e2e)', () => {
     });
 
   const list = (tok: string, qs = '') =>
-    request(server()).get(`/v1/me/notifications${qs}`).set('Authorization', `Bearer ${tok}`);
+    request(server()).get(`/api/v1/me/notifications${qs}`).set('Authorization', `Bearer ${tok}`);
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     prisma = app.get(PrismaService);
@@ -107,6 +109,6 @@ describe('GET /me/notifications (P2-5, e2e)', () => {
   });
 
   it('rejects an unauthenticated request', async () => {
-    await request(server()).get('/v1/me/notifications').expect(401);
+    await request(server()).get('/api/v1/me/notifications').expect(401);
   });
 });

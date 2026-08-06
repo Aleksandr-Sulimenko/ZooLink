@@ -17,6 +17,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('/metrics gate (e2e)', () => {
   let app: INestApplication;
@@ -26,6 +27,7 @@ describe('/metrics gate (e2e)', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
   });

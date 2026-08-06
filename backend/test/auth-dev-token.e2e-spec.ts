@@ -1,6 +1,6 @@
 /**
  * FAIL-CLOSED negative for the DEV-ONLY master-key route (AUDIT3 security.md #1). When
- * ENABLE_DEV_TOKEN is not explicitly true, /v1/auth/dev-token must be a 404 — even in a non-prod
+ * ENABLE_DEV_TOKEN is not explicitly true, /api/v1/auth/dev-token must be a 404 — even in a non-prod
  * NODE_ENV. This is the control that closes the arbitrary-account-takeover chain: the endpoint is
  * gated on an explicit opt-in flag, independent of (and in addition to) the production check.
  *
@@ -19,6 +19,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Auth dev-token fail-closed (e2e)', () => {
   let app: INestApplication;
@@ -31,6 +32,7 @@ describe('Auth dev-token fail-closed (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -43,9 +45,9 @@ describe('Auth dev-token fail-closed (e2e)', () => {
     else process.env.ENABLE_DEV_TOKEN = original;
   });
 
-  it('POST /v1/auth/dev-token → 404 when ENABLE_DEV_TOKEN is not true (fail-closed)', async () => {
+  it('POST /api/v1/auth/dev-token → 404 when ENABLE_DEV_TOKEN is not true (fail-closed)', async () => {
     const res = await request(server())
-      .post('/v1/auth/dev-token')
+      .post('/api/v1/auth/dev-token')
       .send({ userId: '00000000-0000-0000-0000-000000000000' })
       .expect(404);
     expect(res.headers['content-type']).toContain('application/problem+json');

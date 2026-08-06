@@ -22,6 +22,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () => {
   let app: INestApplication;
@@ -38,7 +39,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const newAnimal = async (owner: string): Promise<string> => {
     const a = await prisma.animals.create({
@@ -63,20 +64,20 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     ...over,
   });
   const create = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post('/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post('/api/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const addPhoto = (tok: string, id: string) =>
-    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
+    request(server()).post(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
   const getEtag = async (tok: string, id: string): Promise<string> =>
-    (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200)).headers['etag'];
+    (await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200)).headers['etag'];
 
   /** Drive a fresh listing of the given type all the way to ACTIVE (submit → claim → APPROVE). */
   const makeActive = async (animalId: string, listingType = 'sale'): Promise<string> => {
     const id = (await create(sellerTok, baseBody({ animalId, listingType })).expect(201)).body.id as string;
     await addPhoto(sellerTok, id).expect(201);
     const etag = await getEtag(sellerTok, id);
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-    await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-    await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
     const row = await prisma.listings.findUnique({ where: { id } });
     expect(row?.status).toBe('ACTIVE');
     return id;
@@ -87,6 +88,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -135,7 +137,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     const animalId = await newAnimal(sellerId);
     const listingId = await makeActive(animalId);
 
-    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
 
     const row = await prisma.listings.findUnique({ where: { id: listingId } });
     expect(row?.status).toBe('DEACTIVATED');
@@ -153,7 +155,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     const animalId = await newAnimal(sellerId);
     const listingId = await makeActive(animalId);
 
-    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
 
     const row = await prisma.listings.findUnique({ where: { id: listingId } });
     expect(row?.status).toBe('DEACTIVATED');
@@ -170,12 +172,12 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     const animalId = (await prisma.animals.create({ data: { owner_id: seller2.id, species_id: speciesId, breed_id: breedId, nickname_localized: { en: 'Csc2', ru: 'Кск2' }, sex: 'Female', date_of_birth: new Date('2021-01-01T00:00:00Z') } })).id;
     animalsCreated.push(animalId);
     // Drive to ACTIVE as seller2 (override the shared sellerTok for this listing's lifecycle).
-    const id = (await request(server()).post('/v1/listings').set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send(baseBody({ animalId })).expect(201)).body.id as string;
-    await request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
-    const etag = (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${seller2Tok}`).expect(200)).headers['etag'];
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-    await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-    await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+    const id = (await request(server()).post('/api/v1/listings').set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send(baseBody({ animalId })).expect(201)).body.id as string;
+    await request(server()).post(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` }).expect(201);
+    const etag = (await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${seller2Tok}`).expect(200)).headers['etag'];
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${seller2Tok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
     expect((await prisma.listings.findUnique({ where: { id } }))?.status).toBe('ACTIVE');
 
     // Deactivate the seller (fires cascade_user_deactivation).
@@ -194,7 +196,7 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     await prisma.listings.update({ where: { id: soldId }, data: { status: 'SOLD' } });
     await prisma.listings.update({ where: { id: expiredId }, data: { status: 'EXPIRED' } });
 
-    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
 
     expect((await prisma.listings.findUnique({ where: { id: soldId } }))?.status).toBe('SOLD');
     expect((await prisma.listings.findUnique({ where: { id: expiredId } }))?.status).toBe('EXPIRED');
@@ -204,10 +206,10 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
   it('reactivating the animal does NOT resurrect a cascade-DEACTIVATED listing (one-way)', async () => {
     const animalId = await newAnimal(sellerId);
     const listingId = await makeActive(animalId);
-    await request(server()).patch(`/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/deactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect((await prisma.listings.findUnique({ where: { id: listingId } }))?.status).toBe('DEACTIVATED');
 
-    await request(server()).patch(`/v1/animals/${animalId}/reactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).patch(`/api/v1/animals/${animalId}/reactivate`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     // The listing stays DEACTIVATED — reactivation is not a resurrection trigger.
     expect((await prisma.listings.findUnique({ where: { id: listingId } }))?.status).toBe('DEACTIVATED');
   });
@@ -225,11 +227,11 @@ describe('Listing cascade-deactivation + uq_active_listing_per_type (e2e)', () =
     const id2 = (await create(sellerTok, baseBody({ animalId, listingType: 'sale' })).expect(201)).body.id as string;
     await addPhoto(sellerTok, id2).expect(201);
     const etag2 = await getEtag(sellerTok, id2);
-    await request(server()).post(`/v1/listings/${id2}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag2).expect(200);
-    await request(server()).post(`/v1/moderation/queue/${id2}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).post(`/api/v1/listings/${id2}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag2).expect(200);
+    await request(server()).post(`/api/v1/moderation/queue/${id2}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
 
     const res = await request(server())
-      .post('/v1/moderation/action')
+      .post('/api/v1/moderation/action')
       .set('Authorization', `Bearer ${modTok}`)
       .send({ listingId: id2, action: 'APPROVE' })
       .expect(409);

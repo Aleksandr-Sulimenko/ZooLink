@@ -20,6 +20,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Slice 4b — content reports (e2e)', () => {
   let app: INestApplication;
@@ -36,10 +37,10 @@ describe('Slice 4b — content reports (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const file = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post('/v1/content-reports').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post('/api/v1/content-reports').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   // A throwaway USER to report, so each test targets a distinct (reporter, entity) pair and never
   // trips the dedup unique-OPEN constraint against another test's report.
   const targetUsers: string[] = [];
@@ -55,7 +56,7 @@ describe('Slice 4b — content reports (e2e)', () => {
     return id;
   };
   const getEtag = async (tok: string, id: string): Promise<string> => {
-    const r = await request(server()).get(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
+    const r = await request(server()).get(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
     return r.headers['etag'];
   };
 
@@ -64,6 +65,7 @@ describe('Slice 4b — content reports (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -93,7 +95,7 @@ describe('Slice 4b — content reports (e2e)', () => {
 
   // ── CR-4 file authz ───────────────────────────────────────────────────────────────────────────
   it('CR-4: an unauthenticated file → 401', async () => {
-    await request(server()).post('/v1/content-reports').set('Idempotency-Key', randomUUID()).send({ entityType: 'USER', entityId: targetUserId, reason: 'SPAM' }).expect(401);
+    await request(server()).post('/api/v1/content-reports').set('Idempotency-Key', randomUUID()).send({ entityType: 'USER', entityId: targetUserId, reason: 'SPAM' }).expect(401);
   });
 
   // ── CR-1 server-derived reporter ──────────────────────────────────────────────────────────────
@@ -121,7 +123,7 @@ describe('Slice 4b — content reports (e2e)', () => {
     const first = track(await file(reporterTok, { entityType: 'USER', entityId: target, reason: 'SPAM' }).expect(201));
     // A MOD resolves it to a terminal state.
     const etag = await getEtag(modTok, first);
-    await request(server()).patch(`/v1/content-reports/${first}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(200);
+    await request(server()).patch(`/api/v1/content-reports/${first}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(200);
     // The same reporter files again on the same target → 201 (the terminal prior does not block).
     const again = await file(reporterTok, { entityType: 'USER', entityId: target, reason: 'ABUSE' }).expect(201);
     expect(again.body.status).toBe('OPEN');
@@ -145,22 +147,22 @@ describe('Slice 4b — content reports (e2e)', () => {
   it('CR-5: a USER lists only their own; a non-owner USER GET/{id} → 404 (no leak); MOD sees all', async () => {
     const mine = track(await file(reporterTok, { entityType: 'USER', entityId: otherId, reason: 'INAPPROPRIATE' }).expect(201));
     // reporter lists — sees their own report; otherId-as-reporter filter cannot widen.
-    const list = await request(server()).get(`/v1/content-reports?reporter_id=${otherId}&limit=100`).set('Authorization', `Bearer ${reporterTok}`).expect(200);
+    const list = await request(server()).get(`/api/v1/content-reports?reporter_id=${otherId}&limit=100`).set('Authorization', `Bearer ${reporterTok}`).expect(200);
     for (const r of list.body.items as { reporterId: string }[]) expect(r.reporterId).toBe(reporterId);
     // a different USER cannot read the reporter's report → 404 (no existence leak).
-    await request(server()).get(`/v1/content-reports/${mine}`).set('Authorization', `Bearer ${otherTok}`).expect(404);
+    await request(server()).get(`/api/v1/content-reports/${mine}`).set('Authorization', `Bearer ${otherTok}`).expect(404);
     // the reporter can; a MODERATOR can.
-    await request(server()).get(`/v1/content-reports/${mine}`).set('Authorization', `Bearer ${reporterTok}`).expect(200);
-    await request(server()).get(`/v1/content-reports/${mine}`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).get(`/api/v1/content-reports/${mine}`).set('Authorization', `Bearer ${reporterTok}`).expect(200);
+    await request(server()).get(`/api/v1/content-reports/${mine}`).set('Authorization', `Bearer ${modTok}`).expect(200);
   });
 
   // ── CR-6 resolve authz ────────────────────────────────────────────────────────────────────────
   it('CR-6: a USER (incl. the reporter) cannot resolve → 403; a MODERATOR can', async () => {
     const id = track(await file(reporterTok, { entityType: 'USER', entityId: await freshTarget(), reason: 'OTHER' }).expect(201));
     const etag = await getEtag(reporterTok, id);
-    await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${reporterTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(403);
+    await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${reporterTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(403);
     const modEtag = await getEtag(modTok, id);
-    const res = await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', modEtag).send({ status: 'REVIEWED' }).expect(200);
+    const res = await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', modEtag).send({ status: 'REVIEWED' }).expect(200);
     expect(res.body.status).toBe('REVIEWED');
     expect(res.body.resolvedBy.actorId).toBe(modId);
     expect(res.body.resolvedBy).toHaveProperty('principalType');
@@ -170,7 +172,7 @@ describe('Slice 4b — content reports (e2e)', () => {
   it('CR-9: resolve writes resolved_by + an audit row in one tx', async () => {
     const id = track(await file(otherTok, { entityType: 'USER', entityId: await freshTarget(), reason: 'ABUSE' }).expect(201));
     const etag = await getEtag(modTok, id);
-    await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'ACTIONED' }).expect(200);
+    await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'ACTIONED' }).expect(200);
     const row = await prisma.content_reports.findUnique({ where: { id } });
     expect(row?.status).toBe('ACTIONED');
     expect(row?.resolved_by).toBe(modId);
@@ -183,12 +185,12 @@ describe('Slice 4b — content reports (e2e)', () => {
   it('CR-8/CR-10: resolve on a terminal report → 409 REPORT_TERMINAL; missing/stale If-Match → 428/412', async () => {
     const id = track(await file(reporterTok, { entityType: 'USER', entityId: await freshTarget(), reason: 'SPAM' }, randomUUID()).expect(201));
     let etag = await getEtag(modTok, id);
-    await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).send({ status: 'DISMISSED' }).expect(428); // missing If-Match
-    await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', 'W/"x"').send({ status: 'DISMISSED' }).expect(412); // stale
-    await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(200);
+    await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).send({ status: 'DISMISSED' }).expect(428); // missing If-Match
+    await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', 'W/"x"').send({ status: 'DISMISSED' }).expect(412); // stale
+    await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'DISMISSED' }).expect(200);
     // now terminal → 409.
     etag = await getEtag(modTok, id);
-    const term = await request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'ACTIONED' }).expect(409);
+    const term = await request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status: 'ACTIONED' }).expect(409);
     expect(term.body.code).toBe('REPORT_TERMINAL');
   });
 
@@ -196,7 +198,7 @@ describe('Slice 4b — content reports (e2e)', () => {
   it('CR-8 concurrency: two parallel resolves (same ETag) → exactly one 200, one 409/412; single final status', async () => {
     const id = track(await file(otherTok, { entityType: 'USER', entityId: await freshTarget(), reason: 'FRAUD' }).expect(201));
     const etag = await getEtag(modTok, id);
-    const fire = (status: string) => request(server()).patch(`/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status });
+    const fire = (status: string) => request(server()).patch(`/api/v1/content-reports/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ status });
     const [a, b] = await Promise.all([fire('DISMISSED'), fire('ACTIONED')]);
     const statuses = [a.status, b.status].sort();
     expect(statuses[0]).toBe(200);

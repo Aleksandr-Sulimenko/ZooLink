@@ -23,6 +23,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { TokenService } from '../src/modules/auth/token.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Auth/AuthZ (e2e)', () => {
   let app: INestApplication;
@@ -41,6 +42,7 @@ describe('Auth/AuthZ (e2e)', () => {
       }),
     );
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -61,14 +63,14 @@ describe('Auth/AuthZ (e2e)', () => {
   const server = (): Server => app.getHttpServer() as Server;
 
   it('rejects an unauthenticated request with 401 (RFC7807)', async () => {
-    const res = await request(server()).get('/v1/auth/whoami').expect(401);
+    const res = await request(server()).get('/api/v1/auth/whoami').expect(401);
     expect(res.headers['content-type']).toContain('application/problem+json');
     expect(res.body.code).toBe('UNAUTHENTICATED');
   });
 
   it('authenticates a valid access token and returns the principal', async () => {
     const res = await request(server())
-      .get('/v1/auth/whoami')
+      .get('/api/v1/auth/whoami')
       .set('Authorization', `Bearer ${userToken}`)
       .expect(200);
     expect(res.body.role).toBe('USER');
@@ -77,7 +79,7 @@ describe('Auth/AuthZ (e2e)', () => {
 
   it('forbids a USER on an operator-only route with 403', async () => {
     const res = await request(server())
-      .get('/v1/auth/operator-check')
+      .get('/api/v1/auth/operator-check')
       .set('Authorization', `Bearer ${userToken}`)
       .expect(403);
     expect(res.body.code).toBe('FORBIDDEN');
@@ -85,7 +87,7 @@ describe('Auth/AuthZ (e2e)', () => {
 
   it('allows a MODERATOR on the operator-only route', async () => {
     const res = await request(server())
-      .get('/v1/auth/operator-check')
+      .get('/api/v1/auth/operator-check')
       .set('Authorization', `Bearer ${moderatorToken}`)
       .expect(200);
     expect(res.body).toEqual({ ok: true, role: 'MODERATOR' });
@@ -93,7 +95,7 @@ describe('Auth/AuthZ (e2e)', () => {
 
   it('rejects a garbage token with 401', async () => {
     await request(server())
-      .get('/v1/auth/whoami')
+      .get('/api/v1/auth/whoami')
       .set('Authorization', 'Bearer not-a-jwt')
       .expect(401);
   });

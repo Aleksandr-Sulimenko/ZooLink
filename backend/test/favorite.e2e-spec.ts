@@ -19,6 +19,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Favorites (D11, e2e)', () => {
   let app: INestApplication;
@@ -42,7 +43,7 @@ describe('Favorites (D11, e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const mkUser = async (name: string, role: string): Promise<string> => {
     const u = await prisma.users.create({ data: { full_name: name, role, principal_type: 'HUMAN', status: 'ACTIVE', is_active: true } });
@@ -74,15 +75,16 @@ describe('Favorites (D11, e2e)', () => {
   };
 
   const addFav = (tok: string, listingId: string, key = randomUUID()) =>
-    request(server()).post(`/v1/listings/${listingId}/favorite`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send();
+    request(server()).post(`/api/v1/listings/${listingId}/favorite`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send();
   const listFav = (tok: string) =>
-    request(server()).get('/v1/favorites?limit=100').set('Authorization', `Bearer ${tok}`);
+    request(server()).get('/api/v1/favorites?limit=100').set('Authorization', `Bearer ${tok}`);
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     prisma = app.get(PrismaService);
@@ -112,9 +114,9 @@ describe('Favorites (D11, e2e)', () => {
   // ── auth gate ─────────────────────────────────────────────────────────────────────────────────
   it('an unauthenticated request → 401 on list, add, remove', async () => {
     const anyListing = randomUUID();
-    await request(server()).get('/v1/favorites').expect(401);
-    await request(server()).post(`/v1/listings/${anyListing}/favorite`).set('Idempotency-Key', randomUUID()).send().expect(401);
-    await request(server()).delete(`/v1/listings/${anyListing}/favorite`).expect(401);
+    await request(server()).get('/api/v1/favorites').expect(401);
+    await request(server()).post(`/api/v1/listings/${anyListing}/favorite`).set('Idempotency-Key', randomUUID()).send().expect(401);
+    await request(server()).delete(`/api/v1/listings/${anyListing}/favorite`).expect(401);
   });
 
   // ── add → 201 with OfferingRef write; idempotent add ────────────────────────────────────────────
@@ -175,17 +177,17 @@ describe('Favorites (D11, e2e)', () => {
   it('remove → 204 and the row is gone; a repeat remove (now absent) → identical 204 (idempotent)', async () => {
     const listing = await seedListing(bobId);
     await addFav(aliceTok, listing).expect(201);
-    await request(server()).delete(`/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
+    await request(server()).delete(`/api/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
     expect(await prisma.favorites.findFirst({ where: { user_id: aliceId, listing_id: listing } })).toBeNull();
     // Repeat: now absent → still 204 (no 404).
-    await request(server()).delete(`/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
+    await request(server()).delete(`/api/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
   });
 
   it('leak-free remove: Bob removing Alice’s favorite → identical 204, and Alice’s favorite SURVIVES (no 403)', async () => {
     const listing = await seedListing(bobId);
     await addFav(aliceTok, listing).expect(201);
     // Bob targets the same listing id, but scoped to Bob → deletes 0 rows, still 204 (no existence/ownership leak).
-    await request(server()).delete(`/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${bobTok}`).expect(204);
+    await request(server()).delete(`/api/v1/listings/${listing}/favorite`).set('Authorization', `Bearer ${bobTok}`).expect(204);
     expect(await prisma.favorites.findFirst({ where: { user_id: aliceId, listing_id: listing } })).not.toBeNull();
   });
 

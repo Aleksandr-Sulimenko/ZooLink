@@ -18,6 +18,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Listings Slice 3 — saved searches (e2e)', () => {
   let app: INestApplication;
@@ -34,10 +35,10 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const save = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post('/v1/saved-searches').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post('/api/v1/saved-searches').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const track = (res: { body: { id?: unknown } }): string => {
     const id = res.body.id as string;
     if (id) createdIds.push(id);
@@ -49,6 +50,7 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     prisma = app.get(PrismaService);
@@ -69,9 +71,9 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
 
   // ── auth gate ─────────────────────────────────────────────────────────────────────────────────
   it('an unauthenticated request → 401 on list, create, delete', async () => {
-    await request(server()).get('/v1/saved-searches').expect(401);
-    await request(server()).post('/v1/saved-searches').set('Idempotency-Key', randomUUID()).send({ filters: {} }).expect(401);
-    await request(server()).delete(`/v1/saved-searches/${randomUUID()}`).expect(401);
+    await request(server()).get('/api/v1/saved-searches').expect(401);
+    await request(server()).post('/api/v1/saved-searches').set('Idempotency-Key', randomUUID()).send({ filters: {} }).expect(401);
+    await request(server()).delete(`/api/v1/saved-searches/${randomUUID()}`).expect(401);
   });
 
   // ── SS-1 own-scope + SS-5 envelope ──────────────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
     expect(res.body.offeringId).toBeNull();
     track(res);
 
-    const list = await request(server()).get('/v1/saved-searches?limit=100').set('Authorization', `Bearer ${aliceTok}`).expect(200);
+    const list = await request(server()).get('/api/v1/saved-searches?limit=100').set('Authorization', `Bearer ${aliceTok}`).expect(200);
     expect(Array.isArray(list.body.items)).toBe(true);
     expect(list.body.meta).toMatchObject({ page: 1, limit: 100 });
     for (const r of list.body.items as { userId: string }[]) expect(r.userId).toBe(aliceId);
@@ -93,18 +95,18 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
 
   it('SS-1 negative: Bob’s saved search never appears in Alice’s list; a MODERATOR sees only their own', async () => {
     const bobRow = track(await save(bobTok, { name: 'bob private', filters: { market: 'livestock' } }).then((r) => { expect(r.status).toBe(201); return r; }));
-    const aliceList = await request(server()).get('/v1/saved-searches?limit=100').set('Authorization', `Bearer ${aliceTok}`).expect(200);
+    const aliceList = await request(server()).get('/api/v1/saved-searches?limit=100').set('Authorization', `Bearer ${aliceTok}`).expect(200);
     const aliceIds = (aliceList.body.items as { id: string }[]).map((r) => r.id);
     expect(aliceIds).not.toContain(bobRow);
     // A MODERATOR is not widened — they see only their OWN (here: none).
-    const modList = await request(server()).get('/v1/saved-searches?limit=100').set('Authorization', `Bearer ${modTok}`).expect(200);
+    const modList = await request(server()).get('/api/v1/saved-searches?limit=100').set('Authorization', `Bearer ${modTok}`).expect(200);
     for (const r of modList.body.items as { userId: string }[]) expect(r.userId).toBe(modId);
     expect((modList.body.items as { id: string }[]).map((r) => r.id)).not.toContain(bobRow);
   });
 
   it('SS-1 (added roles): a VETERINARIAN ("USER + extra") can create + list their OWN, and own-scope still holds', async () => {
     const vetRow = track(await save(vetTok, { name: 'vet watchlist', filters: { market: 'pet' } }).then((r) => { expect(r.status).toBe(201); return r; }));
-    const vetList = await request(server()).get('/v1/saved-searches?limit=100').set('Authorization', `Bearer ${vetTok}`).expect(200);
+    const vetList = await request(server()).get('/api/v1/saved-searches?limit=100').set('Authorization', `Bearer ${vetTok}`).expect(200);
     const vetIds = (vetList.body.items as { id: string }[]).map((r) => r.id);
     expect(vetIds).toContain(vetRow); // sees their own
     for (const r of vetList.body.items as { userId: string }[]) expect(r.userId).toBe(vetId); // and ONLY their own (own-scope holds for the added role)
@@ -115,16 +117,16 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
   it('SS-2: a non-existent id and another user’s id both → identical 404 SAVED_SEARCH_NOT_FOUND (never 403); the row survives', async () => {
     const aliceRow = track(await save(aliceTok, { filters: { market: 'pet' } }).then((r) => { expect(r.status).toBe(201); return r; }));
     // non-existent id → 404
-    const missing = await request(server()).delete(`/v1/saved-searches/${randomUUID()}`).set('Authorization', `Bearer ${aliceTok}`).expect(404);
+    const missing = await request(server()).delete(`/api/v1/saved-searches/${randomUUID()}`).set('Authorization', `Bearer ${aliceTok}`).expect(404);
     expect(missing.body.code).toBe('SAVED_SEARCH_NOT_FOUND');
     // Bob deletes Alice's id → identical 404 (NOT 403)
-    const notOwned = await request(server()).delete(`/v1/saved-searches/${aliceRow}`).set('Authorization', `Bearer ${bobTok}`).expect(404);
+    const notOwned = await request(server()).delete(`/api/v1/saved-searches/${aliceRow}`).set('Authorization', `Bearer ${bobTok}`).expect(404);
     expect(notOwned.body.code).toBe('SAVED_SEARCH_NOT_FOUND');
     expect(missing.body.code).toBe(notOwned.body.code); // byte-identical code, no existence leak
     // Alice's row still exists.
     expect(await prisma.saved_searches.findUnique({ where: { id: aliceRow } })).not.toBeNull();
     // The owner can delete it → 204.
-    await request(server()).delete(`/v1/saved-searches/${aliceRow}`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
+    await request(server()).delete(`/api/v1/saved-searches/${aliceRow}`).set('Authorization', `Bearer ${aliceTok}`).expect(204);
     expect(await prisma.saved_searches.findUnique({ where: { id: aliceRow } })).toBeNull();
   });
 
@@ -156,9 +158,9 @@ describe('Listings Slice 3 — saved searches (e2e)', () => {
 
   // ── SS-5 sort whitelist ──────────────────────────────────────────────────────────────────────────
   it('SS-5: a non-whitelisted sort → 400 INVALID_SORT; a whitelisted sort is accepted', async () => {
-    const bad = await request(server()).get('/v1/saved-searches?sort=name:asc').set('Authorization', `Bearer ${aliceTok}`).expect(400);
+    const bad = await request(server()).get('/api/v1/saved-searches?sort=name:asc').set('Authorization', `Bearer ${aliceTok}`).expect(400);
     expect(bad.body.code).toBe('INVALID_SORT');
-    await request(server()).get('/v1/saved-searches?sort=updated_at:asc').set('Authorization', `Bearer ${aliceTok}`).expect(200);
+    await request(server()).get('/api/v1/saved-searches?sort=updated_at:asc').set('Authorization', `Bearer ${aliceTok}`).expect(200);
   });
 
   // ── SS-6 idempotency-only dedup ──────────────────────────────────────────────────────────────────

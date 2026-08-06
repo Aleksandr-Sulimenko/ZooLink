@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Listings Slice 1 (e2e)', () => {
   let app: INestApplication;
@@ -38,7 +39,7 @@ describe('Listings Slice 1 (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const newAnimal = async (owner: string): Promise<string> => {
     const a = await prisma.animals.create({
@@ -57,18 +58,18 @@ describe('Listings Slice 1 (e2e)', () => {
 
   const idOf = (res: { body: { id?: unknown } }): string => res.body.id as string;
   const create = (tok: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post('/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post('/api/v1/listings').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const track = (res: { body: { id?: unknown } }): string => {
     const id = idOf(res);
     listings.push(id);
     return id;
   };
   const getEtag = async (tok: string, id: string): Promise<string> => {
-    const r = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
+    const r = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${tok}`).expect(200);
     return r.headers['etag'];
   };
   const addPhoto = (tok: string, id: string) =>
-    request(server()).post(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
+    request(server()).post(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send({ url: `http://localhost:9000/${randomUUID()}.jpg` });
   const baseBody = (over: Record<string, unknown> = {}) => ({
     animalId: '', // filled per-test
     listingType: 'sale',
@@ -82,6 +83,7 @@ describe('Listings Slice 1 (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -124,7 +126,7 @@ describe('Listings Slice 1 (e2e)', () => {
   });
 
   it('requires auth on create (401)', async () => {
-    await request(server()).post('/v1/listings').set('Idempotency-Key', randomUUID()).send({}).expect(401);
+    await request(server()).post('/api/v1/listings').set('Idempotency-Key', randomUUID()).send({}).expect(401);
   });
 
   it('creates a DRAFT; seller is server-derived (L-1, a body sellerId is rejected 400 as an unknown field)', async () => {
@@ -187,11 +189,11 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     // Owner sees it; a stranger and anonymous get 404 (existence not leaked).
-    await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
-    await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(404);
-    await request(server()).get(`/v1/listings/${id}`).expect(404);
+    await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(404);
+    await request(server()).get(`/api/v1/listings/${id}`).expect(404);
     // The stranger's public list does not include the DRAFT.
-    const list = await request(server()).get('/v1/listings?limit=100').set('Authorization', `Bearer ${otherTok}`).expect(200);
+    const list = await request(server()).get('/api/v1/listings?limit=100').set('Authorization', `Bearer ${otherTok}`).expect(200);
     expect((list.body.items as { id: string }[]).map((i) => i.id)).not.toContain(id);
   });
 
@@ -199,13 +201,13 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     const etag = await getEtag(sellerTok, id);
-    await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).send({ priceCents: 7000 }).expect(428);
-    await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', 'W/"x"').send({ priceCents: 7000 }).expect(412);
-    const ok = await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 7000 }).expect(200);
+    await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).send({ priceCents: 7000 }).expect(428);
+    await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', 'W/"x"').send({ priceCents: 7000 }).expect(412);
+    const ok = await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 7000 }).expect(200);
     expect(ok.body.priceCents).toBe(7000);
     // L-12: status is readOnly → unknown field rejected by the whitelist.
     const etag2 = await getEtag(sellerTok, id);
-    await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag2).send({ status: 'ACTIVE' }).expect(400);
+    await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag2).send({ status: 'ACTIVE' }).expect(400);
   });
 
   it('L-6/L-7: submit needs ≥1 photo; submits DRAFT→PENDING_MODERATION; re-submit → 409 LISTING_NOT_DRAFT', async () => {
@@ -213,14 +215,14 @@ describe('Listings Slice 1 (e2e)', () => {
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     let etag = await getEtag(sellerTok, id);
     // No photo → 422.
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(422);
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(422);
     await addPhoto(sellerTok, id).expect(201);
     etag = await getEtag(sellerTok, id);
-    const sub = await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    const sub = await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
     expect(sub.body.status).toBe('PENDING_MODERATION');
     // L-7: submitting again (now PENDING) → 409.
     etag = await getEtag(sellerTok, id);
-    const again = await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
+    const again = await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
     expect(again.body.code).toBe('LISTING_NOT_DRAFT');
   });
 
@@ -233,7 +235,7 @@ describe('Listings Slice 1 (e2e)', () => {
     // inner guarded DRAFT→PENDING_MODERATION claim, not the idempotency cache.
     const fire = () =>
       request(server())
-        .post(`/v1/listings/${id}/submit`)
+        .post(`/api/v1/listings/${id}/submit`)
         .set('Authorization', `Bearer ${sellerTok}`)
         .set('Idempotency-Key', randomUUID())
         .set('If-Match', etag)
@@ -252,7 +254,7 @@ describe('Listings Slice 1 (e2e)', () => {
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     await addPhoto(sellerTok, id).expect(201);
     const etag = await getEtag(sellerTok, id);
-    const sub = await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    const sub = await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
     expect(sub.body.status).toBe('PENDING_MODERATION');
     expect(sub.body.status).not.toBe('ACTIVE');
     const row = await prisma.listings.findUnique({ where: { id } });
@@ -266,12 +268,12 @@ describe('Listings Slice 1 (e2e)', () => {
     for (let i = 0; i < 10; i++) await addPhoto(sellerTok, id).expect(201);
     await addPhoto(sellerTok, id).expect(422);
     // Photos are listed (DRAFT visible to owner).
-    const photos = await request(server()).get(`/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    const photos = await request(server()).get(`/api/v1/listings/${id}/photos`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect(photos.body).toHaveLength(10);
     // Remove one (owner). A non-owner removing → 403.
     const photoId = (photos.body as { id: string }[])[0].id;
-    await request(server()).delete(`/v1/listings/${id}/photos/${photoId}`).set('Authorization', `Bearer ${otherTok}`).expect(403);
-    await request(server()).delete(`/v1/listings/${id}/photos/${photoId}`).set('Authorization', `Bearer ${sellerTok}`).expect(204);
+    await request(server()).delete(`/api/v1/listings/${id}/photos/${photoId}`).set('Authorization', `Bearer ${otherTok}`).expect(403);
+    await request(server()).delete(`/api/v1/listings/${id}/photos/${photoId}`).set('Authorization', `Bearer ${sellerTok}`).expect(204);
   });
 
   // ── AUDIT2/3 gap-closers (all GREEN today; these lock the behaviour so a widen can't slip through) ──
@@ -305,7 +307,7 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     await request(server())
-      .post(`/v1/listings/${id}/photos`)
+      .post(`/api/v1/listings/${id}/photos`)
       .set('Authorization', `Bearer ${otherTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ url: `http://localhost:9000/${randomUUID()}.jpg` })
@@ -318,7 +320,7 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     const res = await request(server())
-      .post(`/v1/listings/${id}/photos`)
+      .post(`/api/v1/listings/${id}/photos`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ url: `http://evil.example.com/${randomUUID()}.jpg` })
@@ -334,7 +336,7 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     const res = await request(server())
-      .post(`/v1/listings/${id}/photos/upload-url`)
+      .post(`/api/v1/listings/${id}/photos/upload-url`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .expect(201);
     expect(res.body.method).toBe('PUT');
@@ -345,7 +347,7 @@ describe('Listings Slice 1 (e2e)', () => {
     expect(new URL(res.body.uploadUrl as string).host).toBe('localhost:9000');
     // (a) the objectUrl round-trips: POST /photos accepts it (it satisfies assertOwnMediaHost).
     const added = await request(server())
-      .post(`/v1/listings/${id}/photos`)
+      .post(`/api/v1/listings/${id}/photos`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ url: res.body.objectUrl })
@@ -357,7 +359,7 @@ describe('Listings Slice 1 (e2e)', () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
     await request(server())
-      .post(`/v1/listings/${id}/photos/upload-url`)
+      .post(`/api/v1/listings/${id}/photos/upload-url`)
       .set('Authorization', `Bearer ${otherTok}`)
       .expect(403);
   });
@@ -365,9 +367,9 @@ describe('Listings Slice 1 (e2e)', () => {
   it('upload-url: unauthenticated → 401; unknown listing → 404 (no host leak)', async () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
-    await request(server()).post(`/v1/listings/${id}/photos/upload-url`).expect(401);
+    await request(server()).post(`/api/v1/listings/${id}/photos/upload-url`).expect(401);
     await request(server())
-      .post(`/v1/listings/${randomUUID()}/photos/upload-url`)
+      .post(`/api/v1/listings/${randomUUID()}/photos/upload-url`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .expect(404);
   });
@@ -375,11 +377,11 @@ describe('Listings Slice 1 (e2e)', () => {
   it('DELETE soft-withdraws → DEACTIVATED; a second withdraw → 409; L-3 non-owner → 403', async () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
-    await request(server()).delete(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(403);
-    const del = await request(server()).delete(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).delete(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(403);
+    const del = await request(server()).delete(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
     expect(del.body.status).toBe('DEACTIVATED');
     expect(del.body.isActive).toBe(false);
-    await request(server()).delete(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(409);
+    await request(server()).delete(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(409);
   });
 
   it('Idempotency-Key replays create without a duplicate', async () => {
@@ -396,8 +398,8 @@ describe('Listings Slice 1 (e2e)', () => {
   it('ADMIN/MODERATOR can read a non-active listing (operator scope)', async () => {
     const animalId = await newAnimal(sellerId);
     const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
-    await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
-    await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${adminTok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${adminTok}`).expect(200);
   });
 
   // ── Slice 4c (B): lastModerationResult embed on GET /listings/{id} (EMB-1..4) ──────────────────
@@ -406,9 +408,9 @@ describe('Listings Slice 1 (e2e)', () => {
     const moderateReject = async (id: string): Promise<void> => {
       await addPhoto(sellerTok, id).expect(201);
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'REJECT', reason: 'poor_photos' }).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'REJECT', reason: 'poor_photos' }).expect(200);
     };
 
     beforeAll(async () => {
@@ -419,7 +421,7 @@ describe('Listings Slice 1 (e2e)', () => {
     it('EMB-3: a never-moderated listing → lastModerationResult is null', async () => {
       const animalId = await newAnimal(sellerId);
       const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
-      const res = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      const res = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       expect(res.body).toHaveProperty('lastModerationResult', null);
     });
 
@@ -429,12 +431,12 @@ describe('Listings Slice 1 (e2e)', () => {
       await moderateReject(id);
 
       // Owner (seller) sees the embed.
-      const owner = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      const owner = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       expect(owner.body.lastModerationResult).toEqual(expect.objectContaining({ decision: 'REJECTED' }));
       expect(owner.body.lastModerationResult).toHaveProperty('decidedByAgent');
       expect(owner.body.lastModerationResult.decidedBy).toHaveProperty('principalType'); // EMB-2 transparency
       // A MODERATOR/operator also sees it.
-      const mod = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      const mod = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).expect(200);
       expect(mod.body.lastModerationResult.decision).toBe('REJECTED');
 
       // EMB-1: a different USER — the listing is now DEACTIVATED so they get 404 anyway; re-approve a
@@ -447,24 +449,24 @@ describe('Listings Slice 1 (e2e)', () => {
       // submit → claim → APPROVE so the listing is ACTIVE (publicly readable).
       await addPhoto(sellerTok, id).expect(201);
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
 
       // Owner sees APPROVED; a non-owner USER reading the now-ACTIVE listing sees null (no leak).
-      const owner = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      const owner = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200);
       expect(owner.body.lastModerationResult.decision).toBe('APPROVED');
-      const stranger = await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(200);
+      const stranger = await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).expect(200);
       expect(stranger.body.lastModerationResult).toBeNull();
       // Anonymous too.
-      const anon = await request(server()).get(`/v1/listings/${id}`).expect(200);
+      const anon = await request(server()).get(`/api/v1/listings/${id}`).expect(200);
       expect(anon.body.lastModerationResult).toBeNull();
     });
 
     it('EMB-4: the GET /listings list response does NOT embed lastModerationResult (no N+1)', async () => {
       // The list path always sets it null (no per-row moderation lookup). Use an authenticated owner
       // list so the moderated listing is in scope, and assert every row's field is null.
-      const res = await request(server()).get('/v1/listings?limit=100').set('Authorization', `Bearer ${sellerTok}`).expect(200);
+      const res = await request(server()).get('/api/v1/listings?limit=100').set('Authorization', `Bearer ${sellerTok}`).expect(200);
       for (const item of res.body.items as { lastModerationResult: unknown }[]) {
         expect(item.lastModerationResult).toBeNull();
       }
@@ -483,9 +485,9 @@ describe('Listings Slice 1 (e2e)', () => {
       const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
       await addPhoto(sellerTok, id).expect(201);
       const etag = await getEtag(sellerTok, id);
-      await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-      await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-      await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+      await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+      await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
       const row = await prisma.listings.findUnique({ where: { id } });
       expect(row?.status).toBe('ACTIVE');
       return id;
@@ -494,7 +496,7 @@ describe('Listings Slice 1 (e2e)', () => {
     it('M14-1: a material edit (price) of an ACTIVE listing → PENDING_MODERATION + PENDING + enqueued; leaves ACTIVE (M-P0)', async () => {
       const id = await makeActive();
       const etag = await getEtag(sellerTok, id);
-      const res = await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 9999 }).expect(200);
+      const res = await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 9999 }).expect(200);
       expect(res.body.status).toBe('PENDING_MODERATION');
       expect(res.body.priceCents).toBe(9999);
       const row = await prisma.listings.findUnique({ where: { id } });
@@ -509,7 +511,7 @@ describe('Listings Slice 1 (e2e)', () => {
       // Contrive a stale lock + an escalated marker on the ACTIVE row (as if from a prior cycle).
       await prisma.listings.update({ where: { id }, data: { assigned_to: modId, locked_at: new Date(), lock_expires_at: new Date(Date.now() + 600_000), escalated_at: new Date() } });
       const etag = await getEtag(sellerTok, id);
-      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ titleLocalized: { en: 'Edited', ru: 'Изменено' } }).expect(200);
+      await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ titleLocalized: { en: 'Edited', ru: 'Изменено' } }).expect(200);
       const row = await prisma.listings.findUnique({ where: { id } });
       expect(row?.assigned_to).toBeNull();
       expect(row?.locked_at).toBeNull();
@@ -527,8 +529,8 @@ describe('Listings Slice 1 (e2e)', () => {
     it('M14-4: a non-owner USER editing an ACTIVE listing → 403; a MODERATOR → 403', async () => {
       const id = await makeActive();
       const etag = await getEtag(otherTok, id); // ACTIVE is publicly readable
-      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
-      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
+      await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${otherTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
+      await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${modTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(403);
     });
 
     it('M14-7: a SOLD/terminal listing is not editable → 409 LISTING_NOT_EDITABLE', async () => {
@@ -536,20 +538,20 @@ describe('Listings Slice 1 (e2e)', () => {
       const id = track(await create(sellerTok, baseBody({ animalId })).expect(201));
       await prisma.listings.update({ where: { id }, data: { status: 'SOLD' } });
       const etag = await getEtag(sellerTok, id);
-      const res = await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(409);
+      const res = await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: 1 }).expect(409);
       expect(res.body.code).toBe('LISTING_NOT_EDITABLE');
     });
 
     it('M14-8: animalId is not an editable field → 400 (unknown field rejected by the whitelist)', async () => {
       const id = await makeActive();
       const etag = await getEtag(sellerTok, id);
-      await request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ animalId: randomUUID() }).expect(400);
+      await request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ animalId: randomUUID() }).expect(400);
     });
 
     it('M14-3 (concurrency): two parallel edits of an ACTIVE listing → exactly one 200, one 409; single PENDING_MODERATION', async () => {
       const id = await makeActive();
       const etag = await getEtag(sellerTok, id);
-      const fire = (price: number) => request(server()).patch(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: price });
+      const fire = (price: number) => request(server()).patch(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).set('If-Match', etag).send({ priceCents: price });
       const [a, b] = await Promise.all([fire(111), fire(222)]);
       const statuses = [a.status, b.status].sort();
       expect(statuses[0]).toBe(200);

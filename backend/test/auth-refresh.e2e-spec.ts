@@ -1,7 +1,7 @@
 /**
  * Refresh-token rotation + reuse/theft detection end-to-end (spec 01 round-4 normative), now over the
  * HttpOnly-cookie transport (API_CONVENTIONS §2 / AUDIT3 security.md #2). The refresh token lives in
- * a `refresh_token` HttpOnly+Secure+SameSite=Strict cookie scoped to /v1/auth and is NEVER in the
+ * a `refresh_token` HttpOnly+Secure+SameSite=Strict cookie scoped to /api/v1/auth and is NEVER in the
  * JSON body — closing the XSS-exfil ATO chain. This suite verifies: (a) rotation, (b) reuse→family
  * burn, (c) logout revoke, plus the cookie-transport negatives (missing cookie → 401; body never
  * leaks the refresh token; cookie attributes are hardened).
@@ -22,6 +22,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 /** The `refresh_token=<value>` pair from a Set-Cookie response, ready to resend as a Cookie header. */
 const refreshCookie = (res: request.Response): string => {
@@ -44,7 +45,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
 
   /** Mint a real DB-backed session; returns the access token (body) + the refresh cookie pair. */
   const session = async (uid: string): Promise<{ accessToken: string; cookie: string }> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     expect(res.body.refreshToken).toBeUndefined(); // INVARIANT: refresh never in the body
     return { accessToken: res.body.accessToken as string, cookie: refreshCookie(res) };
   };
@@ -62,6 +63,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -76,14 +78,14 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     await app.close();
   });
 
-  it('dev-token sets a hardened refresh cookie (HttpOnly, Secure, SameSite=Strict, Path=/v1/auth)', async () => {
+  it('dev-token sets a hardened refresh cookie (HttpOnly, Secure, SameSite=Strict, Path=/api/v1/auth)', async () => {
     const uid = await mkUser('Cookie Attrs');
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     const cookie = rawSetCookie(res);
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/Secure/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
-    expect(cookie).toMatch(/Path=\/v1\/auth/i);
+    expect(cookie).toMatch(/Path=\/api\/v1\/auth/i);
     expect(res.body.accessToken).toEqual(expect.any(String));
   });
 
@@ -91,14 +93,14 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     const uid = await mkUser('Refresh Rotate');
     const { cookie: original } = await session(uid);
 
-    const rot = await request(server()).post('/v1/auth/refresh').set('Cookie', original).expect(200);
+    const rot = await request(server()).post('/api/v1/auth/refresh').set('Cookie', original).expect(200);
     expect(rot.body.accessToken).toEqual(expect.any(String));
     expect(rot.body.refreshToken).toBeUndefined(); // INVARIANT: not echoed in body
     const rotated = refreshCookie(rot);
     expect(rotated).not.toBe(original); // rotated, not the same value
 
     // The presented (now-rotated) cookie is revoked: replaying it is rejected.
-    const replay = await request(server()).post('/v1/auth/refresh').set('Cookie', original).expect(401);
+    const replay = await request(server()).post('/api/v1/auth/refresh').set('Cookie', original).expect(401);
     expect(replay.headers['content-type']).toContain('application/problem+json');
     expect(replay.body.code).toBe('UNAUTHENTICATED');
   });
@@ -110,7 +112,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     // Fire both refreshes at once against the SAME cookie. The atomic compare-and-swap must let exactly
     // ONE win the rotation; the loser (or the pre-check on a serialised schedule) is rejected — never
     // two successful mints from one token (the rotate-TOCTOU the fix closes).
-    const fire = () => request(server()).post('/v1/auth/refresh').set('Cookie', original).send();
+    const fire = () => request(server()).post('/api/v1/auth/refresh').set('Cookie', original).send();
     const [a, b] = await Promise.all([fire(), fire()]);
 
     const statuses = [a.status, b.status].sort((x, y) => x - y);
@@ -122,21 +124,21 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     const live = await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } });
     expect(live).toBe(0);
     const winner = a.status === 200 ? a : b;
-    await request(server()).post('/v1/auth/refresh').set('Cookie', refreshCookie(winner)).expect(401);
+    await request(server()).post('/api/v1/auth/refresh').set('Cookie', refreshCookie(winner)).expect(401);
   });
 
   it('(b) replaying a rotated cookie detects reuse and burns the WHOLE family (siblings revoked on live PG)', async () => {
     const uid = await mkUser('Refresh Reuse');
     const { cookie: original } = await session(uid);
 
-    const rot = await request(server()).post('/v1/auth/refresh').set('Cookie', original).expect(200);
+    const rot = await request(server()).post('/api/v1/auth/refresh').set('Cookie', original).expect(200);
     const child = refreshCookie(rot);
 
     const liveBefore = await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } });
     expect(liveBefore).toBe(1);
 
     // Replay the ALREADY-ROTATED original → reuse/theft → 401 + burn the family.
-    const reuse = await request(server()).post('/v1/auth/refresh').set('Cookie', original).expect(401);
+    const reuse = await request(server()).post('/api/v1/auth/refresh').set('Cookie', original).expect(401);
     expect(reuse.body.code).toBe('UNAUTHENTICATED');
 
     const rows = await prisma.refresh_tokens.findMany({ where: { user_id: uid } });
@@ -144,7 +146,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     expect(rows.every((r) => r.revoked_at !== null)).toBe(true);
 
     // The previously-good child is now unusable too (family burned).
-    const childReuse = await request(server()).post('/v1/auth/refresh').set('Cookie', child).expect(401);
+    const childReuse = await request(server()).post('/api/v1/auth/refresh').set('Cookie', child).expect(401);
     expect(childReuse.body.code).toBe('UNAUTHENTICATED');
   });
 
@@ -153,7 +155,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     const { accessToken, cookie } = await session(uid);
 
     const out = await request(server())
-      .post('/v1/auth/logout')
+      .post('/api/v1/auth/logout')
       .set('Authorization', `Bearer ${accessToken}`)
       .set('Cookie', cookie)
       .expect(204);
@@ -163,7 +165,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     const live = await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } });
     expect(live).toBe(0);
 
-    await request(server()).post('/v1/auth/refresh').set('Cookie', cookie).expect(401);
+    await request(server()).post('/api/v1/auth/refresh').set('Cookie', cookie).expect(401);
   });
 
   it('(c2) /auth/logout WITHOUT a cookie revokes ALL sessions for the user', async () => {
@@ -173,7 +175,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     expect(await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } })).toBe(2);
 
     await request(server())
-      .post('/v1/auth/logout')
+      .post('/api/v1/auth/logout')
       .set('Authorization', `Bearer ${s1.accessToken}`)
       .expect(204);
 
@@ -182,7 +184,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
 
   it('refresh with NO cookie → 401 (token is read only from the cookie, never the body)', async () => {
     const res = await request(server())
-      .post('/v1/auth/refresh')
+      .post('/api/v1/auth/refresh')
       .send({ refreshToken: 'ignored-body-value' }) // body is NOT a valid transport anymore
       .expect(401);
     expect(res.body.code).toBe('UNAUTHENTICATED');
@@ -190,7 +192,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
 
   it('rejects a garbage / unknown refresh cookie with 401 (no family, no leak)', async () => {
     const res = await request(server())
-      .post('/v1/auth/refresh')
+      .post('/api/v1/auth/refresh')
       .set('Cookie', 'refresh_token=not-a-real-token')
       .expect(401);
     expect(res.body.code).toBe('UNAUTHENTICATED');
@@ -201,7 +203,7 @@ describe('Auth refresh-token rotation/reuse over HttpOnly cookie (e2e)', () => {
     const { cookie } = await session(uid);
     await prisma.users.update({ where: { id: uid }, data: { status: 'DEACTIVATED', is_active: false, deactivated_at: new Date() } });
 
-    const res = await request(server()).post('/v1/auth/refresh').set('Cookie', cookie).expect(401);
+    const res = await request(server()).post('/api/v1/auth/refresh').set('Cookie', cookie).expect(401);
     expect(res.body.code).toBe('UNAUTHENTICATED');
     expect(await prisma.refresh_tokens.count({ where: { user_id: uid, revoked_at: null } })).toBe(0);
   });

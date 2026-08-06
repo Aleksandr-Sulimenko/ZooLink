@@ -38,6 +38,7 @@ import type { SmsMessage, SmsSendResult } from '../src/lib/providers';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('AUDIT2 hyper-test proofs (e2e)', () => {
   let app: INestApplication;
@@ -65,24 +66,24 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   /** Register + verify a REAL user through the actual phone-OTP flow (OTP captured via the SMS spy). */
   const registerVerify = async (fullName: string): Promise<{ userId: string; token: string }> => {
     const phone = `+7999${Math.floor(1000000 + Math.random() * 8999999)}`;
-    await request(server()).post('/v1/auth/register/phone').send({ phone, fullName }).expect(202);
+    await request(server()).post('/api/v1/auth/register/phone').send({ phone, fullName }).expect(202);
     const code = sentCodes[sentCodes.length - 1];
-    const res = await request(server()).post('/v1/auth/verify-phone').send({ phone, code }).expect(200);
+    const res = await request(server()).post('/api/v1/auth/verify-phone').send({ phone, code }).expect(200);
     const userId = res.body.user.id as string;
     users.push(userId);
     return { userId, token: res.body.accessToken as string };
   };
 
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   /** ADR-0020 honest opt-in via the REAL PATCH /me writer (records CONTACT_DISTRIBUTION consent, encrypts phone). */
   const setContact = async (
     tok: string,
     body: { contactPhone?: string; contactTelegram?: string; showPhone?: boolean; showTelegram?: boolean },
   ): Promise<request.Response> => {
-    const me = await request(server()).get('/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
-    return request(server()).patch('/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body);
+    const me = await request(server()).get('/api/v1/me').set('Authorization', `Bearer ${tok}`).expect(200);
+    return request(server()).patch('/api/v1/me').set('Authorization', `Bearer ${tok}`).set('If-Match', me.headers['etag']).send(body);
   };
 
   const mkUser = async (name: string, role: string): Promise<string> => {
@@ -111,10 +112,10 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   /** Real seller creates a listing via the public API, adds a photo, submits, then a moderator APPROVEs → ACTIVE. */
   const createActiveListingViaApi = async (sellerTok: string, modTok: string): Promise<string> => {
     // seller is a real registered USER (in WRITE_ROLES); the animal owner is that same real seller.
-    const meId = (await request(server()).get('/v1/me').set('Authorization', `Bearer ${sellerTok}`).expect(200)).body.id as string;
+    const meId = (await request(server()).get('/api/v1/me').set('Authorization', `Bearer ${sellerTok}`).expect(200)).body.id as string;
     const animalId = await newAnimal(meId);
     const created = await request(server())
-      .post('/v1/listings')
+      .post('/api/v1/listings')
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ animalId, listingType: 'sale', titleLocalized: { en: 'Kitten', ru: 'Котёнок' }, priceCents: 5000 })
@@ -122,15 +123,15 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
     const id = created.body.id as string;
     listings.push(id);
     await request(server())
-      .post(`/v1/listings/${id}/photos`)
+      .post(`/api/v1/listings/${id}/photos`)
       .set('Authorization', `Bearer ${sellerTok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ url: `http://localhost:9000/${randomUUID()}.jpg` })
       .expect(201);
-    const etag = (await request(server()).get(`/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200)).headers['etag'];
-    await request(server()).post(`/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
-    await request(server()).post(`/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
-    await request(server()).post('/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
+    const etag = (await request(server()).get(`/api/v1/listings/${id}`).set('Authorization', `Bearer ${sellerTok}`).expect(200)).headers['etag'];
+    await request(server()).post(`/api/v1/listings/${id}/submit`).set('Authorization', `Bearer ${sellerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/moderation/queue/${id}/claim`).set('Authorization', `Bearer ${modTok}`).expect(200);
+    await request(server()).post('/api/v1/moderation/action').set('Authorization', `Bearer ${modTok}`).send({ listingId: id, action: 'APPROVE' }).expect(200);
     return id;
   };
 
@@ -147,6 +148,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -198,7 +200,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
   // 1. BLOCKER — the dead marketplace (real registered seller reveals empty channels)
   // ════════════════════════════════════════════════════════════════════════════════════════════
   describe('BLOCKER: contact-reveal for a REAL registered seller — FIXED (ADR-0020 / wave C)', () => {
-    it('AUDIT2 root-cause FIXED: PATCH /v1/me now ACCEPTS contactPhone/contactTelegram/showPhone (200, not 400)', async () => {
+    it('AUDIT2 root-cause FIXED: PATCH /api/v1/me now ACCEPTS contactPhone/contactTelegram/showPhone (200, not 400)', async () => {
       // The DTO now has the contact fields (ADR-0020), so forbidNonWhitelisted no longer fires. A fresh
       // PATCH /me with the contact channels succeeds — the writer that was missing at AUDIT2 now exists.
       const res = await setContact(seller.token, { contactPhone: '+79990001122', contactTelegram: 'realseller', showPhone: true });
@@ -207,7 +209,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
 
     it('AUDIT2 reality FIXED: a REAL seller (opted in via PATCH /me) → buyer reveal returns a usable channel', async () => {
       const id = await createActiveListingViaApi(seller.token, modTok);
-      const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      const res = await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       expect(res.body.sellerId).toBe(seller.userId);
       expect(res.body.status).toBe('REVEALED');
       expect(res.body.channels).toMatchObject({ phone: '+79990001122' }); // ← the marketplace is alive
@@ -215,7 +217,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
 
     it('AUDIT2 BLOCKER PROOF FIXED (was RED, now GREEN): a real buyer receives at least one usable channel', async () => {
       const id = await createActiveListingViaApi(seller.token, modTok);
-      const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
+      const res = await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${buyerTok}`).expect(200);
       // The BLOCKER is closed: the honest register→verify→PATCH /me→reveal path yields real channels.
       expect(Object.keys(res.body.channels as Record<string, unknown>).length).toBeGreaterThan(0);
     });
@@ -231,7 +233,7 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
       const hcTok = await devToken(hcBuyerId);
       await redis.client.del(`contact-reveal:pet:${hcBuyerId}`);
       const id = await createActiveListingViaApi(silentSeller.token, modTok);
-      const res = await request(server()).post(`/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${hcTok}`).expect(200);
+      const res = await request(server()).post(`/api/v1/listings/${id}/contact-reveal`).set('Authorization', `Bearer ${hcTok}`).expect(200);
       expect(res.body.channels).toEqual({});
       expect(res.body.status).toBe('NO_CHANNELS');
       // The buyer is NOT charged: no quota consumed, no meaningless reveal row.
@@ -254,16 +256,16 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
       const bTok = await devToken(bId);
       await redis.client.del(`contact-reveal:pet:${bId}`);
       for (let i = 0; i < 10; i++) {
-        await request(server()).post(`/v1/listings/${ids[i]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(200);
+        await request(server()).post(`/api/v1/listings/${ids[i]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(200);
       }
-      const capped = await request(server()).post(`/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(429);
+      const capped = await request(server()).post(`/api/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${bTok}`).expect(429);
       expect(capped.body.code).toBe('RATE_LIMITED');
 
       // Sybil: a cheap fresh account C resets the entire quota — no per-seller/account-age cap bites yet.
       const cId = await mkUser('A2 SybilC', 'USER');
       const cTok = await devToken(cId);
       await redis.client.del(`contact-reveal:pet:${cId}`);
-      await request(server()).post(`/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${cTok}`).expect(200);
+      await request(server()).post(`/api/v1/listings/${ids[10]}/contact-reveal`).set('Authorization', `Bearer ${cTok}`).expect(200);
     });
   });
 
@@ -275,14 +277,14 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
       // A per-user creation quota now exists (LISTING_CREATION_QUOTA_PER_DAY, default 20). 12 < 20, so a
       // legitimate seller listing 12 animals is unaffected. The 429-at-threshold + rate-limit-headers proof
       // lives in listing-creation-quota.e2e-spec.ts (env-overridden to 3 for a fast deterministic cap).
-      const meId = (await request(server()).get('/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
+      const meId = (await request(server()).get('/api/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
       // Isolate from creates this seller made in other tests of the suite (shared 24h counter) so 12 < 20 holds.
       await redis.client.del(`listing-create:${meId}`);
       let created = 0;
       for (let i = 0; i < 12; i++) {
         const animalId = await newAnimal(meId);
         const r = await request(server())
-          .post('/v1/listings')
+          .post('/api/v1/listings')
           .set('Authorization', `Bearer ${seller.token}`)
           .set('Idempotency-Key', randomUUID())
           .send({ animalId, listingType: 'sale', titleLocalized: { en: `Flood ${i}`, ru: `Флуд ${i}` }, priceCents: 5000 });
@@ -303,12 +305,12 @@ describe('AUDIT2 hyper-test proofs (e2e)', () => {
     // the animal read-authz failure to 404 (animal.service.getById), matching listing/saved-search/
     // content-report. This test is now the GREEN regression proving the oracle is GONE.
     it('AUDIT2 #5 FIXED: existing non-owned animal AND missing id BOTH → 404 (no existence oracle)', async () => {
-      const meId = (await request(server()).get('/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
+      const meId = (await request(server()).get('/api/v1/me').set('Authorization', `Bearer ${seller.token}`).expect(200)).body.id as string;
       const ownedByseller = await newAnimal(meId);
       const attackerTok = buyerTok; // a different, non-owning principal
 
-      const existing = await request(server()).get(`/v1/animals/${ownedByseller}`).set('Authorization', `Bearer ${attackerTok}`);
-      const missing = await request(server()).get(`/v1/animals/${randomUUID()}`).set('Authorization', `Bearer ${attackerTok}`);
+      const existing = await request(server()).get(`/api/v1/animals/${ownedByseller}`).set('Authorization', `Bearer ${attackerTok}`);
+      const missing = await request(server()).get(`/api/v1/animals/${randomUUID()}`).set('Authorization', `Bearer ${attackerTok}`);
 
       expect(existing.status).toBe(404); // existence no longer leaked (was 403)
       expect(missing.status).toBe(404);

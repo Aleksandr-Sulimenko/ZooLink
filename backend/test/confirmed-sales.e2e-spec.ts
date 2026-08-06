@@ -27,6 +27,7 @@ import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
 import { provisionCanonicalDatabase, type CanonicalDb } from './support/canonical-db';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 // Р10-A: the append-only negative-invariant checks (m1) must measure the ARTIFACT — run the suite
 // against a throwaway DB built from database_schema.sql (fixtures are all created inline; no seed).
@@ -49,7 +50,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const newAnimal = async (owner: string): Promise<string> => {
     const a = await prisma.animals.create({
@@ -70,9 +71,9 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
   };
 
   const initiate = (tok: string, animalId: string, body: Record<string, unknown>) =>
-    request(server()).post(`/v1/animals/${animalId}/transfers`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send(body);
+    request(server()).post(`/api/v1/animals/${animalId}/transfers`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send(body);
   const getEtag = async (tok: string, transferId: string): Promise<string> =>
-    (await request(server()).get(`/v1/transfers/${transferId}`).set('Authorization', `Bearer ${tok}`).expect(200)).headers['etag'];
+    (await request(server()).get(`/api/v1/transfers/${transferId}`).set('Authorization', `Bearer ${tok}`).expect(200)).headers['etag'];
   const track = (res: { body: { id?: unknown } }): string => {
     const id = res.body.id as string;
     transfers.push(id);
@@ -87,7 +88,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const animalId = await newAnimal(owner);
     const transferId = track(await initiate(ownerT, animalId, { toUserId: recip }).expect(201));
     const etag = await getEtag(recipT, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipT}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipT}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
     return { animalId, transferId };
   };
 
@@ -99,6 +100,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -186,7 +188,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const { transferId } = await completeTransfer();
     // A second accept on the now-COMPLETED transfer is a 409 (terminal) — and must not add a row.
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
     const sales = await prisma.confirmed_sales.findMany({ where: { ownership_transfer_id: transferId } });
     expect(sales).toHaveLength(1);
   });
@@ -196,7 +198,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const transferId = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, transferId);
     const fire = () =>
-      request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).send();
+      request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).send();
     const [a, b] = await Promise.all([fire(), fire()]);
     const statuses = [a.status, b.status].sort();
     expect(statuses[0]).toBe(200);
@@ -210,7 +212,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const transferId = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/decline`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/decline`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(200);
     const sales = await prisma.confirmed_sales.findMany({ where: { ownership_transfer_id: transferId } });
     expect(sales).toHaveLength(0);
   });
@@ -219,7 +221,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const transferId = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(ownerTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
     const sales = await prisma.confirmed_sales.findMany({ where: { ownership_transfer_id: transferId } });
     expect(sales).toHaveLength(0);
   });
@@ -229,7 +231,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const transferId = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     await prisma.ownership_transfers.update({ where: { id: transferId }, data: { expires_at: new Date(Date.now() - 1000) } });
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
     const sales = await prisma.confirmed_sales.findMany({ where: { ownership_transfer_id: transferId } });
     expect(sales).toHaveLength(0);
     // Byte-identical transfer behaviour: still owned by the original owner, transfer CANCELLED(expired).
@@ -248,7 +250,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     await prisma.animal_ownership_history.create({ data: { animal_id: a.id, organization_id: org.id, start_date: new Date('2021-01-01T00:00:00Z') } });
     const transferId = track(await initiate(ownerTok, a.id, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
 
     const sale = await prisma.confirmed_sales.findFirstOrThrow({ where: { ownership_transfer_id: transferId } });
     expect(sale.seller_organization_id).toBe(org.id);
@@ -271,7 +273,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const transferId = track(await initiate(ownerTok, animalId, { toOrganizationId: org.id }).expect(201));
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
 
     const sale = await prisma.confirmed_sales.findFirstOrThrow({ where: { ownership_transfer_id: transferId } });
     expect(sale.buyer_organization_id).toBe(org.id);
@@ -297,7 +299,7 @@ describe('ADR-0038 confirmed-sale capture (e2e)', () => {
     await prisma.animal_ownership_history.create({ data: { animal_id: a.id, owner_id: ownerId, start_date: new Date('2021-01-01T00:00:00Z') } });
     const transferId = track(await initiate(ownerTok, a.id, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, transferId);
-    await request(server()).post(`/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${transferId}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
 
     const sale = await prisma.confirmed_sales.findFirstOrThrow({ where: { ownership_transfer_id: transferId } });
     expect(sale.market).toBe('livestock');

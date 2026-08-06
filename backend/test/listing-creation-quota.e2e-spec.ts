@@ -26,6 +26,7 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 const QUOTA = 3;
 
@@ -46,7 +47,7 @@ describe('Listing-creation quota (AUDIT4 P1-4, e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const newAnimal = async (owner: string): Promise<string> => {
     const a = await prisma.animals.create({
@@ -67,7 +68,7 @@ describe('Listing-creation quota (AUDIT4 P1-4, e2e)', () => {
   // double-thenable collapse that would unwrap it straight to a Response.
   const postListing = (tok: string, animalId: string): request.Test =>
     request(server())
-      .post('/v1/listings')
+      .post('/api/v1/listings')
       .set('Authorization', `Bearer ${tok}`)
       .set('Idempotency-Key', randomUUID())
       .send({ animalId, listingType: 'sale', titleLocalized: { en: 'Q', ru: 'К' }, priceCents: 5000 });
@@ -77,6 +78,7 @@ describe('Listing-creation quota (AUDIT4 P1-4, e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);

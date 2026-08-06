@@ -17,6 +17,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Admin Users & Audit (e2e)', () => {
   let app: INestApplication;
@@ -35,7 +36,7 @@ describe('Admin Users & Audit (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> => {
-    const res = await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201);
+    const res = await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201);
     return res.body.accessToken as string;
   };
 
@@ -44,6 +45,7 @@ describe('Admin Users & Audit (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -90,18 +92,18 @@ describe('Admin Users & Audit (e2e)', () => {
   });
 
   // ---- GET /users/roles ----------------------------------------------------------------------
-  describe('GET /v1/users/roles', () => {
+  describe('GET /api/v1/users/roles', () => {
     it('401 for an unauthenticated request', async () => {
-      await request(server()).get('/v1/users/roles').expect(401);
+      await request(server()).get('/api/v1/users/roles').expect(401);
     });
 
     it('403 for a non-ADMIN (MODERATOR) principal', async () => {
-      await request(server()).get('/v1/users/roles').set('Authorization', `Bearer ${userToken}`).expect(403);
+      await request(server()).get('/api/v1/users/roles').set('Authorization', `Bearer ${userToken}`).expect(403);
     });
 
     it('returns the {items, meta} envelope and a safe UserRoleInfo projection', async () => {
       const res = await request(server())
-        .get(`/v1/users/roles?search=${suffix}&limit=100`)
+        .get(`/api/v1/users/roles?search=${suffix}&limit=100`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       expect(Array.isArray(res.body.items)).toBe(true);
@@ -116,7 +118,7 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('filters by role and isActive', async () => {
       const res = await request(server())
-        .get(`/v1/users/roles?role=MODERATOR&isActive=false&search=${suffix}`)
+        .get(`/api/v1/users/roles?role=MODERATOR&isActive=false&search=${suffix}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       const ids = (res.body.items as { id: string }[]).map((i) => i.id);
@@ -126,25 +128,25 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('400 on an out-of-enum role filter', async () => {
       await request(server())
-        .get('/v1/users/roles?role=SUPERHERO')
+        .get('/api/v1/users/roles?role=SUPERHERO')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
     });
   });
 
   // ---- GET /audit/log ------------------------------------------------------------------------
-  describe('GET /v1/audit/log', () => {
+  describe('GET /api/v1/audit/log', () => {
     it('401 for an unauthenticated request', async () => {
-      await request(server()).get('/v1/audit/log').expect(401);
+      await request(server()).get('/api/v1/audit/log').expect(401);
     });
 
     it('403 for a non-ADMIN principal', async () => {
-      await request(server()).get('/v1/audit/log').set('Authorization', `Bearer ${userToken}`).expect(403);
+      await request(server()).get('/api/v1/audit/log').set('Authorization', `Bearer ${userToken}`).expect(403);
     });
 
     it('400 when entityId and entityIdInt are both supplied', async () => {
       const res = await request(server())
-        .get(`/v1/audit/log?entityId=${userId}&entityIdInt=${refEntityIdInt}`)
+        .get(`/api/v1/audit/log?entityId=${userId}&entityIdInt=${refEntityIdInt}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
       expect(res.body.code).toBe('VALIDATION_ERROR');
@@ -152,7 +154,7 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('filters a UUID entity and exposes the {actorId, principalType} actor badge', async () => {
       const res = await request(server())
-        .get(`/v1/audit/log?entityId=${userId}`)
+        .get(`/api/v1/audit/log?entityId=${userId}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       expect(res.body.meta).toEqual(expect.objectContaining({ page: 1 }));
@@ -170,7 +172,7 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('filters an INT-keyed reference-data entity by entityIdInt and splits out referenceDataset (D4)', async () => {
       const res = await request(server())
-        .get(`/v1/audit/log?entityIdInt=${refEntityIdInt}&entityType=reference-data`)
+        .get(`/api/v1/audit/log?entityIdInt=${refEntityIdInt}&entityType=reference-data`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       const items = res.body.items as Record<string, unknown>[];
@@ -185,7 +187,7 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('narrows to one dataset via referenceDataset (exact suffixed entity_type)', async () => {
       const res = await request(server())
-        .get('/v1/audit/log?entityType=reference-data&referenceDataset=species')
+        .get('/api/v1/audit/log?entityType=reference-data&referenceDataset=species')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
       const found = (res.body.items as Record<string, unknown>[]).find((e) => e.entityIdInt === refEntityIdInt);
@@ -195,14 +197,14 @@ describe('Admin Users & Audit (e2e)', () => {
 
     it('400 on a malformed actionType (not a {domain}.{verb} verb)', async () => {
       await request(server())
-        .get('/v1/audit/log?actionType=NOTAVERB')
+        .get('/api/v1/audit/log?actionType=NOTAVERB')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
     });
 
     it('400 on a malformed entityId (non-uuid)', async () => {
       await request(server())
-        .get('/v1/audit/log?entityId=not-a-uuid')
+        .get('/api/v1/audit/log?entityId=not-a-uuid')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
     });

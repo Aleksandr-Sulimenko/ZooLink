@@ -20,6 +20,7 @@ import { AppModule } from '../src/app.module';
 import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 const C_LAT = 55.7558; // Moscow center
 const C_LNG = 37.6173;
@@ -38,7 +39,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   /** Seed an ACTIVE+APPROVED listing for `speciesId` at the given coords (null = no coords). */
   const seedActive = async (
@@ -81,6 +82,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -110,12 +112,12 @@ describe('Listings Slice 2 — search (e2e)', () => {
 
   // ── L2-2 conditional-required market ──────────────────────────────────────────────────────────
   it('L2-2: an anonymous read with no market → 422 MARKET_REQUIRED', async () => {
-    const res = await request(server()).get('/v1/listings').expect(422);
+    const res = await request(server()).get('/api/v1/listings').expect(422);
     expect(res.body.code).toBe('MARKET_REQUIRED');
   });
 
   it('L2-2: an authenticated owner-scoped read without market is allowed', async () => {
-    await request(server()).get('/v1/listings').set('Authorization', `Bearer ${sellerTok}`).expect(200);
+    await request(server()).get('/api/v1/listings').set('Authorization', `Bearer ${sellerTok}`).expect(200);
   });
 
   // ── L2-1 market no-leak ───────────────────────────────────────────────────────────────────────
@@ -123,17 +125,17 @@ describe('Listings Slice 2 — search (e2e)', () => {
     const petL = await seedActive(petSp, { titleEn: 'PetOne' });
     const liveL = await seedActive(liveSp, { titleEn: 'LiveOne' });
 
-    const pet = await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200);
+    const pet = await request(server()).get(`/api/v1/listings?market=pet&limit=100`).expect(200);
     expect(ids(pet)).toContain(petL);
     expect(ids(pet)).not.toContain(liveL);
 
     // Crafted: ask for market=pet but pass the LIVESTOCK species_id → AND-intersect → empty, never a leak.
-    const crafted = await request(server()).get(`/v1/listings?market=pet&species_id=${liveSp}&limit=100`).expect(200);
+    const crafted = await request(server()).get(`/api/v1/listings?market=pet&species_id=${liveSp}&limit=100`).expect(200);
     expect(ids(crafted)).not.toContain(liveL);
     expect(ids(crafted)).not.toContain(petL);
 
     // And the inverse holds.
-    const live = await request(server()).get(`/v1/listings?market=livestock&limit=100`).expect(200);
+    const live = await request(server()).get(`/api/v1/listings?market=livestock&limit=100`).expect(200);
     expect(ids(live)).toContain(liveL);
     expect(ids(live)).not.toContain(petL);
   });
@@ -147,14 +149,14 @@ describe('Listings Slice 2 — search (e2e)', () => {
   it('D8: a market read follows the cached listings.market column, not a live animals⋈species join', async () => {
     const petL = await seedActive(petSp, { titleEn: 'CacheSrc' });
     // Seeded consistent with its pet species.
-    expect(ids(await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200))).toContain(petL);
+    expect(ids(await request(server()).get(`/api/v1/listings?market=pet&limit=100`).expect(200))).toContain(petL);
 
     // Force the cache to disagree with the (still pet) species. A join-based read would keep it 'pet'.
     await prisma.listings.update({ where: { id: petL }, data: { market: 'livestock' } });
 
-    const asPet = await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200);
+    const asPet = await request(server()).get(`/api/v1/listings?market=pet&limit=100`).expect(200);
     expect(ids(asPet)).not.toContain(petL); // dropped from pet — the read is l.market, not s.market
-    const asLive = await request(server()).get(`/v1/listings?market=livestock&limit=100`).expect(200);
+    const asLive = await request(server()).get(`/api/v1/listings?market=livestock&limit=100`).expect(200);
     expect(ids(asLive)).toContain(petL); // surfaces under livestock, per the cache
   });
 
@@ -167,7 +169,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
       data: { animal_id: withBreed.id, seller_id: sellerId, listing_type: 'sale', market: 'pet', title_localized: { en: 'Breed', ru: 'П' }, status: 'ACTIVE', moderation_status: 'APPROVED', is_active: true, price_cents: 5000, lat: C_LAT, lng: C_LNG },
     });
     listingIds.push(l.id);
-    const res = await request(server()).get(`/v1/listings?market=pet&species_id=${petSp}&breed_id=${petBreed}&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&species_id=${petSp}&breed_id=${petBreed}&limit=100`).expect(200);
     expect(ids(res)).toContain(l.id);
   });
 
@@ -177,7 +179,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
     const atRadius = await seedActive(petSp, { lat: C_LAT + 10000 / 111320, lng: C_LNG, titleEn: 'at10' }); // ~9989m
     const outside = await seedActive(petSp, { lat: C_LAT + 11000 / 111320, lng: C_LNG, titleEn: 'out11' }); // ~10988m
 
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`).expect(200);
     const got = ids(res);
     expect(got).toContain(inside);
     expect(got).toContain(atRadius); // within ±100m tolerance
@@ -192,7 +194,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
   });
 
   it('L2-14: distanceM is null off the geo path', async () => {
-    const res = await request(server()).get(`/v1/listings?market=pet&limit=5`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&limit=5`).expect(200);
     for (const it of res.body.items as { distanceM: number | null }[]) {
       expect(it.distanceM).toBeNull();
     }
@@ -201,10 +203,10 @@ describe('Listings Slice 2 — search (e2e)', () => {
   // ── L2-8 bbox loss-less + L2-9 NULL-coords excluded ───────────────────────────────────────────
   it('L2-9: a NULL-coords listing is excluded from a geo search', async () => {
     const noCoords = await seedActive(petSp, { lat: null, lng: null, titleEn: 'nocoords' });
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=50&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=50&limit=100`).expect(200);
     expect(ids(res)).not.toContain(noCoords);
     // But it IS returned by a non-geo market search.
-    const nogeo = await request(server()).get(`/v1/listings?market=pet&limit=100`).expect(200);
+    const nogeo = await request(server()).get(`/api/v1/listings?market=pet&limit=100`).expect(200);
     expect(ids(nogeo)).toContain(noCoords);
   });
 
@@ -213,7 +215,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
     const dLat = 6300 / 111320;
     const dLng = 6300 / (111320 * Math.cos((C_LAT * Math.PI) / 180));
     const corner = await seedActive(petSp, { lat: C_LAT + dLat, lng: C_LNG + dLng, titleEn: 'corner' });
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`).expect(200);
     expect(ids(res)).toContain(corner);
   });
 
@@ -222,7 +224,7 @@ describe('Listings Slice 2 — search (e2e)', () => {
     const acLat = 66.0;
     const acLng = 179.9; // search center just west of +180
     const wrapped = await seedActive(petSp, { lat: acLat, lng: -179.95, titleEn: 'wrapped' }); // ~6.8km across ±180
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${acLat}&lng=${acLng}&radius_km=10&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${acLat}&lng=${acLng}&radius_km=10&limit=100`).expect(200);
     expect(ids(res)).toContain(wrapped);
   });
 
@@ -237,37 +239,37 @@ describe('Listings Slice 2 — search (e2e)', () => {
       searchRadiusM: 1,
     });
     const res = await request(server())
-      .get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`)
+      .get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=10&limit=100`)
       .expect(200);
     expect(ids(res)).toContain(tinyOwnRadius);
   });
 
   // ── L2-13 deterministic order + sort ──────────────────────────────────────────────────────────
   it('L2-13: sort=distance:asc orders nearest-first', async () => {
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=100&sort=distance:asc&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=100&sort=distance:asc&limit=100`).expect(200);
     const dists = (res.body.items as { distanceM: number | null }[]).map((i) => i.distanceM ?? Infinity);
     for (let i = 1; i < dists.length; i++) expect(dists[i]).toBeGreaterThanOrEqual(dists[i - 1]);
   });
 
   it('sort=price:asc orders cheapest-first within the market', async () => {
-    const res = await request(server()).get(`/v1/listings?market=pet&sort=price:asc&limit=100`).expect(200);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&sort=price:asc&limit=100`).expect(200);
     const prices = (res.body.items as { priceCents: number | null }[]).map((i) => i.priceCents ?? Infinity);
     for (let i = 1; i < prices.length; i++) expect(prices[i]).toBeGreaterThanOrEqual(prices[i - 1]);
   });
 
   // ── validation: 400 / 422 ─────────────────────────────────────────────────────────────────────
   it('L2-3: a partial geo set → 422 GEO_PARAMS_INCOMPLETE', async () => {
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}`).expect(422);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}`).expect(422);
     expect(res.body.code).toBe('GEO_PARAMS_INCOMPLETE');
   });
 
   it('L2-4: radius out of range → 422 RADIUS_OUT_OF_RANGE', async () => {
-    const res = await request(server()).get(`/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=200`).expect(422);
+    const res = await request(server()).get(`/api/v1/listings?market=pet&lat=${C_LAT}&lng=${C_LNG}&radius_km=200`).expect(422);
     expect(res.body.code).toBe('RADIUS_OUT_OF_RANGE');
   });
 
   it('L2-11: unknown sort → 400; L2-12: sort=distance without coords → 400', async () => {
-    await request(server()).get(`/v1/listings?market=pet&sort=bogus:asc`).expect(400);
-    await request(server()).get(`/v1/listings?market=pet&sort=distance:asc`).expect(400);
+    await request(server()).get(`/api/v1/listings?market=pet&sort=bogus:asc`).expect(400);
+    await request(server()).get(`/api/v1/listings?market=pet&sort=distance:asc`).expect(400);
   });
 });

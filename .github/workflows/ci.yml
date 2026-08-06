@@ -315,3 +315,99 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
       # DAST (OWASP ZAP baseline) runs against staging on a schedule, not per-PR.
+
+  # --- Edge base-path smoke (AUDIT5 C1 / §F1a) — MANDATORY GATE ------------------------------------
+  # The ONE place the public edge is exercised the way a BROWSER hits it: a non-health route THROUGH
+  # Caddy on the documented base `/api/v1`. Every other test (the e2e suite via supertest) bypasses the
+  # edge and is therefore blind to a base-path drift — that blindness is exactly what let `/api/v1`
+  # (contract + Caddy) diverge from `/v1` (backend, no setGlobalPrefix) unnoticed until the frontend
+  # audit. This job brings up the REAL compose topology (Caddy + api + deps) and asserts:
+  #   (1) GET /api/v1/listings THROUGH Caddy is NOT 404  → the global `api` prefix reaches a real route
+  #       (200/401/422 all pass; only 404 means the edge missed — the C1 failure mode).
+  #   (2) GET /health/live THROUGH Caddy is 200 AND /api/health/live is 404 → health stayed version-
+  #       neutral at the ROOT and did NOT move under /api (the API_PREFIX_EXCLUDE opt-out holds end-to-
+  #       end — the container HEALTHCHECK and Caddy `handle /health/*` keep working).
+  # Mutation proof: dropping setGlobalPrefix (or reverting Caddy `handle` to strip the prefix) turns
+  # assertion (1) into 404. PUBLIC_DOMAIN=localhost → Caddy serves HTTPS with its internal CA, so
+  # `curl -k https://localhost/...` reaches the edge without a public domain / Let's Encrypt.
+  edge-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose env (test-only secrets — NOT real values; localhost = Caddy internal TLS)
+        run: |
+          cat > .env <<'EOF'
+          NODE_ENV=production
+          PORT=3000
+          PUBLIC_DOMAIN=localhost
+          ENABLE_DEV_TOKEN=false
+          CORS_ORIGINS=
+          POSTGRES_USER=zoolink
+          POSTGRES_PASSWORD=ci_pg_pw
+          POSTGRES_DB=zoolink
+          DATABASE_URL=postgresql://zoolink:ci_pg_pw@postgres:5432/zoolink?schema=public
+          REDIS_PASSWORD=ci_redis_pw
+          REDIS_URL=redis://:ci_redis_pw@redis:6379
+          S3_ENDPOINT=http://minio:9000
+          S3_ACCESS_KEY=ciminioaccess
+          S3_SECRET_KEY=ciminiosecret
+          S3_BUCKET=zoolink-media
+          S3_REGION=ru-central1
+          MEDIA_CDN_HOST=
+          RESIDENCY_ALLOW_NON_RF_DEV=false
+          JWT_ACCESS_SECRET=ci_access_secret_0000000000000000000000000000
+          JWT_REFRESH_SECRET=ci_refresh_secret_000000000000000000000000000
+          JWT_ACCESS_TTL=15m
+          JWT_REFRESH_TTL=7d
+          PHONE_HASH_PEPPER=ci_phone_hash_pepper_00000000000000000000
+          PII_DATA_KEY=ci_pii_data_key_00000000000000000000000000
+          PII_BLIND_INDEX_KEY=ci_pii_blind_index_key_000000000000000000
+          AGENT_SERVICE_SIGNING_SECRET=ci_agent_signing_secret_0000000000000000
+          METRICS_TOKEN=ci_metrics_token_000000
+          SMS_PROVIDER=smsru
+          SMSRU_API_ID=ci
+          EMAIL_PROVIDER=unisender
+          UNISENDER_API_KEY=ci
+          EMAIL_FROM=noreply@localhost
+          EMAIL_FROM_NAME=ZooLink
+          YANDEX_MAPS_API_KEY=ci
+          LOG_LEVEL=info
+          EOF
+      - name: Bring up the real edge topology (Caddy + api + deps)
+        run: docker compose up -d --build
+      - name: Wait for the API to become ready THROUGH Caddy (/health/ready)
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/health/ready || true)
+            echo "attempt $i: /health/ready -> $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 5
+          done
+          echo "::error::API did not become ready through Caddy in time"; exit 1
+      - name: SMOKE 1 — GET /api/v1/listings through Caddy must NOT be 404 (edge reaches a real route)
+        run: |
+          code=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/api/v1/listings)
+          echo "GET /api/v1/listings -> $code"
+          if [ "$code" = "404" ] || [ "$code" = "000" ] || [ -z "$code" ]; then
+            echo "::error::Edge missed: /api/v1/listings returned '$code' (expected non-404: 200/401/422). The global 'api' prefix is not reaching the backend — C1 regression."
+            exit 1
+          fi
+      - name: SMOKE 2 — health stayed at ROOT (/health/live=200, /api/health/live=404)
+        run: |
+          root=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/health/live)
+          prefixed=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/api/health/live)
+          echo "GET /health/live -> $root ; GET /api/health/live -> $prefixed"
+          if [ "$root" != "200" ]; then
+            echo "::error::/health/live is not 200 at the root ($root) — the health opt-out from the api prefix is broken (HEALTHCHECK/Caddy passthrough would fail)."
+            exit 1
+          fi
+          if [ "$prefixed" != "404" ]; then
+            echo "::error::/api/health/live returned $prefixed (expected 404) — health was wrongly moved under the api prefix."
+            exit 1
+          fi
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

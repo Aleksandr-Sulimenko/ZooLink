@@ -21,6 +21,7 @@ import { ProblemExceptionFilter } from '../src/lib/http/problem.filter';
 import { PrismaService } from '../src/lib/db/prisma.service';
 import { RedisService } from '../src/lib/redis/redis.service';
 import { resetThrottle } from './throttle-reset.util';
+import { applyGlobalApiPrefix } from '../src/config/api-base';
 
 describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   let app: INestApplication;
@@ -42,7 +43,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
 
   const server = (): Server => app.getHttpServer() as Server;
   const devToken = async (uid: string): Promise<string> =>
-    (await request(server()).post('/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
+    (await request(server()).post('/api/v1/auth/dev-token').send({ userId: uid }).expect(201)).body.accessToken as string;
 
   const newAnimal = async (owner: string): Promise<string> => {
     const a = await prisma.animals.create({
@@ -64,9 +65,9 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   };
 
   const initiate = (tok: string, animalId: string, body: Record<string, unknown>, key = randomUUID()) =>
-    request(server()).post(`/v1/animals/${animalId}/transfers`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
+    request(server()).post(`/api/v1/animals/${animalId}/transfers`).set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', key).send(body);
   const mintCode = (tok: string, body: Record<string, unknown> = {}) =>
-    request(server()).post('/v1/transfers/claim-codes').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send(body);
+    request(server()).post('/api/v1/transfers/claim-codes').set('Authorization', `Bearer ${tok}`).set('Idempotency-Key', randomUUID()).send(body);
   // Clear the C5 per-principal Redis rate-limit counters so the many shared-owner initiates across
   // this suite cannot accumulate into a spurious 429 (the limits are a security control, unit-tested;
   // e2e asserts business flows — the dedicated rate-limit test loops within a single test body).
@@ -81,7 +82,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     return id;
   };
   const getEtag = async (tok: string, transferId: string): Promise<string> => {
-    const r = await request(server()).get(`/v1/transfers/${transferId}`).set('Authorization', `Bearer ${tok}`).expect(200);
+    const r = await request(server()).get(`/api/v1/transfers/${transferId}`).set('Authorization', `Bearer ${tok}`).expect(200);
     return r.headers['etag'];
   };
 
@@ -90,6 +91,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     app.useGlobalFilters(new ProblemExceptionFilter());
+    applyGlobalApiPrefix(app);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     await app.init();
     await resetThrottle(app);
@@ -143,7 +145,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   });
 
   it('requires auth (401)', async () => {
-    await request(server()).get('/v1/transfers?role=incoming').expect(401);
+    await request(server()).get('/api/v1/transfers?role=incoming').expect(401);
   });
 
   it('initiates a PENDING transfer (201, ETag, Location, initiatedBy snapshot)', async () => {
@@ -192,7 +194,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     const etag = await getEtag(recipTok, xfer);
 
     const res = await request(server())
-      .post(`/v1/transfers/${xfer}/accept`)
+      .post(`/api/v1/transfers/${xfer}/accept`)
       .set('Authorization', `Bearer ${recipTok}`)
       .set('Idempotency-Key', randomUUID())
       .set('If-Match', etag)
@@ -223,7 +225,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     // an idempotent replay — this genuinely races the inner guarded claim, not the idempotency cache).
     const fire = () =>
       request(server())
-        .post(`/v1/transfers/${xfer}/accept`)
+        .post(`/api/v1/transfers/${xfer}/accept`)
         .set('Authorization', `Bearer ${recipTok}`)
         .set('Idempotency-Key', randomUUID())
         .set('If-Match', etag)
@@ -250,7 +252,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
     const audit = await prisma.audit_log.findMany({ where: { entity_id: xfer, action: 'animal.transfer_accepted' } });
     expect(audit).toHaveLength(1);
     expect(audit[0].actor_id).toBe(recipId);
@@ -262,16 +264,16 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, xfer);
     // 403 is checked before If-Match, so no If-Match needed here.
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${strangerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(403);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).expect(428);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', 'W/"stale"').expect(412);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${strangerTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(403);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).expect(428);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', 'W/"stale"').expect(412);
   });
 
   it('decline (T3) by the recipient → CANCELLED(declined); animal unchanged', async () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, xfer);
-    const res = await request(server()).post(`/v1/transfers/${xfer}/decline`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(200);
+    const res = await request(server()).post(`/api/v1/transfers/${xfer}/decline`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(200);
     expect(res.body.status).toBe('CANCELLED');
     expect(res.body.terminalReason).toBe('declined');
     const animal = await prisma.animals.findUnique({ where: { id: animalId } });
@@ -282,8 +284,8 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(ownerTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(403);
-    const res = await request(server()).post(`/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${recipTok}`).set('If-Match', etag).expect(403);
+    const res = await request(server()).post(`/api/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
     expect(res.body.terminalReason).toBe('cancelled_by_initiator');
   });
 
@@ -291,9 +293,9 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     let etag = await getEtag(ownerTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${xfer}/cancel`).set('Authorization', `Bearer ${ownerTok}`).set('If-Match', etag).expect(200);
     etag = await getEtag(ownerTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
     // The partial-unique PENDING slot is free → a fresh transfer may be initiated.
     track(await initiate(ownerTok, animalId, { toUserId: strangerId }).expect(201));
   });
@@ -304,7 +306,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
     // Force expiry by back-dating expires_at directly.
     await prisma.ownership_transfers.update({ where: { id: xfer }, data: { expires_at: new Date(Date.now() - 1000) } });
     const etag = await getEtag(recipTok, xfer); // GET surfaces it as CANCELLED(expired) lazily
-    const res = await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
+    const res = await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(409);
     expect(res.body.code).toBe('TRANSFER_EXPIRED');
     const after = await prisma.ownership_transfers.findUnique({ where: { id: xfer } });
     expect(after?.status).toBe('CANCELLED');
@@ -312,14 +314,14 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   });
 
   it('lists my transfers (role=incoming / initiated) with the PageMeta envelope; role required', async () => {
-    await request(server()).get('/v1/transfers').set('Authorization', `Bearer ${recipTok}`).expect(400);
-    const incoming = await request(server()).get('/v1/transfers?role=incoming&limit=100').set('Authorization', `Bearer ${recipTok}`).expect(200);
+    await request(server()).get('/api/v1/transfers').set('Authorization', `Bearer ${recipTok}`).expect(400);
+    const incoming = await request(server()).get('/api/v1/transfers?role=incoming&limit=100').set('Authorization', `Bearer ${recipTok}`).expect(200);
     expect(Array.isArray(incoming.body.items)).toBe(true);
     expect(incoming.body.meta).toEqual(expect.objectContaining({ page: 1, limit: 100, total: expect.any(Number) }));
     for (const t of incoming.body.items as { toUserId: string | null }[]) {
       expect(t.toUserId).toBe(recipId);
     }
-    const initiated = await request(server()).get('/v1/transfers?role=initiated&limit=100').set('Authorization', `Bearer ${ownerTok}`).expect(200);
+    const initiated = await request(server()).get('/api/v1/transfers?role=initiated&limit=100').set('Authorization', `Bearer ${ownerTok}`).expect(200);
     for (const t of initiated.body.items as { fromUserId: string | null }[]) {
       expect(t.fromUserId).toBe(ownerId);
     }
@@ -328,17 +330,17 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   it('GET /transfers/{id}: a non-party USER → 403; ADMIN may read', async () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
-    await request(server()).get(`/v1/transfers/${xfer}`).set('Authorization', `Bearer ${strangerTok}`).expect(403);
-    await request(server()).get(`/v1/transfers/${xfer}`).set('Authorization', `Bearer ${adminTok}`).expect(200);
+    await request(server()).get(`/api/v1/transfers/${xfer}`).set('Authorization', `Bearer ${strangerTok}`).expect(403);
+    await request(server()).get(`/api/v1/transfers/${xfer}`).set('Authorization', `Bearer ${adminTok}`).expect(200);
   });
 
   it('GET /animals/{id}/ownership-history returns the settled trail (PageMeta, org-capable shape)', async () => {
     const animalId = await newAnimal(ownerId);
     const xfer = track(await initiate(ownerTok, animalId, { toUserId: recipId }).expect(201));
     const etag = await getEtag(recipTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
 
-    const res = await request(server()).get(`/v1/animals/${animalId}/ownership-history?limit=100`).set('Authorization', `Bearer ${recipTok}`).expect(200);
+    const res = await request(server()).get(`/api/v1/animals/${animalId}/ownership-history?limit=100`).set('Authorization', `Bearer ${recipTok}`).expect(200);
     expect(res.body.meta).toEqual(expect.objectContaining({ page: 1, limit: 100 }));
     const items = res.body.items as { ownerId: string | null; organizationId: string | null; endDate: string | null }[];
     expect(items.length).toBeGreaterThanOrEqual(2);
@@ -346,7 +348,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
   });
 
   it('list: an invalid ?status=FOO → 400 (not a silent empty list)', async () => {
-    await request(server()).get('/v1/transfers?role=incoming&status=FOO').set('Authorization', `Bearer ${recipTok}`).expect(400);
+    await request(server()).get('/api/v1/transfers?role=incoming&status=FOO').set('Authorization', `Bearer ${recipTok}`).expect(400);
   });
 
   it('INV-6: a direct UPDATE animals SET owner_id WITHOUT the GUC is blocked by the trigger; INV-7: species under the GUC still blocked', async () => {
@@ -384,11 +386,11 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
 
     // A non-org-admin recipient cannot accept (org branch of INV-8).
     const etag = await getEtag(strangerTok, xfer);
-    await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(403);
+    await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(403);
 
     // The org-admin (stranger) accepts.
     const accepted = await request(server())
-      .post(`/v1/transfers/${xfer}/accept`)
+      .post(`/api/v1/transfers/${xfer}/accept`)
       .set('Authorization', `Bearer ${strangerTok}`)
       .set('Idempotency-Key', randomUUID())
       .set('If-Match', etag)
@@ -429,7 +431,7 @@ describe('Animal Slice 2 — ownership transfer (e2e)', () => {
       expect(res.body.toUserId).toBe(recipId); // resolved server-side; initiator supplied no PII (INV-C5-7)
       const xfer = track(res);
       const etag = await getEtag(recipTok, xfer);
-      const acc = await request(server()).post(`/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
+      const acc = await request(server()).post(`/api/v1/transfers/${xfer}/accept`).set('Authorization', `Bearer ${recipTok}`).set('Idempotency-Key', randomUUID()).set('If-Match', etag).expect(200);
       expect(acc.body.status).toBe('COMPLETED');
     });
 
