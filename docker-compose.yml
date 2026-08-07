@@ -1,7 +1,7 @@
 # ZooLink MVP — local/production-ish Docker Compose topology (ADR-0009).
 # MVP = modular monolith; NO Kubernetes. Only the reverse proxy is public; db/redis/minio
 # live on an internal network and are NEVER published to the host/internet.
-# Bring up:  cp .env.example .env  &&  docker compose up -d --build
+# Bring up:  deploy/gen-env.sh --domain <your-domain>  &&  docker compose up -d --build   (env: see docs/06-operations/deployment-mvp.md)
 # The one-shot `provision` service auto-applies the canonical schema + seed before api/worker start
 # (no manual migration step). A fresh `down -v && up` reprovisions; a plain `up` is a no-op (idempotent).
 

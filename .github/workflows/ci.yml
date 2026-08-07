@@ -327,52 +327,65 @@ jobs:
   #   (2) GET /health/live THROUGH Caddy is 200 AND /api/health/live is 404 → health stayed version-
   #       neutral at the ROOT and did NOT move under /api (the API_PREFIX_EXCLUDE opt-out holds end-to-
   #       end — the container HEALTHCHECK and Caddy `handle /health/*` keep working).
+  #   (3) NEGATIVE CONTROL: the env this job runs on is produced by the SAME canonical provisioner the
+  #       runbook documents (`deploy/gen-env.sh`), and the *rejected* path (`cp .env.example .env`) is
+  #       proven to fail the production boot. See the two env steps below.
   # Mutation proof: dropping setGlobalPrefix (or reverting Caddy `handle` to strip the prefix) turns
   # assertion (1) into 404. PUBLIC_DOMAIN=localhost → Caddy serves HTTPS with its internal CA, so
   # `curl -k https://localhost/...` reaches the edge without a public domain / Let's Encrypt.
+  #
+  # WHY the env is GENERATED, not written here (У-1/У-6): this job used to hand-write the whole `.env`
+  # in a heredoc — including `METRICS_TOKEN=ci_...`. That hand-written line silently repaired a real
+  # PROVISIONING HOLE: the documented path `cp .env.example .env` leaves METRICS_TOKEN empty, so a
+  # NODE_ENV=production boot dies in env.validation.ts. CI was green while the runbook was broken.
+  # Now CI runs the operator's own path, so the runbook is under test and no secret literal lives in
+  # this file.
   edge-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compose env (test-only secrets — NOT real values; localhost = Caddy internal TLS)
+
+      # --- NEGATIVE CONTROL (runs FIRST, in its own compose project, and removes its own .env) ------
+      # Proves the hole is real and stays closed: the OLD documented path must fail the production
+      # boot, and must fail for EXACTLY the METRICS_TOKEN reason. A failure for any other reason
+      # (image broken, another missing key) is red — otherwise this step would "pass" on noise.
+      # Isolation: `-p zoolink-negctl` (separate compose project + network) and `rm -f .env` before the
+      # real run generates its own. Nothing here is a real secret — `.env.example` is committed
+      # placeholder material — and the log is grep-filtered to validation lines, never dumped whole.
+      - name: NEGATIVE CONTROL — `cp .env.example .env` must FAIL the prod boot on METRICS_TOKEN
         run: |
-          cat > .env <<'EOF'
-          NODE_ENV=production
-          PORT=3000
-          PUBLIC_DOMAIN=localhost
-          ENABLE_DEV_TOKEN=false
-          CORS_ORIGINS=
-          POSTGRES_USER=zoolink
-          POSTGRES_PASSWORD=ci_pg_pw
-          POSTGRES_DB=zoolink
-          DATABASE_URL=postgresql://zoolink:ci_pg_pw@postgres:5432/zoolink?schema=public
-          REDIS_PASSWORD=ci_redis_pw
-          REDIS_URL=redis://:ci_redis_pw@redis:6379
-          S3_ENDPOINT=http://minio:9000
-          S3_ACCESS_KEY=ciminioaccess
-          S3_SECRET_KEY=ciminiosecret
-          S3_BUCKET=zoolink-media
-          S3_REGION=ru-central1
-          MEDIA_CDN_HOST=
-          RESIDENCY_ALLOW_NON_RF_DEV=false
-          JWT_ACCESS_SECRET=ci_access_secret_0000000000000000000000000000
-          JWT_REFRESH_SECRET=ci_refresh_secret_000000000000000000000000000
-          JWT_ACCESS_TTL=15m
-          JWT_REFRESH_TTL=7d
-          PHONE_HASH_PEPPER=ci_phone_hash_pepper_00000000000000000000
-          PII_DATA_KEY=ci_pii_data_key_00000000000000000000000000
-          PII_BLIND_INDEX_KEY=ci_pii_blind_index_key_000000000000000000
-          AGENT_SERVICE_SIGNING_SECRET=ci_agent_signing_secret_0000000000000000
-          METRICS_TOKEN=ci_metrics_token_000000
-          SMS_PROVIDER=smsru
-          SMSRU_API_ID=ci
-          EMAIL_PROVIDER=unisender
-          UNISENDER_API_KEY=ci
-          EMAIL_FROM=noreply@localhost
-          EMAIL_FROM_NAME=ZooLink
-          YANDEX_MAPS_API_KEY=ci
-          LOG_LEVEL=info
-          EOF
+          cp .env.example .env
+          docker compose -p zoolink-negctl build api
+          set +e
+          docker compose -p zoolink-negctl run --rm --no-deps api > negctl.log 2>&1
+          rc=$?
+          set -e
+          rm -f .env
+          echo "production boot on a raw .env.example copy exited: $rc"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::The provisioning hole is NOT reproducible: a raw 'cp .env.example .env' booted successfully in production. Either .env.example now carries a METRICS_TOKEN (it must stay an empty FORM) or the env.validation.ts prod gate was removed."
+            grep -E 'Invalid environment configuration|^  - [A-Z_]+:|Error' negctl.log | head -20 || true
+            exit 1
+          fi
+          if ! grep -q 'METRICS_TOKEN: required in production' negctl.log; then
+            echo "::error::The prod boot failed, but NOT on the expected METRICS_TOKEN env-validation error — this step only certifies that ONE failure mode, so any other cause is a red."
+            grep -E 'Invalid environment configuration|^  - [A-Z_]+:|Error' negctl.log | head -20 || true
+            exit 1
+          fi
+          echo "OK: the raw .env.example path is rejected at boot on METRICS_TOKEN, as documented."
+      - name: NEGATIVE CONTROL — tear down its isolated project
+        if: always()
+        run: docker compose -p zoolink-negctl down -v --remove-orphans || true
+
+      # --- The env the REAL run uses: the canonical provisioner, same command the runbook gives ------
+      # Only NON-secret overrides are passed as arguments (У-6: no secret literal in this file). Every
+      # secret is minted inside the script with `openssl rand -hex`; the script prints key NAMES only.
+      - name: Compose env — generate .env with the canonical provisioner (deploy/gen-env.sh)
+        run: |
+          test ! -e .env  # the negative control must have removed its copy
+          bash deploy/gen-env.sh --domain localhost --node-env production
+          stat -c 'mode=%a %n' .env          # 0600 expected — no values printed
+          bash deploy/gen-env.sh             # read-only check: must report the file complete, exit 0
       - name: Bring up the real edge topology (Caddy + api + deps)
         run: docker compose up -d --build
       - name: Wait for the API to become ready THROUGH Caddy (/health/ready)

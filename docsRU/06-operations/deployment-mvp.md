@@ -21,15 +21,30 @@ Migrate намеренно не используется). На свежем с�
 (справочники: species, breeds, cities, supported_languages, feature_toggles, причины/шаблоны модерации). `api`/`worker`
 ждут успешного завершения `provision`, поэтому стек поднимается полностью провизионированным **без ручных шагов**.
 
-1. **Клонировать и сконфигурировать**
+1. **Клонировать и сконфигурировать** — `deploy/gen-env.sh` — **единственный** документированный путь провижининга
+   env. Он чеканит все секреты через `openssl rand -hex` (длины ≥ требований валидатора), пишет `.env` с правами
+   `600` и печатает только **имена** ключей — никогда значения.
    ```bash
    git clone <repo> && cd zoolink
-   cp .env.example .env
-   # отредактировать .env: задать сильные POSTGRES_PASSWORD/REDIS_PASSWORD, JWT-секреты (≥32 символов), ключи
-   # провайдеров, PUBLIC_DOMAIN. Env валидируется zod при старте (fail-fast) — держать .env в соответствии с
-   # backend/src/config/env.validation.ts.
-   chmod 600 .env
+   deploy/gen-env.sh --domain zoolink.example.ru      # создаёт .env — только если .env ОТСУТСТВУЕТ
+   # Затем заполнить креды провайдеров, которые генератор намеренно оставляет ПУСТЫМИ (пусто = stub-режим):
+   #   SMSRU_API_ID · UNISENDER_API_KEY/UNISENDER_LIST_ID · EMAIL_FROM · YANDEX_MAPS_API_KEY · OAUTH_* · YOOKASSA_*
    ```
+   На **существующем** `.env` он не трогает файл вообще: печатает имена недостающих prod-обязательных ключей и
+   выходит с ненулевым кодом (код `0` и ноль изменений, если файл полон) — поэтому его безопасно вызывать как
+   предполётную проверку. Дополнить существующий файл:
+   ```bash
+   deploy/gen-env.sh --fill-missing   # чеканит/заполняет ТОЛЬКО отсутствующие-или-пустые ключи; существующие значения не переминчиваются
+   ```
+
+   > **`.env.example` — это ФОРМА, а не путь провижининга.** Это комментированная *опись* всех ключей — что есть,
+   > что значит, какой формы. Дословное копирование даёт **пустой `METRICS_TOKEN`** и секреты `__change_me__`,
+   > поэтому старт с `NODE_ENV=production` **падает** в `backend/src/config/env.validation.ts`
+   > (`METRICS_TOKEN: required in production`). `cp .env.example .env` делать **не надо**. Обе половины
+   > проверяются: CI-job `edge-smoke` провизионирует env через `deploy/gen-env.sh` и держит **негатив-контроль**,
+   > утверждающий, что путь `cp` отвергается при старте; unit-тест `backend/src/config/gen-env.spec.ts` исполняет
+   > настоящий генератор против настоящего `validateEnv` и выводит набор обязательных ключей из zod-схемы —
+   > так эти два не могут разойтись.
 2. **Поднять весь стек** — Compose упорядочивает: `postgres` healthy → `provision` (схема + seed) выходит с 0 →
    старт `api`/`worker` → `proxy` последним.
    ```bash
@@ -79,8 +94,12 @@ docker compose run --rm provision              # опц.: перезапуска
 - **MinIO/объекты:** включить версионирование; зеркалить бакет в Yandex Object Storage. Redis — только кэш (не бэкапится).
 
 ## Секреты
-`.env` — единственное хранилище секретов в MVP — вне git (`.gitignore`), права `600`. Ротация: правка `.env` и
-`docker compose up -d`. Vault/secret-manager — Фаза 2+.
+`.env` — единственное хранилище секретов в MVP — генерируется `deploy/gen-env.sh`, вне git (`.gitignore`), права
+`600`. Ротация: удалить строку ключа (или обнулить значение) и выполнить `deploy/gen-env.sh --fill-missing`, затем
+`docker compose up -d`. Помнить о связанных ротациях: `POSTGRES_PASSWORD`/`REDIS_PASSWORD` должны идти в паре с
+`DATABASE_URL`/`REDIS_URL` (генератор выводит эти два из найденных кредов, поэтому строку URL ротировать вместе со
+строкой пароля), `PII_DATA_KEY` требует миграции перешифрования, а `PII_BLIND_INDEX_KEY` — бэкфилла `email_bidx`.
+Vault/secret-manager — Фаза 2+.
 
 ## Наблюдаемость (MVP)
 Prometheus + Grafana для метрик, Sentry (self-hosted) для ошибок, структурированные JSON-логи с маскированием ПДн
@@ -91,6 +110,8 @@ Prometheus + Grafana для метрик, Sentry (self-hosted) для ошибо
 RPO ≤ 24 ч (ежедневный дамп; ужесточить WAL-архивированием при необходимости). Cross-region/standby — Target (Фаза 2+).
 
 ## Связанное
-- `docker-compose.yml`, `backend/Dockerfile`, `.env.example`, `deploy/Caddyfile` в корне
+- `docker-compose.yml`, `backend/Dockerfile`, `deploy/Caddyfile` в корне
+- `deploy/gen-env.sh` — **провижинер** env (документированный путь) · `.env.example` — **ФОРМА** env (опись ключей,
+  только справка) · `backend/src/config/env.validation.ts` — контракт env, проверяемый при старте
 - [BACKEND_MVP_BASELINE.md](../../BACKEND_MVP_BASELINE.md) · [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
 - 🌐 EN: [docs/06-operations/deployment-mvp.md](../../docs/06-operations/deployment-mvp.md)
