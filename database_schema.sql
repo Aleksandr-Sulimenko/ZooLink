@@ -1787,3 +1787,18 @@ INSERT INTO notification_templates (name, type, subject_template, body_template,
  ('transfer_expired', 'EMAIL', 'Срок передачи владения истёк', 'Срок передачи владения (заявка {{transfer_id}}) истёк без ответа.', 'ru', TRUE),
  ('transfer_expired', 'EMAIL', 'Ownership transfer expired', 'The ownership transfer (request {{transfer_id}}) expired without a response.', 'en', TRUE)
 ON CONFLICT (name, type, language) DO NOTHING;
+
+-- Saved-search match template (migration 0037). MIRRORED HERE per the 0030 convention above, because
+-- THIS FILE is the source of truth for seed data and must be self-sufficient on its own: the canon +
+-- `npm run seed` (seed.ts replays only 0011/0010/0022) is a supported bootstrap on its own — it is what
+-- CI's build-test, migration-drift Path-1 and schema-invariants jobs all build from, and what the
+-- runbook documents. Without this mirror the H4 saved-search notification loop was dead on every such
+-- install (notification-writer found no template → warn + return false), while a replay-built dev DB
+-- looked healthy: AUDIT5 §F1d / Ф-1. The `seed-parity` CI gate (scripts/check-seed-parity.sh) now makes
+-- that class of divergence a RED build.
+INSERT INTO notification_templates (name, type, subject_template, body_template, language, is_active) VALUES
+ ('saved_search_matched', 'EMAIL', 'Новое объявление по вашему сохранённому поиску',
+    'По вашему сохранённому поиску появилось новое объявление: {{listing_title}}. Откройте его в приложении (id {{listing_id}}).', 'ru', TRUE),
+ ('saved_search_matched', 'EMAIL', 'A new listing matches your saved search',
+    'A new listing matches your saved search: {{listing_title}}. Open it in the app (id {{listing_id}}).', 'en', TRUE)
+ON CONFLICT (name, type, language) DO NOTHING;

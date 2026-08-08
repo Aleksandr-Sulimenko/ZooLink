@@ -95,6 +95,7 @@ jobs:
   # The two supported bootstrap paths must agree:
   #   (1) a fresh DB built from the canonical database_schema.sql, and
   #   (2) the same canonical schema with every migrations/*.sql replayed on top.
+  # WHY: provision.ts / the compose `provision` service REPLAY every migration on every `up` (that is
   # how an ageing volume is kept converged — see the `provision-heals-stale-db` job), so a broken or
   # non-idempotent migration now breaks the DEPLOY ITSELF, and schema↔migration drift would surface only
   # in production. This job is what keeps that replay safe: it is the HARD proof, on every commit, that
@@ -280,6 +281,99 @@ jobs:
       - uses: actions/checkout@v4
       - name: App-trusts-X-Real-IP ⟺ edge-rewrites-X-Real-IP (AUDIT5 §F1b)
         run: bash scripts/check-edge-client-ip.sh
+
+  # Seed↔canon PARITY gate (AUDIT5 §F1d / Ф-1, verdict Q5=A). BLOCKING.
+  # The sibling `migration-drift` job diffs `pg_dump --schema-only --no-comments`, so seed INSERTs are
+  # OUTSIDE its field of view entirely — Р-9 applied to DATA instead of DDL. That blindness let the
+  # `saved_search_matched` notification template live ONLY in migration 0037 and never reach the canon:
+  # a canon-built install (canon + seed; seed.ts replays only 0011/0010/0022) got 22 of 24 templates, so
+  # the H4 saved-search notification loop was silently DEAD there while every replay-built dev DB looked
+  # healthy. This job compares the actual REFERENCE DATA of the two bootstrap paths — Path-1 (canon +
+  # seed, which build-test / migration-drift Path-1 / schema-invariants all build from, and which the
+  # runbook documents) vs Path-2 (canon + all migrations + seed) — row by row. The canon must stand
+  # alone even though provision.ts now also replays the migrations: it is the artefact every other
+  # consumer reads, so a seed row living only in a migration is invisible to all of them.
+  # Both lists it needs are DERIVED, never hand-maintained: the seed-file list is extracted from
+  # seed.ts's SEED_FILES, the seeded-table list from the `INSERT INTO` statements in canon + migrations
+  # (so a new reference table is covered the moment it is seeded — no registry to forget).
+  # SELF-TESTED in the same job: the second step re-runs the gate against a canon copy with one seed
+  # row deleted and requires it to go RED, so "green gate" can never silently mean "gate cannot fail".
+  seed-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PGUSER: zoolink
+      PGPASSWORD: ci
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGADMIN_DB: postgres
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: zoolink
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed↔canon parity — Path-1 (canon+seed) vs Path-2 (canon+migrations+seed)
+        run: bash scripts/check-seed-parity.sh
+      - name: MUTATION PROOF — the same gate must RED on a canon missing one seed row
+        run: SEED_PARITY_SELFTEST=1 bash scripts/check-seed-parity.sh
+
+  # Ageing-volume convergence gate. BLOCKING.
+  # Found live 2026-08-07: `provision.ts` applied the canon ONLY to an empty DB and replayed NO
+  # migrations, so a five-week-old compose volume froze at its original shape while the code moved on —
+  # `POST /api/v1/auth/register/phone` returned 500 `users.email_bidx does not exist` (migration 0028)
+  # while `/health/live`, `/health/ready` and `GET /listings` were all GREEN, because none of them touch
+  # the new columns. Schema drift invisible to every health signal is exactly what no other job here can
+  # see: every OTHER CI database is created FRESH, which is the one state that cannot reproduce it.
+  # This job builds a NON-EMPTY LAGGING database and asserts three things — the current provisioner
+  # HEALS it (column + index back, register-shaped INSERT succeeds, and a 2nd run is still green), the
+  # PRE-FIX behaviour fails on EXACTLY SQLSTATE 42703/email_bidx (negative control, so a green positive
+  # axis means something), and an empty migrations dir (a dropped `./migrations:/migrations:ro` bind
+  # mount) ABORTS provisioning loudly instead of silently reverting to the broken behaviour.
+  provision-heals-stale-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PGUSER: zoolink
+      PGPASSWORD: ci
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGADMIN_DB: postgres
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: zoolink
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zoolink" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      # fetch-depth: 0 is REQUIRED, not hygiene — the gate's NEGATIVE-1 axis runs the REAL pre-fix
+      # provisioner via `git show <pinned-sha>:backend/src/provision.ts`, and the default shallow
+      # (depth-1) checkout cannot reach that revision. The script fails loudly rather than skipping if
+      # it is unreachable, so a regression here is a red build, not a silently dropped axis.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      # provision.ts / seed.ts need only ts-node + pg (no Prisma client), so `npm ci` is sufficient.
+      - name: Install (provisioner needs ts-node + pg)
+        run: cd backend && npm ci
+      - name: Provision converges a NON-EMPTY, LAGGING database (+ negative controls, + ×2)
+        run: bash scripts/check-provision-heals-stale-db.sh
+
   security:
     runs-on: ubuntu-latest
     steps:

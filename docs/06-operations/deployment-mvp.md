@@ -17,10 +17,20 @@ Only `proxy` is published (80/443). `postgres`/`redis`/`minio` are on the intern
 
 ## First deploy — step by step
 The schema is **never** applied with `prisma migrate deploy` (ADR-0007: SQL-canonical + Prisma introspect — Prisma
-Migrate is intentionally unused). On a fresh stack the one-shot **`provision`** service does it for you: it applies
-the canonical `database_schema.sql` (guarded — only on an empty DB) then runs the **idempotent** seed (reference
-data: species, breeds, cities, supported_languages, feature_toggles, moderation reasons/templates). `api`/`worker`
-gate on `provision` completing successfully, so the stack comes up fully provisioned with **no manual step**.
+Migrate is intentionally unused). On every `up` the one-shot **`provision`** service does it for you, in three steps:
+1. applies the canonical `database_schema.sql` — **guarded, only on an empty DB** (that file is a fresh-bootstrap
+   file and is not idempotent);
+2. **replays every `migrations/*.sql` in order** — they are idempotent by construction, so this is a no-op on a DB
+   that is already current and a **convergence step on one that has fallen behind**;
+3. runs the **idempotent** seed (reference data: species, breeds, cities, supported_languages, feature_toggles,
+   moderation reasons/templates, notification templates).
+
+`api`/`worker` gate on `provision` completing successfully, so the stack comes up fully provisioned with **no manual
+step** — and an **ageing volume cannot silently drift** away from the code. Step 2 exists because it did: a
+five-week-old volume served `500 users.email_bidx does not exist` on registration while `/health/live`,
+`/health/ready` and `GET /listings` all stayed green, because none of them touch the new columns. Both directions are
+gated in CI (`provision-heals-stale-db`). If the `./migrations:/migrations:ro` bind mount is missing, `provision`
+**fails loudly** rather than reporting success without converging.
 
 1. **Clone & configure** — `deploy/gen-env.sh` is the **one** documented env path. It mints every secret with
    `openssl rand -hex` (lengths ≥ what the validator demands), writes `.env` mode `600`, and prints key
@@ -54,32 +64,32 @@ gate on `provision` completing successfully, so the stack comes up fully provisi
 3. **Verify** (`provision` should have exited 0; everything else healthy)
    ```bash
    docker compose ps                               # provision = Exited (0); proxy/api/worker/postgres/redis/minio healthy
-   docker compose logs provision                   # "✓ canonical schema applied" + "✓ provisioning complete"
+   docker compose logs provision                   # "✓ canonical schema applied" + "✓ migrations replayed (…)" + "✓ provisioning complete"
    curl -fsS https://$PUBLIC_DOMAIN/health/ready   # expect 200 (PG + Redis reachable, through the edge)
    ```
 
-> A fresh `down -v && up` reprovisions from scratch; a plain `up` on an existing volume is a no-op (schema apply is
-> skipped because the DB is non-empty; the seed re-runs but is idempotent). No `prisma migrate deploy`, no manual psql.
+> A fresh `down -v && up` reprovisions from scratch; a plain `up` on an existing volume **re-converges** it — the
+> canon apply is skipped (the DB is non-empty), the idempotent migrations replay, the seed re-runs as an upsert. It is
+> a no-op when the volume is already current and a repair when it is not. No `prisma migrate deploy`, no manual psql.
 
 ## Health endpoints (must be implemented by the API)
 - `GET /health/live` — process up.
 - `GET /health/ready` — DB + Redis reachable (used by Compose healthchecks and the uptime monitor).
 
 ## Schema changes on update (roll-forward, SQL-canonical)
-The `provision` service applies the **full** `database_schema.sql` only on an *empty* DB, so on a populated volume a
-new schema change is applied by **replaying the new idempotent migration(s)** (ADR-0007 — roll-forward only, never
-`prisma migrate deploy`, never edit an applied migration). Take a backup first (below):
+Schema changes are **roll-forward only** (ADR-0007 — never `prisma migrate deploy`, never edit an applied migration).
+On a populated volume the new migration(s) are applied by `provision`, which replays **all** of them on every `up`.
+There is **no manual replay step**: an operator who forgets one is exactly how a volume goes stale. Take a backup
+first (below), then:
 ```bash
 git pull
-# apply each NEW idempotent migration added since the last deploy, in order:
-for f in migrations/<new-NNNN>_*.sql; do
-  docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$f"
-done
-docker compose up -d --build api worker        # ships the new image (Prisma client baked in)
-docker compose run --rm provision              # optional: re-runs the idempotent seed (schema apply is skipped)
+docker compose up -d --build                   # provision re-runs first (replays migrations), then api/worker start
+docker compose logs provision                  # expect "✓ migrations replayed (…0001… … …NNNN…)" + "✓ provisioning complete"
 ```
-Migrations are idempotent (CI replays `migrations/*` twice + diffs the two bootstrap paths — see the
-`migration-drift` job in `.github/workflows/ci.yml`), so a re-run is safe.
+Replaying the whole set is safe and cheap: every migration is idempotent, and CI gates that as a HARD requirement —
+the `migration-drift` job replays `migrations/*` **twice** on one DB and diffs the two bootstrap paths, and
+`provision-heals-stale-db` proves the replay converges a deliberately-lagging DB (and that a second `provision` on an
+already-current one stays green). See `.github/workflows/ci.yml`.
 
 ## Backups & restore (MVP)
 - **Daily** logical backup (cron on host or `worker`):
@@ -101,21 +111,6 @@ then `docker compose up -d`. Mind the coupled rotations: `POSTGRES_PASSWORD`/`RE
 with `DATABASE_URL`/`REDIS_URL` (the generator derives those two from the credentials it finds, so rotate the URL
 line together with the password line), `PII_DATA_KEY` needs a re-encrypt migration and `PII_BLIND_INDEX_KEY` an
 `email_bidx` backfill. Vault/secret-manager is Фаза 2+.
-
-## Observability (MVP)
-Prometheus + Grafana for metrics, Sentry (self-hosted) for errors, structured JSON logs with PII redaction
-(ФЗ-152) — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md) and `monitoring.md`.
-
-## Disaster recovery (single-VM MVP)
-Restore = re-provision VM → `docker compose up -d` → restore latest `pg_dump` → re-point DNS. RPO ≤ 24h (daily dump;
-tighten with WAL archiving if needed). Cross-region/standby is Target (Фаза 2+).
-
-## Related
-- repo-root `docker-compose.yml`, `backend/Dockerfile`, `deploy/Caddyfile`
-- `deploy/gen-env.sh` — the env **provisioner** (the documented path) · `.env.example` — the env **FORM**
-  (key inventory / reference only) · `backend/src/config/env.validation.ts` — the boot-time env contract
-- [BACKEND_MVP_BASELINE.md](../../BACKEND_MVP_BASELINE.md) · [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
-- 🌐 RU mirror: [docsRU/06-operations/deployment-mvp.md](../../docsRU/06-operations/deployment-mvp.md)
 
 ## Edge client-IP contract (do not break when editing `deploy/Caddyfile`)
 The API's rate-limit buckets are keyed on the `X-Real-IP` header, so the Caddyfile is **half of a security

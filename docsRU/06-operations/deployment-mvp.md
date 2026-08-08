@@ -16,10 +16,20 @@ NestJS, масштабируемый), `worker` (вычитка outbox/cron/за
 
 ## Первое развёртывание — по шагам
 Схема **никогда** не применяется через `prisma migrate deploy` (ADR-0007: SQL-канон + интроспекция Prisma — Prisma
-Migrate намеренно не используется). На свежем стеке это делает за вас одноразовый сервис **`provision`**: он применяет
-канонический `database_schema.sql` (с защитой — только на пустой БД), затем запускает **идемпотентный** seed
-(справочники: species, breeds, cities, supported_languages, feature_toggles, причины/шаблоны модерации). `api`/`worker`
-ждут успешного завершения `provision`, поэтому стек поднимается полностью провизионированным **без ручных шагов**.
+Migrate намеренно не используется). При КАЖДОМ `up` это делает за вас одноразовый сервис **`provision`**, в три шага:
+1. применяет канонический `database_schema.sql` — **с защитой, только на пустой БД** (этот файл предназначен для
+   первичной загрузки и не идемпотентен);
+2. **прогоняет все `migrations/*.sql` по порядку** — они идемпотентны по построению, поэтому на актуальной БД это
+   no-op, а на **отставшей — шаг приведения к текущей форме**;
+3. запускает **идемпотентный** seed (справочники: species, breeds, cities, supported_languages, feature_toggles,
+   причины/шаблоны модерации, шаблоны уведомлений).
+
+`api`/`worker` ждут успешного завершения `provision`, поэтому стек поднимается полностью провизионированным **без
+ручных шагов** — и **стареющий том больше не может молча дрейфовать** от кода. Шаг 2 появился не в теории:
+пятинедельный том отдавал `500 users.email_bidx does not exist` на регистрации, при этом `/health/live`,
+`/health/ready` и `GET /listings` оставались зелёными — ни один из них не пишет в новые колонки. Обе оси
+зафиксированы в CI (`provision-heals-stale-db`). Если bind-mount `./migrations:/migrations:ro` отсутствует,
+`provision` **падает громко**, а не сообщает об успехе без приведения схемы.
 
 1. **Клонировать и сконфигурировать** — `deploy/gen-env.sh` — **единственный** документированный путь провижининга
    env. Он чеканит все секреты через `openssl rand -hex` (длины ≥ требований валидатора), пишет `.env` с правами
@@ -53,32 +63,32 @@ Migrate намеренно не используется). На свежем с�
 3. **Проверить** (`provision` должен выйти с кодом 0; остальное — healthy)
    ```bash
    docker compose ps                               # provision = Exited (0); proxy/api/worker/postgres/redis/minio healthy
-   docker compose logs provision                   # "✓ canonical schema applied" + "✓ provisioning complete"
+   docker compose logs provision                   # "✓ canonical schema applied" + "✓ migrations replayed (…)" + "✓ provisioning complete"
    curl -fsS https://$PUBLIC_DOMAIN/health/ready   # ожидаем 200 (PG + Redis доступны, через edge)
    ```
 
-> Свежий `down -v && up` провизионирует заново; обычный `up` на существующем томе — no-op (применение схемы
-> пропускается, т.к. БД непустая; seed перезапускается, но идемпотентен). Без `prisma migrate deploy`, без ручного psql.
+> Свежий `down -v && up` провизионирует заново; обычный `up` на существующем томе **приводит его к текущей форме** —
+> применение канона пропускается (БД непустая), идемпотентные миграции прогоняются, seed перезапускается как upsert.
+> Это no-op, когда том актуален, и починка, когда он отстал. Без `prisma migrate deploy`, без ручного psql.
 
 ## Health-эндпоинты (реализует API)
 - `GET /health/live` — процесс жив.
 - `GET /health/ready` — БД + Redis доступны (для healthcheck Compose и uptime-монитора).
 
 ## Изменения схемы при обновлении (roll-forward, SQL-канон)
-Сервис `provision` применяет **полный** `database_schema.sql` только на *пустой* БД, поэтому на заполненном томе новое
-изменение схемы применяется **прогоном новой идемпотентной миграции(й)** (ADR-0007 — только вперёд, никогда
-`prisma migrate deploy`, никогда не редактировать применённую миграцию). Сначала бэкап (ниже):
+Изменения схемы — **только вперёд** (ADR-0007 — никогда `prisma migrate deploy`, никогда не редактировать применённую
+миграцию). На заполненном томе новые миграции применяет `provision`: он прогоняет **все** миграции при каждом `up`.
+**Ручного шага прогона больше нет**: оператор, забывший его, — это ровно то, как том становится отставшим. Сначала
+бэкап (ниже), затем:
 ```bash
 git pull
-# применить каждую НОВУЮ идемпотентную миграцию, добавленную с последнего деплоя, по порядку:
-for f in migrations/<new-NNNN>_*.sql; do
-  docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$f"
-done
-docker compose up -d --build api worker        # выкатывает новый образ (Prisma-клиент уже в нём)
-docker compose run --rm provision              # опц.: перезапускает идемпотентный seed (применение схемы пропускается)
+docker compose up -d --build                   # provision отработает первым (прогонит миграции), затем поднимутся api/worker
+docker compose logs provision                  # ожидаем "✓ migrations replayed (…0001… … …NNNN…)" + "✓ provisioning complete"
 ```
-Миграции идемпотентны (CI прогоняет `migrations/*` дважды + диффит два пути bootstrap — см. job `migration-drift`
-в `.github/workflows/ci.yml`), поэтому повторный прогон безопасен.
+Прогон всего набора безопасен и дешёв: каждая миграция идемпотентна, и CI держит это ЖЁСТКИМ требованием — job
+`migration-drift` прогоняет `migrations/*` **дважды** на одной БД и диффит два пути bootstrap, а
+`provision-heals-stale-db` доказывает, что прогон приводит намеренно отставшую БД к текущей форме (и что второй
+`provision` на уже актуальной остаётся зелёным). См. `.github/workflows/ci.yml`.
 
 ## Бэкапы и восстановление (MVP)
 - **Ежедневный** логический бэкап (cron на хосте или `worker`):
@@ -100,21 +110,6 @@ docker compose run --rm provision              # опц.: перезапуска
 `DATABASE_URL`/`REDIS_URL` (генератор выводит эти два из найденных кредов, поэтому строку URL ротировать вместе со
 строкой пароля), `PII_DATA_KEY` требует миграции перешифрования, а `PII_BLIND_INDEX_KEY` — бэкфилла `email_bidx`.
 Vault/secret-manager — Фаза 2+.
-
-## Наблюдаемость (MVP)
-Prometheus + Grafana для метрик, Sentry (self-hosted) для ошибок, структурированные JSON-логи с маскированием ПДн
-(ФЗ-152) — см. [ADR-0008](../04-decisions/0008-rf-provider-matrix.md) и `monitoring.md`.
-
-## Аварийное восстановление (single-VM MVP)
-Восстановление = переподнять VM → `docker compose up -d` → восстановить последний `pg_dump` → перенаправить DNS.
-RPO ≤ 24 ч (ежедневный дамп; ужесточить WAL-архивированием при необходимости). Cross-region/standby — Target (Фаза 2+).
-
-## Связанное
-- `docker-compose.yml`, `backend/Dockerfile`, `deploy/Caddyfile` в корне
-- `deploy/gen-env.sh` — **провижинер** env (документированный путь) · `.env.example` — **ФОРМА** env (опись ключей,
-  только справка) · `backend/src/config/env.validation.ts` — контракт env, проверяемый при старте
-- [BACKEND_MVP_BASELINE.md](../../BACKEND_MVP_BASELINE.md) · [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
-- 🌐 EN: [docs/06-operations/deployment-mvp.md](../../docs/06-operations/deployment-mvp.md)
 
 ## Контракт клиентского IP на краю (не сломать при правке `deploy/Caddyfile`)
 Ведра rate-limit'а API строятся по заголовку `X-Real-IP`, поэтому Caddyfile — **половина контроля
