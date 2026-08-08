@@ -1393,6 +1393,44 @@ ALTER TABLE species ADD COLUMN IF NOT EXISTS market VARCHAR(10) NOT NULL DEFAULT
 UPDATE species SET market = 'livestock'
  WHERE code IN ('cattle', 'cow', 'bull', 'sheep', 'goat', 'pig', 'horse', 'poultry', 'chicken');
 
+CREATE OR REPLACE FUNCTION trg_species_market_replay_guard()
+RETURNS TRIGGER AS $$
+DECLARE
+    replay_0007_codes CONSTANT text[] :=
+        ARRAY['cattle','cow','bull','sheep','goat','pig','horse','poultry','chicken'];
+BEGIN
+    IF current_setting('app.reference_data_admin', true) IS NOT DISTINCT FROM 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF (to_jsonb(NEW) - 'updated_at') = (to_jsonb(OLD) - 'updated_at')
+       AND NEW.market = 'livestock'
+       AND OLD.code = ANY (replay_0007_codes) THEN
+        RETURN NULL;
+    END IF;
+    IF NEW.market IS NOT DISTINCT FROM OLD.market THEN
+        RETURN NEW;
+    END IF;
+    IF NEW.updated_by IS NOT DISTINCT FROM OLD.updated_by
+       AND NEW.market = 'livestock'
+       AND OLD.code = ANY (replay_0007_codes) THEN
+        IF OLD.created_by IS NULL AND OLD.updated_by IS NULL THEN
+            RETURN NEW;
+        END IF;
+        RAISE WARNING 'species.market: подавлен replay миграции 0007 по операторской строке (code=%, оставлено %, отклонено %). Источник: migrations/20260617_0007_species_market.sql — безусловный UPDATE; заслонка: миграция 0042.',
+            OLD.code, OLD.market, NEW.market
+            USING ERRCODE = 'ZL042';   -- счётный маркер (Г-М2): provision.ts считает по КОДУ, не по тексту
+        RETURN NULL;
+    END IF;
+    RAISE EXCEPTION 'species.market (code=%): правка % -> % отклонена — транзакция не подняла заслонку app.reference_data_admin.', OLD.code, OLD.market, NEW.market
+        USING HINT = 'Прикладной путь: выполните в ТОЙ ЖЕ транзакции SELECT set_config(''app.reference_data_admin'',''on'',true) перед UPDATE (образец: ReferenceDataService.update / app.ownership_transfer в 0023). Правка руками: оберните в BEGIN; SELECT set_config(...); UPDATE …; COMMIT; и помните, что listings.market — производный кэш, который пересчитывает ТОЛЬКО admin PATCH (ADR-0018 §Amendment D3).';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_species_market_replay_guard ON species;
+CREATE TRIGGER trg_species_market_replay_guard
+    BEFORE UPDATE OF market ON species
+    FOR EACH ROW EXECUTE FUNCTION trg_species_market_replay_guard();
+
 -- ========== Round-4 integrity (org / identity / pedigree / governance; mirrored in migration 0008) ==========
 -- Organization lifecycle + invariants
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS status VARCHAR(25) NOT NULL DEFAULT 'PENDING_VERIFICATION'

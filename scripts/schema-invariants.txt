@@ -89,6 +89,7 @@ trg_enforce_pedigree_integrity
 trg_listing_active_requires_approval
 trg_moderation_decisions_immutable
 trg_reviews_immutable
+trg_species_market_replay_guard
 uq_active_listing_per_type
 uq_agent_capability_profiles_code
 uq_animals_microchip

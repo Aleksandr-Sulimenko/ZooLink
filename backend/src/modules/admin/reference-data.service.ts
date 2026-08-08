@@ -87,8 +87,16 @@ export class ReferenceDataService {
     private readonly listings: ListingService,
   ) {}
 
-  /** Prisma delegate for the dataset (typed as the shared lookup CRUD surface). */
-  private delegate(dataset: Dataset): {
+  /**
+   * Prisma delegate for the dataset (typed as the shared lookup CRUD surface).
+   * `client` lets a caller run the same delegate inside an interactive transaction — needed by the
+   * guarded species.market write in `update()` (migration 0042), which must issue its `set_config`
+   * and its UPDATE on the SAME connection.
+   */
+  private delegate(
+    dataset: Dataset,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): {
     findMany: (args: unknown) => Promise<LookupRow[]>;
     count: (args: unknown) => Promise<number>;
     findUnique: (args: unknown) => Promise<LookupRow | null>;
@@ -96,7 +104,7 @@ export class ReferenceDataService {
     update: (args: unknown) => Promise<LookupRow>;
   } {
     // The three delegates share the same CRUD method shape; cast narrows to what we use.
-    return this.prisma[dataset] as unknown as ReturnType<ReferenceDataService['delegate']>;
+    return client[dataset] as unknown as ReturnType<ReferenceDataService['delegate']>;
   }
 
   /**
@@ -304,7 +312,25 @@ export class ReferenceDataService {
     }
     data.updated_by = actor.userId;
 
-    const row = await this.delegate(dataset).update({ where: { id }, data });
+    // Migration 0042: `species.market` is guarded by trg_species_market_replay_guard, which tells this
+    // DELIBERATE admin write apart from the unconditional replay of migration 0007 (provision.ts step 2
+    // replays every migration on every `up`; 0007's `UPDATE species SET market='livestock' WHERE code IN
+    // (…)` would otherwise revert an operator's decision at each boot). The shutter is a
+    // transaction-local GUC — same idiom as app.ownership_transfer (transfer.service.ts / migration 0023):
+    // it must be set on the SAME connection, inside the SAME transaction, as the UPDATE.
+    // Scope is deliberately narrow (the guard is BEFORE UPDATE OF market ON species):
+    //   · only this statement, only when it actually writes species.market;
+    //   · create() is an INSERT → the guard does not fire → no GUC needed (do not "helpfully" add one);
+    //   · toggleActive() never writes market → likewise none.
+    // Audit + cache recompute stay OUTSIDE the transaction, exactly where they were: this change is the
+    // shutter and nothing else (widening the tx to cover the audit write is a separate decision).
+    const writesGuardedMarket = dataset === 'species' && data.market !== undefined;
+    const row = writesGuardedMarket
+      ? await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.reference_data_admin', 'on', true)`;
+          return this.delegate(dataset, tx).update({ where: { id }, data });
+        })
+      : await this.delegate(dataset).update({ where: { id }, data });
     await this.audit.record({
       actorId: actor.userId,
       actorRole: actor.role,

@@ -65,12 +65,26 @@ function setup(opts: {
     species.findUnique = jest.fn().mockResolvedValue(opts.speciesParent);
   }
   const record = jest.fn().mockResolvedValue(undefined);
-  const prisma = { species, breeds, cities } as unknown as PrismaService;
+  // Migration 0042: a species.market write runs inside an interactive transaction that raises the
+  // app.reference_data_admin shutter (the guard trigger tells this deliberate admin write apart from
+  // the unconditional replay of migration 0007). The mock runs the callback against the same delegates.
+  const executeRaw = jest.fn().mockResolvedValue(1);
+  const txClient = { species, breeds, cities, $executeRaw: executeRaw };
+  const transaction = jest
+    .fn()
+    .mockImplementation((fn: (tx: typeof txClient) => unknown) => fn(txClient));
+  const prisma = {
+    species,
+    breeds,
+    cities,
+    $transaction: transaction,
+    $executeRaw: executeRaw,
+  } as unknown as PrismaService;
   const audit = { record } as unknown as AuditLogService;
   // D3 (ADR-0018 §Amendment): species market-correction recomputes the derived listings.market cache.
   const recomputeMarketForSpecies = jest.fn().mockResolvedValue(0);
   const listings = { recomputeMarketForSpecies } as unknown as ListingService;
-  return { svc: new ReferenceDataService(prisma, audit, listings), species, breeds, cities, record, recomputeMarketForSpecies };
+  return { svc: new ReferenceDataService(prisma, audit, listings), species, breeds, cities, record, recomputeMarketForSpecies, transaction, executeRaw };
 }
 
 describe('resolveLang', () => {
@@ -274,6 +288,30 @@ describe('ReferenceDataService.update', () => {
     const etag = weakEtag('cities:9', cityRow.updated_at);
     await svc.update('cities', 9, { nameLocalized: { ru: 'СПб', en: 'SPb' } }, etag, admin);
     expect(recomputeMarketForSpecies).not.toHaveBeenCalled();
+  });
+
+  // Migration 0042 (axis "г"): a species.market write must raise the app.reference_data_admin shutter
+  // in the SAME transaction as the UPDATE, or the guard trigger rejects it (that is what tells this
+  // deliberate admin write apart from the unconditional replay of migration 0007).
+  it('raises the app.reference_data_admin shutter in the same transaction as a species.market write', async () => {
+    const { svc, transaction, executeRaw, species } = setup();
+    const etag = weakEtag('species:1', speciesRow.updated_at);
+    await svc.update('species', 1, { market: 'livestock' }, etag, admin);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    // set_config(...) is issued BEFORE the UPDATE, on the transaction client.
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(executeRaw.mock.calls[0][0].join('?')).toContain('app.reference_data_admin');
+    expect(executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      (species.update as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does NOT open a transaction or raise the shutter when the write does not touch species.market', async () => {
+    const { svc, transaction, executeRaw } = setup();
+    const etag = weakEtag('species:1', speciesRow.updated_at);
+    await svc.update('species', 1, { sortOrder: 7 }, etag, admin);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(executeRaw).not.toHaveBeenCalled();
   });
 });
 
