@@ -300,9 +300,13 @@ describe('ReferenceDataService.update', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
     // set_config(...) is issued BEFORE the UPDATE, on the transaction client.
     expect(executeRaw).toHaveBeenCalledTimes(1);
-    expect(executeRaw.mock.calls[0][0].join('?')).toContain('app.reference_data_admin');
+    // `$executeRaw` receives a Prisma template-literal Sql object; its `strings` are the only
+    // typed-safe way to read the statement back. Typed explicitly because the mock's call tuple is
+    // `any`, and an unsafe call here would be a lint error rather than a stronger assertion.
+    const sqlArg = executeRaw.mock.calls[0][0] as readonly string[];
+    expect(sqlArg.join('?')).toContain('app.reference_data_admin');
     expect(executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      (species.update as jest.Mock).mock.invocationCallOrder[0],
+      species.update.mock.invocationCallOrder[0],
     );
   });
 
