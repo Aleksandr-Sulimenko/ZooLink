@@ -91,6 +91,12 @@ the `migration-drift` job replays `migrations/*` **twice** on one DB and diffs t
 `provision-heals-stale-db` proves the replay converges a deliberately-lagging DB (and that a second `provision` on an
 already-current one stays green). See `.github/workflows/ci.yml`.
 
+> **The derived Prisma artifact has a provisioning path too — `npm run db:sync`** (`scripts/db-sync-canon.sh`).
+> It builds its OWN database from `database_schema.sql` and introspects THAT, and it **refuses** to run against a dev
+> database: a dev DB differs from the canon in column order, so the diff against it collapses — clean locally while CI,
+> which builds from the canon, stays RED. `npm run db:sync:check` is the same assertion CI makes.
+
+
 ## Backups & restore (MVP)
 - **Daily** logical backup (cron on host or `worker`):
   ```bash

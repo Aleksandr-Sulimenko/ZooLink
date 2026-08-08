@@ -24,7 +24,8 @@
     "test:e2e": "jest --config test/jest-e2e.json --runInBand --forceExit",
     "db:pull": "prisma db pull",
     "db:generate": "prisma generate",
-    "db:sync": "prisma db pull && prisma generate",
+    "db:sync": "bash ../scripts/db-sync-canon.sh",
+    "db:sync:check": "bash ../scripts/db-sync-canon.sh --check",
     "db:provision": "ts-node src/provision.ts",
     "seed": "ts-node src/seed.ts"
   },
