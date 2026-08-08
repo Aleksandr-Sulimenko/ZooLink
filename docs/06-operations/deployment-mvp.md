@@ -116,3 +116,56 @@ tighten with WAL archiving if needed). Cross-region/standby is Target (Фаза 
   (key inventory / reference only) · `backend/src/config/env.validation.ts` — the boot-time env contract
 - [BACKEND_MVP_BASELINE.md](../../BACKEND_MVP_BASELINE.md) · [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
 - 🌐 RU mirror: [docsRU/06-operations/deployment-mvp.md](../../docsRU/06-operations/deployment-mvp.md)
+
+## Edge client-IP contract (do not break when editing `deploy/Caddyfile`)
+The API's rate-limit buckets are keyed on the `X-Real-IP` header, so the Caddyfile is **half of a security
+control** (AUDIT5 §F1b). Two rules, both load-bearing:
+1. Every `handle` that proxies to `api` must go through the `(api_upstream)` snippet, which does
+   `header_up X-Real-IP {remote_host}` — a plain `reverse_proxy api:3000` is a hole.
+2. The site-level `request_header -X-Real-IP` must stay. Caddy overwrites XFF by default but knows nothing
+   about `X-Real-IP`: an inbound client value otherwise reaches the API verbatim, letting a client choose its
+   own bucket. With the strip in place, a handle that forgets rule 1 delivers *no* header, and the API falls
+   back to the socket address (degraded, not spoofable).
+
+`scripts/check-edge-client-ip.sh` fails CI if either half goes missing, or if `trusted_proxies` is configured
+(the rewrite uses `{remote_host}`, the real TCP peer, and must not become ambiguous). If another proxy is ever
+placed **in front of** Caddy, `{remote_host}` becomes that proxy and this contract must be revisited.
+
+**Runtime alarm — the rule is `zoolink_ratelimit_tracker_fallback_total{source="absent",peer="network"} == 0`.**
+The counter records every request whose bucket had to fall back to the socket address. Labels:
+- `source` — `absent` (no `X-Real-IP` at all) or `malformed` (present, but not a single IP literal — the shape
+  a spoof attempt takes).
+- `peer` — `network` or `loopback`, read off the **TCP connection**, which no header can alter. It carries no
+  subnet constants on purpose: a hard-coded "our edge network" CIDR would go stale against Docker's dynamic
+  subnets and then mislabel *silently*.
+
+**The premise the rule rests on, stated so it cannot rot:** "non-zero `absent` = the edge stopped writing the
+header" is only true while a second invariant holds — **no internal component calls the API over HTTP.** True
+today. Add one (an ops `curl` inside the container, a smoke script, an in-container cron) and the baseline
+becomes permanently non-zero → the signal becomes noise → the noise gets muted → a *real* loss of the edge
+header becomes invisible. The `peer` split makes the rule immune: a loopback caller cannot raise the alarm
+series, and a new **network-side** internal caller trips it once, loudly, forcing a deliberate decision instead
+of silent erosion. If the counter is ever absent from the scrape entirely, the API logs that at boot
+(`RateLimitMetrics`: "…is BLIND in this process") rather than degrading quietly.
+
+## Observability (MVP)
+Prometheus + Grafana for metrics, Sentry (self-hosted) for errors, structured JSON logs with PII redaction
+(ФЗ-152) — see [ADR-0008](../04-decisions/0008-rf-provider-matrix.md) and `monitoring.md`.
+
+**Health probes never depend on Redis.** `/health/live` and `/health/ready` are `@SkipThrottle` (AUDIT5 §F1c):
+the global rate-limit guard keeps its counters in Redis and used to turn a dependency-free liveness probe into
+a 500, which — with the `Dockerfile` HEALTHCHECK plus `restart: unless-stopped` — made a Redis blip a restart
+loop. The API and worker also survive booting with Redis unreachable (they degrade and keep reconnecting), and
+`/health/ready` reports an honest **503** while a dependency is down. Note: with Redis down, ordinary throttled
+routes still return 500 — choosing the rate limiter's failure direction is tracked separately (AUDIT5 §F2).
+
+## Disaster recovery (single-VM MVP)
+Restore = re-provision VM → `docker compose up -d` → restore latest `pg_dump` → re-point DNS. RPO ≤ 24h (daily dump;
+tighten with WAL archiving if needed). Cross-region/standby is Target (Фаза 2+).
+
+## Related
+- repo-root `docker-compose.yml`, `backend/Dockerfile`, `deploy/Caddyfile`
+- `deploy/gen-env.sh` — the env **provisioner** (the documented path) · `.env.example` — the env **FORM**
+  (key inventory / reference only) · `backend/src/config/env.validation.ts` — the boot-time env contract
+- [BACKEND_MVP_BASELINE.md](../../BACKEND_MVP_BASELINE.md) · [ADR-0009](../04-decisions/0009-mvp-vs-target-architecture.md)
+- 🌐 RU mirror: [docsRU/06-operations/deployment-mvp.md](../../docsRU/06-operations/deployment-mvp.md)

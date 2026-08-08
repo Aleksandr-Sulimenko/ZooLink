@@ -1,6 +1,36 @@
 # ZooLink MVP reverse proxy (Caddy). Terminates TLS (automatic Let's Encrypt), proxies the API,
 # serves the SPA build, sets security headers. Only this service is public (ADR-0009).
 
+# ---------------------------------------------------------------------------------------------------
+# Edge client-IP contract (AUDIT5 §F1b, security co-sign У-1). The API rate-limiter keys its buckets
+# on X-Real-IP (backend/src/lib/rate-limit/client-ip.ts) — so this file is HALF of that control and
+# the two halves are locked together by scripts/check-edge-client-ip.sh in CI (У-6).
+#
+#   «мы берём заголовок, который Caddy НЕ санирует (в отличие от XFF, перезаписываемого по
+#   умолчанию); край обязан его перезаписать; забывчивость сделана безопасной через site-level strip
+#   + CI-замок»
+#
+# EN: Caddy overwrites XFF by default but knows nothing about X-Real-IP — an inbound client X-Real-IP
+# reaches the upstream VERBATIM (verified live against caddy:2-alpine, 2026-08-07). So:
+#   (a) every handle that proxies to `api` imports the (api_upstream) snippet below, which REWRITES
+#       X-Real-IP with {remote_host} — the actual TCP peer, which a client cannot forge. No `+`/`-`
+#       prefix on header_up = replace, not append.
+#   (b) the site-level `request_header -X-Real-IP` strips any inbound client value for ALL routes
+#       BEFORE `handle` runs (directive order is Caddy's, not the file's — verified live). A future
+#       handle that FORGETS the snippet therefore delivers NO header, and the API falls back to the
+#       socket address (one shared bucket = today's behaviour) instead of trusting a forged value.
+#       Without (b) that same forgotten handle passes `X-Real-IP: 6.6.6.6` straight through.
+#
+# {remote_host} is the direct peer, so this is independent of `trusted_proxies` — which is
+# deliberately NOT configured here (У-2): Caddy is the only public entry point. If another proxy is
+# ever placed IN FRONT of Caddy, {remote_host} becomes that proxy and this contract must be revisited.
+# ---------------------------------------------------------------------------------------------------
+(api_upstream) {
+	reverse_proxy api:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+}
+
 {$PUBLIC_DOMAIN} {
 	encode gzip zstd
 
@@ -13,14 +43,17 @@
 		-Server
 	}
 
+	# Fail-safe half of the client-IP contract: no inbound X-Real-IP ever survives the edge.
+	request_header -X-Real-IP
+
 	# API
 	handle /api/* {
-		reverse_proxy api:3000
+		import api_upstream
 	}
 
 	# Health passthrough (for external uptime checks)
 	handle /health/* {
-		reverse_proxy api:3000
+		import api_upstream
 	}
 
 	# SPA static build (mounted/served separately); SPA fallback to index.html

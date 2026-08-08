@@ -95,9 +95,10 @@ jobs:
   # The two supported bootstrap paths must agree:
   #   (1) a fresh DB built from the canonical database_schema.sql, and
   #   (2) the same canonical schema with every migrations/*.sql replayed on top.
-  # WHY: provision.ts / the compose `provision` service apply ONLY database_schema.sql (+seed); the
-  # migrations are never replayed in compose, so a broken/non-idempotent migration, or schema↔migration
-  # drift, would otherwise surface only in production. This job catches it in CI.
+  # how an ageing volume is kept converged — see the `provision-heals-stale-db` job), so a broken or
+  # non-idempotent migration now breaks the DEPLOY ITSELF, and schema↔migration drift would surface only
+  # in production. This job is what keeps that replay safe: it is the HARD proof, on every commit, that
+  # the whole set applies cleanly, is idempotent, and converges to the canon.
   #  - HARD GATE: every migration applies cleanly on the canonical schema AND is idempotent (replayed
   #    twice — same proof as the seed×2 check above). A non-idempotent/broken migration fails the build.
   #  - HARD GATE: a normalized DDL diff between the two paths must be EMPTY (any structural divergence
@@ -268,6 +269,17 @@ jobs:
       - name: No raw market-join in listing/moderation (ADR-0018 D8)
         run: bash scripts/check-no-raw-market-join.sh
 
+  # Edge client-IP contract gate (AUDIT5 §F1b, security co-sign У-2/У-6). BLOCKING: the rate-limiter
+  # keys its buckets on `X-Real-IP`, which is only trustworthy because deploy/Caddyfile REWRITES it
+  # (Caddy overwrites XFF by default but passes an inbound X-Real-IP through verbatim). Either half
+  # alone is a silent fail-OPEN, so this makes them mutually obligatory and forbids re-introducing
+  # forwarded-chain / hop-count trust. Lines that only DISCUSS it carry `edge-ip-grep-allow`.
+  edge-client-ip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: App-trusts-X-Real-IP ⟺ edge-rewrites-X-Real-IP (AUDIT5 §F1b)
+        run: bash scripts/check-edge-client-ip.sh
   security:
     runs-on: ubuntu-latest
     steps:

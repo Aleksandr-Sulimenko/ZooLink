@@ -121,6 +121,10 @@ payment fields use **`amount_minor`**. New money fields should use the `*_minor`
 ## 8. Rate limiting
 Sensitive endpoints (auth: login/register/refresh; payments; content-reports; contact reveal) return `429` with
 `Retry-After` and `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers. Concrete limits: `nfr/security.md`.
+Buckets are **per client**, keyed on the client address the edge supplies in `X-Real-IP` — never on the raw
+socket address (behind the reverse proxy that is one value for every caller). How the header is made
+trustworthy, and how IPv6 is bucketed, is in `nfr/security.md` → API Security. Health probes and the metrics
+scrape are exempt and carry no `X-RateLimit-*` headers.
 
 ## 9. MVP scope note
 `POST/GET /listings/{id}/conversations` and the `Conversation`/message schemas are **Фаза 2+** (chat is out of MVP

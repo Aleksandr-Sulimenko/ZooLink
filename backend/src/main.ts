@@ -7,7 +7,8 @@ import { AppModule } from './app.module';
 import { API_VERSION, applyGlobalApiPrefix } from './config/api-base';
 import { AppConfigService } from './config/app-config.service';
 import { ProblemExceptionFilter } from './lib/http/problem.filter';
-import { initSentry } from './lib/observability/sentry';
+import { installProcessGuards } from './lib/observability/process-guards';
+import { Sentry, initSentry } from './lib/observability/sentry';
 
 async function bootstrap(): Promise<void> {
   // Sentry must initialize before anything else can throw. Reads raw env (validated inside Nest).
@@ -15,6 +16,10 @@ async function bootstrap(): Promise<void> {
     SENTRY_DSN: process.env.SENTRY_DSN ?? '',
     NODE_ENV: (process.env.NODE_ENV as 'development' | 'test' | 'production') ?? 'development',
   });
+
+  // Installed BEFORE bootstrap so a rejection during startup is reported instead of killing the
+  // process (AUDIT5 §F1c). Sentry is already initialized above, so the report has somewhere to go.
+  installProcessGuards({ capture: (error) => Sentry.captureException(error) });
 
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 

@@ -54,6 +54,19 @@ Applies to all system components: backend APIs, frontend applications, databases
   - General API: 100 requests per minute per user (burst 200)
   - Moderation actions: 10 actions per minute per moderator
   - Contact reveal: 10 reveals per hour per user (pet), 5 per hour (livestock)
+  - **How "per IP" is resolved behind the edge (AUDIT5 §F1b):** every request reaches the API from the
+    reverse proxy, so the raw socket address identifies the PROXY, not the client — keying on it puts the
+    whole platform in one bucket. The API therefore keys buckets on the **`X-Real-IP`** header and nothing
+    else (never a multi-hop forwarded chain, never framework hop-count trust). The header is trustworthy
+    only because the edge is REQUIRED to overwrite it: `deploy/Caddyfile` rewrites it with the real TCP
+    peer on every upstream to `api` AND strips any inbound client value site-wide, so a route that forgets
+    the rewrite yields "no header" (safe fallback to the socket address) rather than a forged one. Both
+    halves are locked together by `scripts/check-edge-client-ip.sh` in CI. Values are validated as a
+    single IP literal before use; IPv6 is bucketed by **/64** prefix (a client rotating inside its own /64
+    must not obtain fresh buckets), and an IPv4-mapped address shares the IPv4 bucket. `X-Real-IP` is
+    therefore a **security-relevant** header: changing who writes it changes who can pick a bucket.
+  - Health probes (`/health/live`, `/health/ready`) and the Prometheus scrape are exempt from rate
+    limiting (`@SkipThrottle`), so liveness never depends on Redis or on a caller's remaining quota.
 - Input validation: 
   - All inputs validated against strict schemas (white-list approach)
   - Protection against SQL injection (via ORM/parameterized queries)
