@@ -17,6 +17,42 @@ import { ProviderError } from '../providers/provider-error';
 import { Sentry } from '../observability/sentry';
 
 /**
+ * The ONLY members of a thrown HttpException's payload that reach the response body: `message`
+ * (→ `detail`), `code` and `errors`. Every other member is dropped DELIBERATELY — an exception
+ * payload is an internal object, not an API contract, and echoing members nobody vetted is how
+ * driver text and topology (`host:port`) reach clients, some of them unauthenticated (ADR-0043).
+ * The list lives here, next to the only code that applies it.
+ */
+const PROJECTED_PAYLOAD_KEYS = ['message', 'code', 'errors'] as const;
+
+/** Consumed by this filter as response HEADERS (§8), intentionally never as body members. */
+const HEADER_PAYLOAD_KEYS = ['retryAfter', 'rateLimit'] as const;
+
+/**
+ * Two EXACT names — not a pattern, not a prefix, not "the members Nest adds".
+ *
+ *  `statusCode`  Nest's `HttpException.createBody` stamps it on every string-argument exception:
+ *                `new NotFoundException('gone')` → `{ message, error: 'Not Found', statusCode: 404 }`.
+ *  `error`       the same envelope's human label ("Not Found"), a duplicate of `title`.
+ *
+ * WHY they are exempt from the drop-log: they are the FRAMEWORK's envelope, not a payload anyone
+ * attached, so reporting them would fire the line on nearly every error in the system — and a warning
+ * that fires always says nothing. That is how such lists usually die.
+ *
+ * Adding a name here is therefore a SEPARATE DECISION with its own reason written beside it, never a
+ * matter of "looked similar, appended by analogy". If a member is ours and it is being dropped, the
+ * answer is either to project it deliberately or to let the line report it — not to silence it here.
+ */
+const FRAMEWORK_PAYLOAD_KEYS = ['statusCode', 'error'] as const;
+
+/** Anything outside this union is an unknown member: dropped from the body, NAMED in the log. */
+const KNOWN_PAYLOAD_KEYS: ReadonlySet<string> = new Set<string>([
+  ...PROJECTED_PAYLOAD_KEYS,
+  ...HEADER_PAYLOAD_KEYS,
+  ...FRAMEWORK_PAYLOAD_KEYS,
+]);
+
+/**
  * Global exception filter — converts every thrown error into an RFC 7807 Problem document
  * (API_CONVENTIONS.md §4). Never leaks stack traces or internals to clients; 5xx details are
  * logged server-side and replaced with a generic message.
@@ -24,6 +60,14 @@ import { Sentry } from '../observability/sentry';
 @Catch()
 export class ProblemExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(ProblemExceptionFilter.name);
+
+  /**
+   * Signatures (route + dropped-key set) already reported once. Bounded: when the cap is reached the
+   * window is CLEARED rather than frozen — a permanent mute is the very defect ADR-0043 exists to
+   * stop, and an unbounded set on a per-request path is a leak of its own.
+   */
+  private static readonly DROP_LOG_MEMORY_CAP = 512;
+  private readonly reportedDrops = new Set<string>();
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
@@ -73,6 +117,7 @@ export class ProblemExceptionFilter implements ExceptionFilter {
           }
         }
       }
+      this.reportDroppedPayloadKeys(req, response);
     } else if (exception instanceof ProviderError) {
       // External provider failed. Log the (possibly sensitive) detail server-side only and
       // return a generic 503 UPSTREAM_UNAVAILABLE — never echo the upstream message/body.
@@ -100,6 +145,53 @@ export class ProblemExceptionFilter implements ExceptionFilter {
     return HttpStatus[status] ? String(HttpStatus[status]).replace(/_/g, ' ') : 'Error';
   }
 
+  /**
+   * A payload member outside the allow-list is not an error — but its loss must never be SILENT
+   * (ADR-0043 rule 2): a caller who attached data expecting it to surface would otherwise never
+   * learn it was cut. Logs key NAMES and the route, never values — the payload may hold exactly the
+   * secrets this allow-list exists to withhold.
+   */
+  private reportDroppedPayloadKeys(req: Request, response: string | object): void {
+    if (typeof response !== 'object' || response === null) return;
+    const dropped = Object.keys(response as Record<string, unknown>)
+      .filter((key) => !KNOWN_PAYLOAD_KEYS.has(key))
+      .sort();
+    if (dropped.length === 0) return;
+
+    const route = `${req.method} ${this.routePatternOf(req)}`;
+    // Dedup on ROUTE + key set, not the key set alone: the same unknown payload thrown from two
+    // places would otherwise log once and the second site's ADDRESS would be lost.
+    const signature = `${route} | ${dropped.join(',')}`;
+    if (this.reportedDrops.has(signature)) return;
+    if (this.reportedDrops.size >= ProblemExceptionFilter.DROP_LOG_MEMORY_CAP) {
+      this.reportedDrops.clear();
+    }
+    this.reportedDrops.add(signature);
+
+    this.logger.warn(
+      `HttpException payload members dropped by the RFC 7807 allow-list on ${route}: ` +
+        `[${dropped.join(', ')}] — key NAMES only, values are never logged (ADR-0043)`,
+    );
+  }
+
+  /**
+   * The route PATTERN when Express matched one (`/api/v1/listings/:id`), else the raw path without
+   * the query string. The pattern keeps the dedup signature low-cardinality: `originalUrl` carries
+   * ids, which would make every request a fresh signature and turn the dedup into a flood.
+   */
+  private routePatternOf(req: Request): string {
+    // `Request['route']` is typed `any` by @types/express — go through `unknown` to stay type-safe.
+    const pattern = (req as unknown as { route?: { path?: unknown } }).route?.path;
+    if (typeof pattern === 'string' && pattern.length > 0) {
+      return `${req.baseUrl}${pattern}`;
+    }
+    return (req.originalUrl ?? '').split('?')[0] ?? '';
+  }
+
+  /**
+   * Projects the payload onto the problem document through the allow-list above: `message` →
+   * `detail`, `code`, `errors` — and NOTHING else, by design (see PROJECTED_PAYLOAD_KEYS).
+   */
   private applyHttpExceptionBody(problem: ProblemDetails, response: string | object): void {
     if (typeof response === 'string') {
       problem.detail = response;

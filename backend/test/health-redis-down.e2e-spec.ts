@@ -97,11 +97,66 @@ describe('Redis down: health stays truthful, the process stays alive (e2e)', () 
     expect(res.status).toBe(503);
     expect(res.status).not.toBe(200); // would mean readiness lies about a missing dependency
     expect(res.status).not.toBe(500); // would mean the throttler guard, not the health check, answered
-    // The global RFC 7807 filter reshapes the thrown Terminus result into a problem document, so the
-    // per-indicator report is not in the BODY — the diagnosis is asserted directly below.
     expect(res.headers['content-type']).toContain('application/problem+json');
     expect(res.body.status).toBe(503);
     expect(res.body.code).toBe('UPSTREAM_UNAVAILABLE'); // codeForStatus(503), API_CONVENTIONS §4
+  }, 20_000);
+
+  /**
+   * ADR-0043 axis HEALTH — the body must say WHICH dependency is down, by name, and nothing else.
+   *
+   * Before ADR-0043 the body carried no diagnosis at all: Terminus throws its report as the
+   * exception payload and the RFC 7807 filter's allow-list dropped `info`/`error`/`details` in
+   * silence, so an operator (human or AGENT, ADR-0006) had to read server logs to learn what broke.
+   * The naive fix — echo the report — would be a fresh leak: `/health/*` is @Public() and the redis
+   * indicator's message is the ioredis `connect ECONNREFUSED <host>:<port>`. Hence check names, in
+   * the ONE published `errors` shape (objects, API_CONVENTIONS §4 and all 24 api-contract yamls).
+   */
+  it('M-c3 / ADR-0043: the 503 body names the failed check and leaks no driver string', async () => {
+    const res = await request(server()).get('/health/ready');
+    expect(res.status).toBe(503);
+    expect(res.body.errors).toEqual([{ field: 'redis', message: 'down' }]); // postgres is up
+    expect(res.body.detail).toBe('One or more dependencies are unavailable.');
+
+    // Nothing from the driver, the topology, or Terminus' raw report may ride along.
+    const serialised = JSON.stringify(res.body);
+    expect(serialised).not.toContain('6399'); // the dead Redis port
+    expect(serialised).not.toContain('127.0.0.1');
+    expect(serialised).not.toContain('ECONNREFUSED');
+    expect(res.body.info).toBeUndefined();
+    expect(res.body.details).toBeUndefined();
+    expect(res.body.error).toBeUndefined();
+  }, 20_000);
+
+  /**
+   * ADR-0043 axis CONSTANT DETAIL — over the REAL wire, with a REAL unreachable endpoint
+   * (`127.0.0.1:6399`) in the driver's hands: no port digit and no host may appear anywhere in the
+   * body. Swept by SHAPE over the whole serialised document rather than by known field, because the
+   * `detail`/`message` constants will one day tempt somebody into
+   * `` `...unavailable: ${host}:${port}` `` — and the temptation must hit a red suite regardless of
+   * which member it is spelled into.
+   */
+  it('M-c3 / ADR-0043: no port digits, no host, no endpoint shape anywhere in the 503 body', async () => {
+    const res = await request(server()).get('/health/ready');
+    expect(res.status).toBe(503);
+    const serialised = JSON.stringify(res.body);
+
+    const shapes: ReadonlyArray<readonly [string, RegExp]> = [
+      ['IPv4 literal', /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/],
+      ['host:port token', /[A-Za-z0-9._-]+:\d{2,5}(?!\d)/],
+      ['URL scheme', /\b[a-z][a-z0-9+.-]*:\/\//i],
+      ['userinfo@host', /[A-Za-z0-9._-]+@[A-Za-z0-9._-]+/],
+      ['bracketed IPv6', /\[[0-9a-fA-F:]+\]/],
+    ];
+    for (const [name, shape] of shapes) {
+      expect({ shape: name, hit: shape.exec(serialised)?.[0] ?? null }).toEqual({
+        shape: name,
+        hit: null,
+      });
+    }
+    // Negative control: the sweep is not vacuous — it DOES catch the template it exists to forbid.
+    const tomorrow = JSON.stringify({ ...res.body, detail: 'unavailable: redis at 10.0.0.5:6399' });
+    expect(shapes.some(([, shape]) => shape.test(tomorrow))).toBe(true);
   }, 20_000);
 
   it('M-c3: the 503 is diagnosed correctly — postgres up, redis down', async () => {
