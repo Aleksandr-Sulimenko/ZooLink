@@ -1,0 +1,49 @@
+# zoolink seed-parity known-divergence registry v1
+#
+# ── WHAT this file is ──────────────────────────────────────────────────────────────────────────────
+# The list of canon↔migration REFERENCE-VALUE disagreements that a ruling has DELIBERATELY allowed to
+# stand. `scripts/check-seed-parity.sh` reads it: a disagreement listed here is not a build failure,
+# a disagreement NOT listed here is RED.
+#
+# ── WHAT the gate measures against it ─────────────────────────────────────────────────────────────
+# The gate builds `canon + migrations` twice: once with the migrations' `ON CONFLICT … DO NOTHING`
+# intact (canon wins every shared key, which is what production gets) and once with every such clause
+# mechanically inverted to `DO UPDATE SET … = EXCLUDED.…` (the migration's own text wins). Two
+# databases whose row SETS are identical by construction and whose values differ in exactly one place:
+# where the two artefacts disagree and `DO NOTHING` was hiding it. That difference set is "reality".
+#
+# ── THIS FILE IS A TWO-SIDED CONTRACT — it protests when it goes stale ────────────────────────────
+# A list about a living system that is only ever checked in ONE direction rots into a lie that nobody
+# notices. So the gate asserts BOTH inclusions:
+#   reality ⊆ registry — a disagreement with no entry here is RED ("not declared in the registry").
+#   registry ⊆ reality — an entry here that no longer matches a real disagreement (someone fixed or
+#                        deleted it) is RED ("the registry has gone stale — delete this entry").
+# Consequence you must plan for: fixing a divergence WITHOUT deleting its entry turns the build RED.
+# That is the point. The entry is not an apology, it is a claim about the current tree.
+#
+# ── FORMAT (machine-read; no per-table column knowledge anywhere) ─────────────────────────────────
+#   table|key|column|verdict|reason
+#     table   — the reference table, lowercase, unqualified (no `public.`).
+#     key     — the row's NATURAL key value. Multi-column keys are joined with ':' in the order the
+#               table's unique index declares them (e.g. notification_templates → `name:type:language`,
+#               health_certifications → `market:code`). The gate DISCOVERS that key from the live
+#               catalog (smallest unique index that contains no surrogate `id`/uuid column), so this
+#               file never encodes a table's shape and cannot drift from it.
+#     column  — the single disagreeing column.
+#     verdict — WHO allowed it and WHEN. Required; an entry without it is a config error (exit 2).
+#     reason  — WHY it is allowed, ≥20 chars, and it must name the other artefact. Required. A month
+#               from now this sentence is the only thing standing between the entry and a cargo cult.
+#   `#` comments and blank lines are ignored. The first non-blank line MUST be the version line above:
+#   an empty or truncated file therefore fails LOUDLY (exit 2) instead of reading as "nothing known".
+#   "Zero known divergences" is expressed by the header line with NO entries under it.
+#
+# ── HOW TO ADD an entry ───────────────────────────────────────────────────────────────────────────
+# Do not add one to silence a red build. The default fix for a canon↔migration disagreement is to make
+# the CANON right (database_schema.sql is the source of truth for seed data) and leave the applied
+# migration untouched (ADR-0007). An entry belongs here only when the disagreement is a text-only
+# artefact of history that provably cannot reach a database, and someone with the authority to say so
+# has said so — in the `verdict` field, with a date.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+feature_toggles|agent_service_auth|description|architect-holder verdict 2026-08-08 (ADR-0007: applied migrations are immutable)|migrations/20260709_0038_agent_auth.sql carries an EARLIER draft of this description; database_schema.sql carries the canonical text. The migration's copy can never land: the canon runs FIRST on both bootstrap paths and the migration's INSERT is ON CONFLICT (key) DO NOTHING, so it is a no-op on the only orderings that exist. is_enabled and rollout_percentage agree, so nothing functional diverges. Verdict: the canon is canonical — the structural argument is that the migration set is deliberately NOT seed-self-sufficient (migration 0010 inserts notification_templates whose language FK needs supported_languages rows that only the canon has at that point, 0010 < 0011), so "replay the migrations alone" is not a supported path and the migration text is not a competing source of truth.
+feature_toggles|sale_buyer_confirmation|description|architect-holder verdict 2026-08-08 (ADR-0007: applied migrations are immutable)|migrations/20260710_0039_confirmed_sales.sql carries a description with an extra spec anchor ("spec 18 §4 anchor=LISTING_MARK_SOLD") that the canon's copy does not repeat; the canon carries the canonical text. Same mechanism as agent_service_auth above: canon first + ON CONFLICT (key) DO NOTHING means the migration's text never reaches any database, is_enabled and rollout_percentage agree, nothing functional diverges. Editing the applied migration to match is forbidden (ADR-0007), so the divergence is declared here rather than dissolved.

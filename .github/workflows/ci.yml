@@ -296,8 +296,23 @@ jobs:
   # Both lists it needs are DERIVED, never hand-maintained: the seed-file list is extracted from
   # seed.ts's SEED_FILES, the seeded-table list from the `INSERT INTO` statements in canon + migrations
   # (so a new reference table is covered the moment it is seeded — no registry to forget).
-  # SELF-TESTED in the same job: the second step re-runs the gate against a canon copy with one seed
-  # row deleted and requires it to go RED, so "green gate" can never silently mean "gate cannot fail".
+  # It ALSO compares values the two artefacts BOTH carry but carry DIFFERENTLY — a class no row diff can
+  # see, because `ON CONFLICT DO NOTHING` + canon-runs-first means the migration's text never lands in
+  # ANY database. The gate replays the migrations a second time with each conflict clause mechanically
+  # rewritten to DO UPDATE (column list taken from the INSERT itself, so no per-table knowledge), which
+  # inverts who wins and makes the disagreement observable. Divergences that are DELIBERATE are declared
+  # in scripts/seed-parity-known-divergences.txt, which the gate READS as a TWO-SIDED contract: a
+  # divergence missing from the registry is RED, and a registry entry no longer matching reality is ALSO
+  # RED ("stale") — so the file cannot rot into a forgotten allow-list that silences a real drift.
+  # SELF-TESTED in the same job: the second step runs FOUR mutants and requires each to go RED with its
+  # own evidence, not merely a non-zero exit — M1 a canon copy missing one seed row (row check), M2 a new
+  # undeclared value divergence (artefact check), M3 a stale registry entry, M4 an unusable registry
+  # (exit 2 = INCONCLUSIVE, never a verdict). So "green gate" can never silently mean "gate cannot fail",
+  # and the registry cannot be used to shut up a red build.
+  # DECLARED BLIND SPOT (printed by the gate itself in EVERY outcome): a reference row living ONLY in the
+  # canon cancels out on both sides and stays green — one-sidedness BY CONSTRUCTION (a migrations-only
+  # path cannot converge: 0010 needs supported_languages rows that 0011 seeds), so it is named, not fixed
+  # here. Same for inserts deduplicated with WHERE NOT EXISTS instead of ON CONFLICT (today: cities).
   seed-parity:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -321,7 +336,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Seed↔canon parity — Path-1 (canon+seed) vs Path-2 (canon+migrations+seed)
         run: bash scripts/check-seed-parity.sh
-      - name: MUTATION PROOF — the same gate must RED on a canon missing one seed row
+      - name: MUTATION PROOF — four mutants, each must RED with its own evidence (row loss / new divergence / stale registry / unusable registry)
         run: SEED_PARITY_SELFTEST=1 bash scripts/check-seed-parity.sh
 
   # Ageing-volume convergence gate. BLOCKING.

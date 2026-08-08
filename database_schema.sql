@@ -1008,8 +1008,14 @@ INSERT INTO feature_toggles (key, description, is_enabled, rollout_percentage) V
 -- migration 0027 (GAP-BA-011): gate FORM for the Phase-2 goods marketplace (аксессуары/корма/товары); behaviour deferred. Off in MVP.
 ('goods_marketplace', 'Маркетплейс товаров (аксессуары, корма, ветпрепараты и т.п.) — форма гейта заведена, поведение отложено до Фазы 2+ (GAP-BA-011). Выключено в MVP.', false, 0),
 -- migration 0038 (ADR-0036 §6): master gate for agent service-auth (secret→AGENT JWT exchange). Off in MVP.
+-- The description below is the CANONICAL text; migration 0038 carries an outdated copy that never lands
+-- (canon runs first on both bootstrap paths + ON CONFLICT DO NOTHING). Declared in
+-- scripts/seed-parity-known-divergences.txt — if you change this line, change that entry's reason too.
 ('agent_service_auth', 'Гейт агент-сервис-авторизации (ADR-0036): обмен человеко-выданного секрета service_credentials на короткоживущий AGENT JWT на POST /v1/auth/agent/token. Форма заведена, в MVP ВЫКЛЮЧЕНО.', false, 0),
 -- migration 0039 (ADR-0038 §4): gate FORM for the listing markSold buyer-counter-confirmation path. Off in MVP.
+-- The description below is the CANONICAL text; migration 0039 carries an outdated copy that never lands
+-- (canon runs first on both bootstrap paths + ON CONFLICT DO NOTHING). Declared in
+-- scripts/seed-parity-known-divergences.txt — if you change this line, change that entry's reason too.
 ('sale_buyer_confirmation', 'Гейт подтверждения сделки покупателем на пути listing markSold (ADR-0038 §4): продавец отмечает продано + номинирует покупателя → PENDING_CONFIRMATION → покупатель подтверждает → CONFIRMED. Форма заведена, поведение отложено — в MVP ВЫКЛЮЧЕНО (пассивно пишутся только авто-CONFIRMED строки с пути передачи владения).', false, 0),
 -- migration 0040 (ADR-0039 §6): master gate for review authoring/read/display + §4 erasure (also legal-gated). Off in MVP.
 ('reputation_reviews', 'Гейт репутации/отзывов (ADR-0039): авторство и чтение отзывов, double-blind раскрытие, отображение агрегата репутации, поведение стирания (§4, дополнительно под юридическим одобрением). Таблицы reviews/reputation_aggregates заведены спящими; в MVP ВЫКЛЮЧЕНО — эндпоинтов нет, пересчёта нет, поведение людей байт-в-байт прежнее.', false, 0)

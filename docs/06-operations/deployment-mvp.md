@@ -96,6 +96,15 @@ already-current one stays green). See `.github/workflows/ci.yml`.
 > database: a dev DB differs from the canon in column order, so the diff against it collapses — clean locally while CI,
 > which builds from the canon, stays RED. `npm run db:sync:check` is the same assertion CI makes.
 
+> **Reference data has a declared-divergence registry — `scripts/seed-parity-known-divergences.txt`.**
+> The `seed-parity` gate compares the reference DATA of both bootstrap paths, and also values the two
+> artefacts carry DIFFERENTLY (invisible in any database, because `ON CONFLICT DO NOTHING` + canon-first
+> means a migration's text never lands). A deliberate divergence must be DECLARED there, with a verdict
+> and a reason; the registry is a TWO-SIDED contract — an undeclared divergence is RED, and an entry that
+> no longer matches reality is ALSO RED ("stale"), so the file cannot rot into a forgotten allow-list.
+> If your change makes the gate red: either fix the artefacts, or add an entry and say WHY in it. Do not
+> silence the gate — its own output declares what it does and does NOT see (a row living only in the
+> canon), so an operator can tell a real green from a blind one.
 
 ## Backups & restore (MVP)
 - **Daily** logical backup (cron on host or `worker`):
