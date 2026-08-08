@@ -1,6 +1,12 @@
 /**
  * One-shot DB provisioner (compose `provision` service / `npm run db:provision`).
  *
+ * GATE-CONTRACT: MIGRATION_REPLAY=UNCONDITIONAL — asserted by scripts/check-dropped-column-reuse.js
+ *   (the dropped-name gate). Making this replay conditional invalidates that gate's rules: change both
+ *   together, via an ADR. That gate fails LOUD (exit 2) if this marker says anything other than
+ *   UNCONDITIONAL, and it also proves the property structurally — so this line is documentation of the
+ *   contract, not its only witness.
+ *
  * Brings a database — EMPTY **or ALREADY POPULATED AND STALE** — to the current canonical shape with
  * ZERO manual steps, mirroring the proven CI sequence:
  *   1. If the DB is empty (no `public.users`), apply the canonical `database_schema.sql`
