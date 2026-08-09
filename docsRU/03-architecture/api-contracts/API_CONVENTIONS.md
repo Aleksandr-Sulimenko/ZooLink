@@ -66,7 +66,9 @@ Problem:
 ```
 Стандартные `code`: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404),
 `CONFLICT` (409), `RATE_LIMITED` (429), `INTERNAL` (500), `UPSTREAM_UNAVAILABLE` (503). Доменные коды расширяют набор
-и перечислены в секции «Error Handling» каждой доменной спеки (см. `specs/error_handling/standard_error_format.md`).
+и перечислены в секции «Error Handling» каждой доменной спеки. (ВНИМАНИЕ: `specs/error_handling/standard_error_format.md`
+УСТАРЕЛ (superseded) с 09.08.2026 — он описывал вложенный конверт с числовыми кодами 4000–5999, которого код никогда
+не реализовывал; норма — §4 здесь плюс ADR-0043. Тот документ оставлен только как история.)
 Каждая операция документирует минимум `400, 401, 403, 404, 500` со ссылкой на `Problem` (публичные опускают 401/403).
 - **Claim/lock модерации (B10, `specs/12-moderation-domain.md`):** `ALREADY_CLAIMED` (409, claim на элементе с
   живым lock другого принципала), `NOT_LOCK_HOLDER` (409, release/decide не-держателем), `ITEM_NOT_CLAIMED`

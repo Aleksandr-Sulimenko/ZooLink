@@ -159,7 +159,10 @@ Moderation — **READY**-эталон AUDIT4 (agent-toggle + actor-снапшо�
 - **Позже (активация агента, P-A):** обмен [ADR-0036](0036-agent-credential-issuance.md) разрешает профиль credential и заполняет JWT scope-claim; щёлкнуть `agent_moderation`. **Без authz-переписывания** — шов уже там.
 - **Parity-тест (DoD):** abilities HUMAN-принципала без изменений на каждой роли (побайтово-идентичны до-ADR); AGENT с **null** scope разрешается в **никакие** abilities (deny-by-default); AGENT со scope `moderation-agent` разрешается **ровно** в `matrix(MODERATOR) ∩ scope`; AGENT с `role='ADMIN'` **никогда** не разрешается в `manage:all`.
 
-**PROPOSED-набросок схемы (этот ADR миграцию не пишет; backend реализует в agent-scope-slice):**
+**Схема — ПРИЗЕМЛЕНА миграцией 0038** (было: «PROPOSED-набросок схемы; этот ADR миграцию не пишет»).
+**СТАТУС ИСПРАВЛЕН 09.08.2026:** `agent_capability_profiles` и FK `service_credentials.capability_profile_id`
+живут в каноне вместе с засеянным профилем `moderation-agent`. Оставленный «набросок» приглашал написать
+ДУБЛЬ миграции по уже существующим объектам. Объекты названы ИМЕНАМИ, не номерами строк.
 ```sql
 -- Именованный, переиспользуемый least-privilege-набор abilities (решение владельца 2026-07-09: профили с самого начала).
 -- Словарь scope: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — никогда "manage"/"all"

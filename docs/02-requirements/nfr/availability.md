@@ -12,7 +12,10 @@ Referenced by `specs/14-payment-domain.md`, `specs/15-api-gateway-domain.md` and
 - Stateless API behind a reverse proxy; run ≥2 `api` replicas so a crash/redeploy is non-fatal.
 - Compose `restart: unless-stopped` + healthchecks (`/health/live`, `/health/ready`); unhealthy containers restart.
 - Graceful degradation: external-provider failures (SMS/email/maps/payment) must not crash core flows — queue,
-  retry with backoff, and surface a clear error (see `error_handling/standard_error_format.md`).
+  retry with backoff, and surface a clear error — the shape is RFC 7807 `Problem` per
+  `03-architecture/api-contracts/API_CONVENTIONS.md` §4 and ADR-0043 (a 503 names the failing checks in `errors`;
+  indicator strings stay in the log). The former reference to `error_handling/standard_error_format.md` pointed at a
+  format the code never implemented — that document is SUPERSEDED 2026-08-09.
 - Idempotency on write paths that touch external providers (payments) to survive retries.
 - Daily off-box backups (Yandex Object Storage); tested restore (see `06-operations/deployment-mvp.md`).
 

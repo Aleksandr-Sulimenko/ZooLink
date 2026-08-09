@@ -159,7 +159,10 @@ Per ADR-0022 / migration 0034 (dormant `user_roles` junction) and the cost-of-ch
 - **Later (agent activation, P-A):** the [ADR-0036](0036-agent-credential-issuance.md) exchange resolves the credential's profile and populates the JWT scope claim; flip `agent_moderation`. **No authz rewrite** — the seam is already there.
 - **Parity test (DoD):** a HUMAN principal's abilities are unchanged across every role (byte-identical to pre-ADR); an AGENT with **null** scope resolves to **no** abilities (deny-by-default); an AGENT with `moderation-agent` scope resolves to **exactly** `matrix(MODERATOR) ∩ scope`; an AGENT at `role='ADMIN'` **never** resolves `manage:all`.
 
-**PROPOSED schema sketch (this ADR writes no migration; backend implements in the agent-scope slice):**
+**Schema — REALISED in migration 0038** (was: «PROPOSED schema sketch; this ADR writes no migration»).
+**STATUS CORRECTED 2026-08-09:** `agent_capability_profiles` and the `service_credentials.capability_profile_id`
+FK exist in the canon, with the seeded `moderation-agent` profile. Left as a «sketch» the heading invited a
+DUPLICATE migration for objects that already exist. Objects are named below by NAME, not by line number.
 ```sql
 -- Named, reusable least-privilege ability set (owner decision 2026-07-09: profiles from the start).
 -- scope vocabulary: [{ "action": "read|create|update|delete", "subject": "<Subject>" }] — never "manage"/"all"

@@ -67,7 +67,9 @@ Problem:
 ```
 Standard `code` values: `VALIDATION_ERROR` (400), `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404),
 `CONFLICT` (409), `RATE_LIMITED` (429), `INTERNAL` (500), `UPSTREAM_UNAVAILABLE` (503). Domain-specific codes extend
-this set and are listed in each domain spec's "Error Handling" section (see `specs/error_handling/standard_error_format.md`).
+this set and are listed in each domain spec's "Error Handling" section. (NOTE: `specs/error_handling/standard_error_format.md`
+is SUPERSEDED as of 2026-08-09 — it described a nested envelope with numeric codes 4000–5999 that the code never
+implemented; §4 here plus ADR-0043 are the norm. It is kept only as history.)
 Every operation must document at least `400, 401, 403, 404, 500` referencing `Problem` (public ones omit 401/403).
 - **Moderation claim/lock (B10, `specs/12-moderation-domain.md`):** `ALREADY_CLAIMED` (409, claim on an item
   with another principal's live lock), `NOT_LOCK_HOLDER` (409, release/decide by a non-holder),

@@ -12,7 +12,10 @@
 - Stateless API за reverse proxy; ≥2 реплики `api`, чтобы краш/редеплой был не фатален.
 - Compose `restart: unless-stopped` + healthcheck (`/health/live`, `/health/ready`); нездоровые контейнеры перезапускаются.
 - Грациозная деградация: сбой внешних провайдеров (SMS/email/карты/платежи) не должен ронять основные потоки —
-  очередь, ретраи с backoff, понятная ошибка (см. `error_handling/standard_error_format.md`).
+  очередь, ретраи с backoff, понятная ошибка — форма RFC 7807 `Problem` по
+  `03-architecture/api-contracts/API_CONVENTIONS.md` §4 и ADR-0043 (в 503 упавшие проверки названы в `errors`;
+  строки индикаторов остаются в логе). Прежняя ссылка на `error_handling/standard_error_format.md` вела к формату,
+  которого код никогда не реализовывал — тот документ УСТАРЕЛ (superseded) 09.08.2026.
 - Идемпотентность на write-путях с внешними провайдерами (платежи) для устойчивости к ретраям.
 - Ежедневные off-box бэкапы (Yandex Object Storage); протестированное восстановление (см. `06-operations/deployment-mvp.md`).
 

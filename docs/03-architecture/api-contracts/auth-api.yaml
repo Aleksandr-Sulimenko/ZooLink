@@ -60,7 +60,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -69,7 +69,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -98,7 +98,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -153,7 +153,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth); refresh token is NEVER in the body (AUDIT3 #2)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResponse' }
@@ -390,7 +390,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: New HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth)
+              description: New HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccessTokenResponse' }
@@ -561,7 +561,7 @@ paths:
           headers:
             Set-Cookie:
               schema: { type: string }
-              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/v1/auth)
+              description: HttpOnly+Secure+SameSite=Strict refresh_token cookie (Path=/api/v1/auth)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccessTokenResponse' }

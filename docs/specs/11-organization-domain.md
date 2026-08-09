@@ -499,7 +499,10 @@ Feature: Listing Attribution to Organizations
 7. Geocoding validation for addresses uses external service (Yandex.Maps API as specified in tech stack)
 8. The metadata JSONB field follows a predefined schema for known extensions (subscription tiers, etc.)
 9. Organization archival process anonymizes personal data in compliance with 152-ФЗ but maintains audit trail
-10. The system will use the same error handling format as defined in error_handling/standard_error_format.md
+10. The system will use the same error handling format as the rest of the API: RFC 7807 `Problem` per
+    `03-architecture/api-contracts/API_CONVENTIONS.md` §4 and ADR-0043. (The old pointer to
+    `error_handling/standard_error_format.md` is SUPERSEDED 2026-08-09 — that document described a format the
+    code never implemented.)
 
 ### Open Questions
 1. What is the exact format and validation rules for the metadata JSONB field? Should we define a JSON schema for extensibility?

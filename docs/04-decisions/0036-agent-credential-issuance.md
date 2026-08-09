@@ -169,7 +169,15 @@ Per the cost-of-change rule (AUDIT4 §4c #4: cheapest before Admin Slice 2), the
 
 ---
 
-## §7 — Proposed schema extension (PROPOSED sketch only — this ADR writes no migration)
+## §7 — Schema extension — REALISED in migration 0038 (was: «PROPOSED sketch only, this ADR writes no migration»)
+
+> **STATUS CORRECTED 2026-08-09.** The heading said this ADR writes no migration, while the columns had
+> ALREADY landed: `service_credentials.issued_by`, `.last_used_at`, `.expires_at` (see the canon's own
+> comment «ADR-0036 §7 (migration 0038)» beside them). The risk was concrete, not cosmetic: the next
+> engineer, reading the heading literally, would write a DUPLICATE migration for the same objects. The
+> code knew the decision had landed; the document did not — the same class as a contract that kept
+> advertising an old cookie Path after the code moved. Addressed by CONSTRAINT/COLUMN NAMES below rather
+> than line numbers, because line anchors rot silently.
 
 The 0017 table already carries the core lifecycle (`secret_hash`, `is_active`, `revoked_at`, `rotated_from`, FK RESTRICT). The following **additive, nullable, idempotent** columns are needed for accountability-of-record and operability. Backend-engineer implements them in the agent-auth slice per `IMPLEMENTATION_PLAYBOOK.md §3` (edit `database_schema.sql` + new idempotent migration `migrations/YYYYMMDD_NNNN_*.sql` + `ZooLink_ERD.mmd` + `data-model.md` + table-count in both `CLAUDE.md`; run twice on live PG; negative tests; `npm run db:sync`).
 

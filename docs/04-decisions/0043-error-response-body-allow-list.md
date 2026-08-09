@@ -1,7 +1,11 @@
 # ADR-0043: Error response body — what the normalizer carries and what it strips
 
-**Status**: Proposed
-**Date**: 2026-08-08
+**Status**: Accepted
+**Date**: 2026-08-08 (Proposed → **Accepted** 2026-08-09: пять мест канона уже
+ссылаются на этот ADR как на НОРМУ внешнего контракта — `API_CONVENTIONS.md:72`, `nfr/availability.md:16`,
+`specs/11-organization-domain.md:503` и оба RU-зеркала. Документ, на который ссылаются как на норму, не может
+оставаться «предложением»; радиус подтверждён обходом AST: из 218 сайтов `new *Exception({…})` вне allow-list
+только 8, все в spec-файлах, продовых ноль.)
 
 > Authored by the agent-os architect (holder) because two packs waited on it: the health-503 diagnostics
 > mini-pack and the `problem.filter` seam. Implemented by the zoolink track. RU mirror:
