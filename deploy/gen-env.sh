@@ -197,6 +197,9 @@ LAYOUT=(
   "# METRICS_TOKEN is REQUIRED in production (>=16): without it MetricsGuard falls back to trusting"
   "# req.ip, and behind Caddy every client looks internal — /metrics would be world-readable."
   "@METRICS_TOKEN"
+  "# SENTRY_DSN empty = error reporting off (default). If set, the ingest HOST must be self-hosted"
+  "# (localhost/private/compose service name) or an RF domain (.ru/.su) — ADR-0017 п.6 / ФЗ-152"
+  "# ст.18 ч.5: stack traces carry PII. A foreign ingest (*.ingest.sentry.io) is refused at boot."
   "@SENTRY_DSN"
   "@LOG_LEVEL"
 )

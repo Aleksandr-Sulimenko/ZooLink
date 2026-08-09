@@ -11,10 +11,15 @@ import { installProcessGuards } from './lib/observability/process-guards';
 import { Sentry, initSentry } from './lib/observability/sentry';
 
 async function bootstrap(): Promise<void> {
-  // Sentry must initialize before anything else can throw. Reads raw env (validated inside Nest).
+  // Sentry must initialize before anything else can throw, so it reads RAW env — this runs BEFORE
+  // validateEnv. initSentry therefore carries its own ADR-0017 п.6 residency check on the DSN host
+  // (a boot-time-only check would arrive after the first report had already been shipped abroad).
+  // NODE_ENV defaults to 'production' here for the same fail-SAFE reason as in env.validation.ts: an
+  // unset NODE_ENV must not silently unlock the dev residency bypass on the more permissive path.
   initSentry({
     SENTRY_DSN: process.env.SENTRY_DSN ?? '',
-    NODE_ENV: (process.env.NODE_ENV as 'development' | 'test' | 'production') ?? 'development',
+    NODE_ENV: (process.env.NODE_ENV as 'development' | 'test' | 'production') ?? 'production',
+    RESIDENCY_ALLOW_NON_RF_DEV: process.env.RESIDENCY_ALLOW_NON_RF_DEV === 'true',
   });
 
   // Installed BEFORE bootstrap so a rejection during startup is reported instead of killing the

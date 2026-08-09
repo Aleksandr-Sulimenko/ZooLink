@@ -25,6 +25,134 @@ export function isRfRegion(value: string): boolean {
 }
 
 /**
+ * ADR-0017 clause 6 (PII-bearing log/observability sinks are RF-resident) — the SINGLE canonical
+ * allowlist of DNS suffixes an ERROR/TELEMETRY INGEST host may carry. Same shape and same role as
+ * RF_ALLOWED_REGIONS above: a code constant, NOT an env var, and layer 2 (the CI residency gate)
+ * parses THIS list so the two can never diverge.
+ *
+ * WHY a code constant and not a `SENTRY_ALLOWED_HOSTS` env var: the thing being guarded and the
+ * guard would then live in the SAME file. Whoever edits `.env` to point the DSN at a foreign ingest
+ * edits the allowlist in the next line — a guard the attacker/operator can widen is not a guard, and
+ * the CI gate (which reads env files) would read the widened list as authoritative. RF_ALLOWED_REGIONS
+ * is deliberately un-overridable for exactly this reason; the DSN rule is symmetric.
+ *
+ * A `.ru` domain is no more proof of physical location than a region string is (same caveat as
+ * RF_ALLOWED_REGIONS) — it is a config-hygiene guard layered on top of the provider choice, and its
+ * real job is to make the one realistic accident impossible: pasting a foreign Sentry-SaaS ingest
+ * (`*.ingest.sentry.io`) into `.env`, which ships stack traces — and the PII inside them — abroad.
+ * `.рф` is listed in both its Unicode and punycode form because `new URL()` normalises to punycode
+ * while the CI gate matches the raw text of a config file.
+ */
+export const RF_ALLOWED_TELEMETRY_HOST_SUFFIXES = [
+  '.ru',
+  '.su',
+  '.рф',
+  '.xn--p1ai',
+] as const;
+
+/**
+ * True when `host` is a telemetry sink we can treat as RF-resident (ADR-0017 п.6). Fail-CLOSED:
+ * anything not positively recognised is rejected. Three accepted shapes:
+ *
+ *  1. **Self-hosted / non-routable** — loopback, RFC1918 / IPv6-ULA / link-local literals, and
+ *     single-label hostnames (`sentry`, the compose/k8s service name; a dotless name cannot be a
+ *     public FQDN, so it is by construction inside our own network).
+ *  2. **An RF domain** — one of RF_ALLOWED_TELEMETRY_HOST_SUFFIXES.
+ *  3. Nothing else. In particular any OTHER IP literal is rejected: a bare public IP is exactly
+ *     the form in which residency cannot be checked at all.
+ */
+export function isResidentTelemetryHost(rawHost: string): boolean {
+  const host = rawHost
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, '')
+    .replace(/\]$/, '')
+    .replace(/\.$/, '');
+  if (host === '') return false;
+
+  // Loopback by name.
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+
+  // IPv6 literal (checked BEFORE the suffix rules: `fd…`/`fc…` prefixes must never be tested
+  // against a DNS name like `fdservice.com`).
+  if (host.includes(':')) {
+    if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+    if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true; // fc00::/7 unique-local
+    if (/^fe80:/.test(host)) return true; // link-local
+    return false; // any other IPv6 literal — location unverifiable
+  }
+
+  // IPv4 literal: only the private / loopback ranges count as self-hosted.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    if (a === 127) return true;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true; // link-local
+    return false;
+  }
+
+  // Single-label hostname → a container/LAN name, not publicly routable.
+  if (!host.includes('.')) return true;
+
+  return (RF_ALLOWED_TELEMETRY_HOST_SUFFIXES as readonly string[]).some((s) =>
+    host.endsWith(s),
+  );
+}
+
+/** Verdict of the DSN residency check. `host` is null when nothing parseable could be extracted. */
+export interface TelemetryDsnVerdict {
+  ok: boolean;
+  /** Ingest host, for the error message. NEVER the DSN itself (it carries a credential). */
+  host: string | null;
+  reason: 'disabled' | 'resident' | 'unparseable' | 'non-rf-host';
+}
+
+/**
+ * ADR-0017 п.6 gate for a Sentry-style DSN (`https://<publicKey>@<host>[:port]/<projectId>`).
+ *
+ * Empty = the sink is DISABLED, which is lawful and is today's live configuration — that mode must
+ * keep working untouched (no-capability-regression). Non-empty is checked with a REAL URL parse, not
+ * a substring test: the DSN carries userinfo, so `https://key.ru@o0.ingest.sentry.io/1` would sail
+ * through any `includes('.ru')` check while shipping abroad. Unparseable is rejected too — a DSN
+ * whose host cannot be determined cannot be shown to be resident (fail-closed).
+ */
+export function checkTelemetryDsn(dsn: string): TelemetryDsnVerdict {
+  const value = dsn.trim();
+  if (value === '') return { ok: true, host: null, reason: 'disabled' };
+  let host: string;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return { ok: false, host: null, reason: 'unparseable' };
+    }
+    host = url.hostname;
+  } catch {
+    return { ok: false, host: null, reason: 'unparseable' };
+  }
+  if (host === '') return { ok: false, host: null, reason: 'unparseable' };
+  return isResidentTelemetryHost(host)
+    ? { ok: true, host, reason: 'resident' }
+    : { ok: false, host, reason: 'non-rf-host' };
+}
+
+/** Boot/init error text for a rejected DSN. Prints the HOST only, never the DSN (credential). */
+export function telemetryDsnRejectionMessage(
+  verdict: TelemetryDsnVerdict,
+): string {
+  const allowed = (RF_ALLOWED_TELEMETRY_HOST_SUFFIXES as readonly string[])
+    .filter((s) => !s.startsWith('.xn--'))
+    .join(', ');
+  if (verdict.reason === 'unparseable') {
+    return `SENTRY_DSN is set but no http(s) ingest host could be parsed from it — refusing (fail-closed): an unverifiable error sink cannot be shown to be RF-resident (ADR-0017 п.6 / ФЗ-152 ст.18 ч.5). Leave SENTRY_DSN empty to disable error reporting.`;
+  }
+  return `error-sink host "${verdict.host ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.6 / ФЗ-152 ст.18 ч.5) — stack traces and error context carry PII, so the ingest must be self-hosted (loopback / private address / single-label service name) or under an RF domain (${allowed}). An empty SENTRY_DSN disables error reporting and is permitted. A non-RF sink is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
+}
+
+/**
  * Canonical environment contract. Mirrors ../.env.example (ADR-0008 provider choices).
  * Fail-fast: the process must not boot with a missing/invalid required variable.
  */
@@ -179,6 +307,13 @@ export const envSchema = z.object({
   // + route/label cardinality) would be effectively world-readable. Requiring the token in prod closes
   // the D8-gate 🟡 (AUDIT3 security.md). If set anywhere, must be ≥16 (a too-short token is a boot error).
   METRICS_TOKEN: z.string().min(16).optional().or(z.literal('')),
+  // Error-sink DSN. EMPTY (the default, and today's live value) = Sentry disabled — a lawful mode
+  // that stays lawful. When set, the ingest HOST is residency-checked by the .superRefine below
+  // (ADR-0017 п.6): a stack trace is PII-bearing observability data, so a foreign ingest
+  // (`*.ingest.sentry.io`) would export РФ-citizen PII across the border under ФЗ-152 ст.18 ч.5.
+  // Enforced in TWO places on purpose: here (boot-blocking) AND inside initSentry, because main.ts
+  // initialises Sentry from raw process.env BEFORE Nest — and therefore before this validator — so a
+  // boot-time-only check would still let the very "invalid env" report be shipped abroad.
   SENTRY_DSN: z.string().optional().default(''),
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
@@ -188,7 +323,9 @@ export const envSchema = z.object({
   // today; managed-PG / replica / backup / DR / log-sink region vars in future) and reject any
   // value outside RF_ALLOWED_REGIONS. Aggregates into the same boot-blocking error report as the
   // rest of the schema. The dev bypass applies ONLY outside production (residency is unconditional
-  // in prod). Non-string values (there are none today) are skipped defensively.
+  // in prod). Non-string values (there are none today) are skipped defensively. The same block also
+  // enforces clause 6 of the ADR — the PII-bearing observability sink (SENTRY_DSN host) — so both
+  // "where data is stored" and "where errors are shipped" are gated by one boot-blocking report.
   .superRefine((val, ctx) => {
     const devBypass =
       val.NODE_ENV !== 'production' && val.RESIDENCY_ALLOW_NON_RF_DEV === true;
@@ -201,6 +338,23 @@ export const envSchema = z.object({
         message: `"${raw}" is not an approved RF region (ADR-0017 / ФЗ-152 ст.18 ч.5). Allowed: ${RF_ALLOWED_REGIONS.join(
           ', ',
         )}. A non-RF region is permitted only in dev with RESIDENCY_ALLOW_NON_RF_DEV=true.`,
+      });
+    }
+
+    // ADR-0017 clause 6 — the PII-bearing observability sink. A region string is not the only way
+    // data leaves the country: SENTRY_DSN names a HOST, and stack traces carry PII. Empty = sink
+    // disabled (allowed). Same dev-bypass discipline as the region rule; in production the bypass is
+    // IGNORED, because residency there is unconditional. An unparseable DSN is rejected in EVERY
+    // environment (a host we cannot read is a host we cannot clear).
+    const dsnVerdict = checkTelemetryDsn(val.SENTRY_DSN);
+    if (
+      !dsnVerdict.ok &&
+      !(dsnVerdict.reason === 'non-rf-host' && devBypass)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SENTRY_DSN'],
+        message: telemetryDsnRejectionMessage(dsnVerdict),
       });
     }
   });

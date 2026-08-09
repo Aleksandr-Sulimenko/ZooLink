@@ -112,6 +112,12 @@ Three complementary guards enforce clause 8. All three read **one canonical RF-r
 
 Guard chain: **runbook (documented) → CI (pre-deploy) → boot refine (runtime)** — defense in depth, single allowlist.
 
+### Clause 6 — how the observability sink is closed (implemented 2026-08-09, security)
+Clause 6 was **not** covered by (a)/(b) above: they scan region-bearing values, and the error sink is named by a **host**, not a region — so `SENTRY_DSN=https://<key>@o0.ingest.sentry.io/1` carried no `*_REGION` and no foreign-region token, and all three layers reported green while stack traces (PII-bearing) shipped abroad. Now closed by:
+- **`SENTRY_DSN` host allowlist in `backend/src/config/env.validation.ts`** — canonical constant `RF_ALLOWED_TELEMETRY_HOST_SUFFIXES` (a code constant, deliberately **not** an env var: an allowlist the same `.env` could widen is not a guard). Empty DSN = sink disabled (permitted). Non-empty must resolve, by a **real URL parse** (the DSN's public key sits before the host, so substring checks are trivially defeated), to a self-hosted host (loopback / RFC1918 / IPv6-ULA / single-label service name) or an RF domain — otherwise the boot is blocked. Unparseable is rejected too (fail-closed). `RESIDENCY_ALLOW_NON_RF_DEV` relaxes it outside production only; in production it is ignored, as in the region rule.
+- **Enforced a second time inside `initSentry` (`lib/observability/sentry.ts`)** — `main.ts` initialises Sentry from raw `process.env` **before** Nest, hence before the validator; a boot-only check would arrive after the very "invalid residency config" report had been delivered to the foreign ingest by the process guard.
+- **CI gate `scripts/check-rf-residency.sh`** — new axis (3) reads the same constant and fails on a non-RF or unparseable DSN, so layer 2 can no longer be green while layer 1 would refuse.
+
 ## Related Decisions
 - **ADR-0008** — RF-appropriate provider matrix (this ADR adds residency).
 - **ADR-0012** — PII-at-rest encryption (complementary: where vs how-protected).

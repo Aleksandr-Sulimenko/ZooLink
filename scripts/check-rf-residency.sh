@@ -6,9 +6,13 @@
 # and — as they are added — managed-PG / replica / backup / DR-failover / PII-bearing log-sink
 # region vars), plus any foreign cloud-region token embedded in an endpoint/host.
 #
-# SINGLE SOURCE OF TRUTH: the allowlist is extracted from backend/src/config/env.validation.ts
-# (the RF_ALLOWED_REGIONS constant) so the runtime refine (layer 1) and this CI gate (layer 2)
-# can never diverge. Runnable locally exactly as CI runs it: `bash scripts/check-rf-residency.sh`.
+# It ALSO fails on a non-RF error/telemetry INGEST HOST (clause 6): `SENTRY_DSN` carries no region
+# string at all, so the region axes above are blind to it while it ships PII-bearing stack traces
+# abroad — the exact "three green layers, data still leaves" hole this axis closes.
+#
+# SINGLE SOURCE OF TRUTH: both allowlists are extracted from backend/src/config/env.validation.ts
+# (RF_ALLOWED_REGIONS and RF_ALLOWED_TELEMETRY_HOST_SUFFIXES) so the runtime refine (layer 1) and
+# this CI gate (layer 2) can never diverge. Runnable locally exactly as CI runs it: `bash scripts/check-rf-residency.sh`.
 #
 # Layers: runbook pin (doc) -> THIS CI gate (pre-deploy) -> boot refine (runtime). Defense in depth.
 set -euo pipefail
@@ -62,6 +66,75 @@ while IFS= read -r hit; do
   echo "::error file=$file::foreign cloud-region token in prod config: '$(echo "$content" | grep -oE "$foreign" | head -1)' (ADR-0017 — PII-bearing stores must be RF-resident)"
   fail=1
 done < <(grep -nHiE "$foreign" "${files[@]}" || true)
+
+# (3) ADR-0017 clause 6 — the PII-bearing observability sink. `SENTRY_DSN` names a HOST,
+#     not a region, so neither (1) nor (2) can see it: a foreign Sentry ingest
+#     (`https://<key>@o0.ingest.sentry.io/1`) contains no `*_REGION` and no `us-east-1` token, yet it
+#     ships stack traces — and the PII inside them — across the border. EMPTY value = sink disabled
+#     (lawful, and the MVP default). Allowlist comes from the SAME single source of truth as the
+#     regions: RF_ALLOWED_TELEMETRY_HOST_SUFFIXES in env.validation.ts.
+suffixes="$(sed -n '/RF_ALLOWED_TELEMETRY_HOST_SUFFIXES = \[/,/\]/p' "$env_validation" \
+            | grep -oE "'\.[^']+'" | tr -d "'" | sort -u)"
+[ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_TELEMETRY_HOST_SUFFIXES from $env_validation"; exit 2; }
+
+# Mirrors isResidentTelemetryHost() in env.validation.ts. Fail-closed: only positively-recognised
+# self-hosted (loopback / RFC1918 / IPv6-ULA / single-label service name) or RF-suffixed hosts pass.
+telemetry_host_ok() {
+  local h
+  h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  h="${h%.}"; h="${h#[}"; h="${h%]}"
+  [ -n "$h" ] || return 1
+  case "$h" in
+    localhost|*.localhost) return 0 ;;
+    ::1|0:0:0:0:0:0:0:1) return 0 ;;
+    f[cd]*:*|fe80:*) return 0 ;;
+    *:*) return 1 ;;                                        # any other IPv6 literal
+    127.*|10.*|192.168.*|169.254.*) return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+  esac
+  # Any other bare IPv4 literal: residency is unverifiable → refuse.
+  case "$h" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 1 ;; esac
+  case "$h" in *.*) ;; *) return 0 ;; esac                  # single-label = container/LAN name
+  while IFS= read -r sfx; do
+    case "$h" in *"$sfx") return 0 ;; esac
+  done <<<"$suffixes"
+  return 1
+}
+
+while IFS= read -r hit; do
+  file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
+  case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  value="$(printf '%s' "$content" \
+           | sed -E 's/.*SENTRY_DSN[[:space:]]*[:=][[:space:]]*//' \
+           | tr -d "\"'" | sed -E 's/[[:space:]].*$//')"
+  if [ -z "$value" ]; then
+    echo "  ok   $file: SENTRY_DSN empty (error sink disabled)"
+    continue
+  fi
+  # Fail-CLOSED on a value we cannot read as an http(s) DSN — mirrors the `unparseable` branch of
+  # checkTelemetryDsn(). Without this, a garbage value would fall through the single-label rule and
+  # the gate would go green on config the boot validator rejects (layer 1 / layer 2 divergence).
+  case "$value" in
+    http://*|https://*|HTTP://*|HTTPS://*) ;;
+    *)
+      echo "::error file=$file::SENTRY_DSN is set but is not a parseable http(s) DSN — refusing (fail-closed): an unverifiable error sink cannot be shown to be RF-resident (ADR-0017 п.6). Leave it empty to disable error reporting."
+      fail=1; continue ;;
+  esac
+  # Host only — never echo the DSN itself, it carries a credential. Real URL shape is honoured
+  # (scheme, then userinfo up to '@'), because the public key sits BEFORE the host in a DSN.
+  host="$(printf '%s' "$value" \
+          | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/@]*@##; s#[/?\#].*$##; s#:[0-9]+$##')"
+  if [ -z "$host" ]; then
+    echo "::error file=$file::SENTRY_DSN is set but no ingest host could be extracted — refusing (fail-closed, ADR-0017 п.6)."
+    fail=1; continue
+  fi
+  if telemetry_host_ok "$host"; then
+    echo "  ok   $file: SENTRY_DSN host=$host (RF-resident / self-hosted)"
+  else
+    echo "::error file=$file::error-sink host '$host' is NOT RF-resident (ADR-0017 п.6 / ФЗ-152 ст.18 ч.5) — stack traces carry PII. Allowed: self-hosted (loopback/private/single-label) or $(echo "$suffixes" | tr '\n' ' ')"
+    fail=1
+  fi
+done < <(grep -nHE '(^|[^A-Z0-9_])SENTRY_DSN[[:space:]]*[:=]' "${files[@]}" || true)
 
 if [ "$fail" -ne 0 ]; then
   echo "::error::RF data-residency gate FAILED — a non-RF region is configured for prod (ADR-0017)."
