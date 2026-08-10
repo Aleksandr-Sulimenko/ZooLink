@@ -1,9 +1,19 @@
 import {
   validateEnv,
   RF_ALLOWED_REGIONS,
+  RF_ALLOWED_HOST_SUFFIXES,
+  RF_ALLOWED_STORAGE_HOSTS,
+  RF_DATABASE_URL_SCHEMES,
+  RF_REDIS_URL_SCHEMES,
   isRfRegion,
   isResidentTelemetryHost,
+  isResidentStorageHost,
+  isResidentDataStoreHost,
   checkTelemetryDsn,
+  checkStorageEndpoint,
+  checkMediaCdnHost,
+  checkDatabaseUrl,
+  checkRedisUrl,
 } from './env.validation';
 
 /**
@@ -380,5 +390,608 @@ describe('validateEnv — /metrics token gate (production-required)', () => {
     const parsed = validateEnv({ ...prodBase, NODE_ENV: 'development' });
     expect(parsed.NODE_ENV).toBe('development');
     expect(parsed.METRICS_TOKEN).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-0017 clause 4 — the PII-bearing OBJECT STORE (`S3_ENDPOINT`) and the CDN in front of it
+ * (`MEDIA_CDN_HOST`). Third and fourth instance of ONE defect: the residency guardrail checks
+ * REGIONS while the data leaves by HOST. Measured red-before on 2026-08-09 — with
+ * `S3_REGION=ru-central1` untouched, `S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com` and
+ * `MEDIA_CDN_HOST=cdn.cloudflare.com` both booted cleanly AND the CI gate exited 0.
+ *
+ * `MEDIA_CDN_HOST` is the more dangerous of the two: its host is ADDED to the media-URL allowlist
+ * (lib/media/media-url.ts), so a foreign value both serves avatars (PII, ADR-0012) from abroad and
+ * widens the own-storage check that stops moderation-swap / latent SSRF.
+ */
+describe('validateEnv — object-storage & CDN residency (ADR-0017 п.4)', () => {
+  const prodBase = {
+    DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+    REDIS_URL: 'redis://localhost:6379',
+    S3_ENDPOINT: 'http://minio:9000',
+    S3_ACCESS_KEY: 'x',
+    S3_SECRET_KEY: 'x',
+    S3_BUCKET: 'b',
+    JWT_ACCESS_SECRET: 'a'.repeat(32),
+    JWT_REFRESH_SECRET: 'b'.repeat(32),
+    PHONE_HASH_PEPPER: 'c'.repeat(32),
+    PII_DATA_KEY: 'd'.repeat(32),
+    PII_BLIND_INDEX_KEY: 'e'.repeat(32),
+    AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+    METRICS_TOKEN: 'm'.repeat(16),
+    NODE_ENV: 'production',
+  };
+
+  // --- S3_ENDPOINT, axis 1: negative. A foreign bucket must stop the boot, and the message must be
+  // about RESIDENCY (an operator who reads "invalid URL" learns nothing and reaches for a workaround).
+  it.each([
+    'https://s3.us-west-004.backblazeb2.com', // the measured red-before value
+    'https://s3.amazonaws.com',
+    'https://s3.eu-central-1.wasabisys.com',
+    'https://storage.yandexcloud.net.evil.com', // look-alike: NOT a subdomain of the approved host
+  ])('THROWS at boot on a foreign S3_ENDPOINT %p in production', (endpoint) => {
+    expect(() => validateEnv({ ...prodBase, S3_ENDPOINT: endpoint })).toThrow(
+      /object-storage host .* is NOT RF-resident/,
+    );
+  });
+
+  it('names ADR-0017 п.4 and ФЗ-152 in the S3_ENDPOINT rejection, and does not leak credentials', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        S3_ENDPOINT: 'https://key:secret@s3.us-west-004.backblazeb2.com',
+      }),
+    ).toThrow(/ADR-0017 п\.4 \/ ФЗ-152 ст\.18 ч\.5/);
+    // The message must name the HOST, never the userinfo it was carrying.
+    try {
+      validateEnv({
+        ...prodBase,
+        S3_ENDPOINT: 'https://key:secret@s3.us-west-004.backblazeb2.com',
+      });
+      throw new Error('expected validateEnv to throw');
+    } catch (e) {
+      expect((e as Error).message).not.toContain('secret');
+    }
+  });
+
+  it('resolves the host by a REAL URL parse, not a substring test (userinfo cannot fake residency)', () => {
+    // `includes('.ru')` would pass this: the "ru.example.com" part is USERINFO; the host is evil.com.
+    expect(() =>
+      validateEnv({ ...prodBase, S3_ENDPOINT: 'https://ru.example.com@evil.com/' }),
+    ).toThrow(/object-storage host "evil\.com" is NOT RF-resident/);
+  });
+
+  // --- S3_ENDPOINT, axis 2: positive. Every shape a real deployment uses must still boot.
+  it.each([
+    'http://minio:9000', // docker-compose service name — the live dev/CI stand
+    'http://localhost:9000',
+    'http://10.0.0.5:9000', // RFC1918 self-hosted MinIO
+    'https://storage.yandexcloud.net', // ADR-0008 prod object storage (non-RF TLD, explicitly approved)
+    'https://zoolink-media.storage.yandexcloud.net', // virtual-host bucket form of the same provider
+    'https://s3.storage.selcloud.ru', // an RF-domain provider, covered by the suffix rule
+  ])('boots in production with an approved S3_ENDPOINT %p', (endpoint) => {
+    expect(() =>
+      validateEnv({ ...prodBase, S3_ENDPOINT: endpoint }),
+    ).not.toThrow();
+  });
+
+  // --- S3_ENDPOINT, axis 3: fail-closed on anything unreadable. There is NO lawful "empty" mode —
+  // the app cannot store media without a bucket — so empty is an error, not a "disabled" state.
+  it.each([
+    'ftp://s3.example.com', // z.string().url() accepted ANY scheme — measured red-before
+    's3://bucket',
+    'file:///tmp/bucket',
+  ])('THROWS at boot on a non-http(s) S3_ENDPOINT %p (fail-closed)', (endpoint) => {
+    expect(() => validateEnv({ ...prodBase, S3_ENDPOINT: endpoint })).toThrow(
+      /Invalid environment configuration/,
+    );
+  });
+
+  it('rejects a bare public IP endpoint (residency is unverifiable for it)', () => {
+    expect(() =>
+      validateEnv({ ...prodBase, S3_ENDPOINT: 'http://203.0.113.7:9000' }),
+    ).toThrow(/object-storage host "203\.0\.113\.7" is NOT RF-resident/);
+  });
+
+  // --- S3_ENDPOINT, axis 4: the dev escape hatch, and its absence in production.
+  it('allows a foreign S3_ENDPOINT in dev ONLY under RESIDENCY_ALLOW_NON_RF_DEV', () => {
+    const foreign = 'https://s3.us-west-004.backblazeb2.com';
+    expect(() =>
+      validateEnv({ ...prodBase, NODE_ENV: 'development', S3_ENDPOINT: foreign }),
+    ).toThrow(/object-storage host .* is NOT RF-resident/);
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        S3_ENDPOINT: foreign,
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).not.toThrow();
+  });
+
+  it('IGNORES the dev bypass for S3_ENDPOINT in production (residency is unconditional there)', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        S3_ENDPOINT: 'https://s3.us-west-004.backblazeb2.com',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/object-storage host .* is NOT RF-resident/);
+  });
+
+  it('never lets the dev bypass rescue an UNPARSEABLE S3_ENDPOINT', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        S3_ENDPOINT: 'ftp://s3.example.com',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/Invalid environment configuration/);
+  });
+
+  // --- MEDIA_CDN_HOST, axis 1: negative.
+  it.each([
+    'cdn.cloudflare.com', // the measured red-before value
+    'd1234abcd.cloudfront.net',
+    'zoolink.b-cdn.net',
+    'foo.ru.evil.com', // a `.ru` label that is NOT the TLD — endsWith is the right test
+  ])('THROWS at boot on a foreign MEDIA_CDN_HOST %p in production', (host) => {
+    expect(() => validateEnv({ ...prodBase, MEDIA_CDN_HOST: host })).toThrow(
+      /media CDN host .* is NOT RF-resident/,
+    );
+  });
+
+  it('explains WHY the CDN host matters (it is added to the media-URL allowlist)', () => {
+    expect(() =>
+      validateEnv({ ...prodBase, MEDIA_CDN_HOST: 'cdn.cloudflare.com' }),
+    ).toThrow(/ADDED to the media-URL allowlist/);
+  });
+
+  // --- MEDIA_CDN_HOST, axis 2: positive-1 — empty is a LAWFUL mode (no CDN) and is today's live
+  // value in .env.example. This is the no-capability-regression axis for the variable.
+  it('boots with an EMPTY MEDIA_CDN_HOST (no CDN — the lawful documented default)', () => {
+    const parsed = validateEnv({ ...prodBase, MEDIA_CDN_HOST: '' });
+    expect(parsed.MEDIA_CDN_HOST).toBe('');
+  });
+
+  it('boots when MEDIA_CDN_HOST is omitted entirely (schema default)', () => {
+    const parsed = validateEnv({ ...prodBase });
+    expect(parsed.MEDIA_CDN_HOST).toBe('');
+  });
+
+  // --- MEDIA_CDN_HOST, axis 3: positive-2 — approved hosts.
+  it.each([
+    'cdn.zoolink.ru', // the value .env.example documents
+    'CDN.ZooLink.RU', // case-insensitive
+    'cdn.zoolink.ru:8443', // host[:port] — the media allowlist compares host INCLUDING port
+    'media.zoolink.su',
+    'storage.yandexcloud.net', // serving straight off the approved RF bucket
+    'minio', // single-label service name
+  ])('boots in production with an approved MEDIA_CDN_HOST %p', (host) => {
+    expect(() =>
+      validateEnv({ ...prodBase, MEDIA_CDN_HOST: host }),
+    ).not.toThrow();
+  });
+
+  // --- MEDIA_CDN_HOST, axis 4: form. It is a BARE host, so anything wearing a host's clothes is
+  // refused before the residency test — otherwise it would be a silently-unmatchable allowlist entry.
+  it.each([
+    'https://cdn.zoolink.ru', // a scheme is not part of a host
+    'evil.com/cdn.zoolink.ru',
+    'key@evil.com',
+    'evil.com%2f.ru',
+    'cdn.zoolink.ru cdn.evil.com',
+    ':9000',
+  ])('THROWS at boot on a malformed MEDIA_CDN_HOST %p (fail-closed)', (host) => {
+    expect(() => validateEnv({ ...prodBase, MEDIA_CDN_HOST: host })).toThrow(
+      /MEDIA_CDN_HOST must be a bare host\[:port\]/,
+    );
+  });
+
+  it('never lets the dev bypass rescue a MALFORMED MEDIA_CDN_HOST', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        MEDIA_CDN_HOST: 'https://cdn.zoolink.ru',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/MEDIA_CDN_HOST must be a bare host\[:port\]/);
+  });
+
+  it('allows a foreign MEDIA_CDN_HOST in dev ONLY under RESIDENCY_ALLOW_NON_RF_DEV, never in prod', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        MEDIA_CDN_HOST: 'cdn.cloudflare.com',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        MEDIA_CDN_HOST: 'cdn.cloudflare.com',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/media CDN host .* is NOT RF-resident/);
+  });
+
+  // --- NO-CAPABILITY-REGRESSION: the configuration that exists TODAY must boot untouched. Values
+  // are read from the schema defaults / .env.example shape, not invented for the test.
+  it('boots the LIVE configuration (.env.example shape) with no .env edits at all', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        S3_ENDPOINT: 'http://minio:9000', // .env.example:29
+        MEDIA_CDN_HOST: '', // .env.example:36
+        S3_REGION: 'ru-central1', // .env.example:40
+        SENTRY_DSN: '', // .env.example:117
+      }),
+    ).not.toThrow();
+  });
+
+  it('boots the CI configuration (ci.yml S3_ENDPOINT=http://localhost:9000)', () => {
+    expect(() =>
+      validateEnv({ ...prodBase, S3_ENDPOINT: 'http://localhost:9000' }),
+    ).not.toThrow();
+  });
+});
+
+/** Host rules in isolation — the units the boot refine and the CI gate both mirror. */
+describe('isResidentStorageHost / checkStorageEndpoint / checkMediaCdnHost', () => {
+  it('admits the approved provider host and its subdomains, but not a look-alike', () => {
+    expect(RF_ALLOWED_STORAGE_HOSTS).toContain('storage.yandexcloud.net');
+    expect(isResidentStorageHost('storage.yandexcloud.net')).toBe(true);
+    expect(isResidentStorageHost('zoolink-media.storage.yandexcloud.net')).toBe(true);
+    expect(isResidentStorageHost('storage.yandexcloud.net.evil.com')).toBe(false);
+    expect(isResidentStorageHost('yandexcloud.net')).toBe(false);
+  });
+
+  it('keeps the telemetry rule NARROWER than the storage rule (a bucket is not an error sink)', () => {
+    // The provider carve-out must not leak into the DSN rule: storage.yandexcloud.net is an object
+    // store, and admitting it as a telemetry ingest would widen clause 6 by accident.
+    expect(isResidentStorageHost('storage.yandexcloud.net')).toBe(true);
+    expect(isResidentTelemetryHost('storage.yandexcloud.net')).toBe(false);
+  });
+
+  it('shares ONE suffix list with the telemetry rule (no second list to drift)', () => {
+    expect(RF_ALLOWED_HOST_SUFFIXES).toContain('.ru');
+    for (const suffix of RF_ALLOWED_HOST_SUFFIXES) {
+      expect(isResidentTelemetryHost(`sink${suffix}`)).toBe(true);
+      expect(isResidentStorageHost(`bucket${suffix}`)).toBe(true);
+    }
+  });
+
+  it('treats an empty CDN host as "no CDN", but an empty S3 endpoint as an error', () => {
+    expect(checkMediaCdnHost('')).toEqual({ ok: true, host: null, reason: 'disabled' });
+    expect(checkMediaCdnHost('   ')).toEqual({ ok: true, host: null, reason: 'disabled' });
+    expect(checkStorageEndpoint('')).toEqual({
+      ok: false,
+      host: null,
+      reason: 'unparseable',
+    });
+  });
+});
+
+/**
+ * ADR-0017 clause 1 — the PRIMARY store of personal data (`DATABASE_URL`) and the cache/throttler store
+ * in front of it (`REDIS_URL`). LAST and HEAVIEST member of the same defect class as clauses 4 and 6:
+ * the residency guardrail scans REGIONS while the data leaves by HOST, and neither DSN carries a region
+ * string at all.
+ *
+ * MEASURED red-before, 2026-08-09, at NODE_ENV=production with every other layer green:
+ *   DATABASE_URL=postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db  → ACCEPTED (6/6 foreign DSN configs)
+ *   REDIS_URL=rediss://d:p@eu2-x.upstash.io:6379                   → ACCEPTED
+ * and the CI residency gate exited 0 on the region-token-free variants (`ep-x.aws.neon.tech`,
+ * `eu2-x.upstash.io`) with no output at all. The whole database of РФ-citizens' personal data could be
+ * moved abroad by editing one `.env` line, with three green residency layers reporting compliance.
+ */
+describe('validateEnv — primary-store residency (ADR-0017 п.1)', () => {
+  const prodBase = {
+    DATABASE_URL: 'postgresql://zoolink:pw@postgres:5432/zoolink?schema=public',
+    REDIS_URL: 'redis://:pw@redis:6379',
+    S3_ENDPOINT: 'http://minio:9000',
+    S3_ACCESS_KEY: 'x',
+    S3_SECRET_KEY: 'x',
+    S3_BUCKET: 'b',
+    JWT_ACCESS_SECRET: 'a'.repeat(32),
+    JWT_REFRESH_SECRET: 'b'.repeat(32),
+    PHONE_HASH_PEPPER: 'c'.repeat(32),
+    PII_DATA_KEY: 'd'.repeat(32),
+    PII_BLIND_INDEX_KEY: 'e'.repeat(32),
+    AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+    METRICS_TOKEN: 'm'.repeat(16),
+    NODE_ENV: 'production',
+  };
+
+  // --- axis 1: negative. The measured red-before values, plus the managed-provider hosts an operator
+  // would realistically paste in. The message must be about RESIDENCY, not "invalid url".
+  it.each([
+    'postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db', // the measured red-before value
+    'postgresql://u:p@ep-x.aws.neon.tech/db', // same provider, no region token: axis 2 of the gate is blind to it
+    'postgresql://u:p@db.abc.eu-west-1.rds.amazonaws.com:5432/z',
+    'postgresql://postgres:p@db.abcxyz.supabase.co:5432/postgres',
+    'postgres://u:p@ep.azure.neon.tech/db',
+  ])('THROWS at boot in production on a foreign DATABASE_URL %p', (url) => {
+    expect(() => validateEnv({ ...prodBase, DATABASE_URL: url })).toThrow(
+      /database host .* is NOT RF-resident \(ADR-0017 п\.1/,
+    );
+  });
+
+  it.each([
+    'rediss://d:p@eu2-x.upstash.io:6379', // the measured red-before value
+    'redis://default:p@redis-12345.c1.gce.cloud.redislabs.com:12345',
+    'redis://cache.example.com:6379',
+  ])('THROWS at boot in production on a foreign REDIS_URL %p', (url) => {
+    expect(() => validateEnv({ ...prodBase, REDIS_URL: url })).toThrow(
+      /Redis host .* is NOT RF-resident \(ADR-0017 п\.1/,
+    );
+  });
+
+  it('states WHY the database matters (primary PII store) and WHY Redis does (derived PII)', () => {
+    expect(() =>
+      validateEnv({ ...prodBase, DATABASE_URL: 'postgresql://u:p@ep.neon.tech/db' }),
+    ).toThrow(/PRIMARY store of personal data/);
+    expect(() =>
+      validateEnv({ ...prodBase, REDIS_URL: 'rediss://d:p@eu2-x.upstash.io:6379' }),
+    ).toThrow(/not "just a cache"/);
+  });
+
+  it('names the HOST and never the DSN (a DSN carries the database password)', () => {
+    let message = '';
+    try {
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgresql://zoolink:sup3rs3cretpw@ep-x.aws.neon.tech/db',
+      });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain('ep-x.aws.neon.tech');
+    expect(message).not.toContain('sup3rs3cretpw');
+  });
+
+  it('rejects a bare public IP (residency is unverifiable for it)', () => {
+    expect(() =>
+      validateEnv({ ...prodBase, DATABASE_URL: 'postgresql://u:p@203.0.113.7:5432/db' }),
+    ).toThrow(/database host "203\.0\.113\.7" is NOT RF-resident/);
+  });
+
+  // --- axis 2: the traps a naive implementation falls into. Each one is a MEASURED property of
+  // `new URL()` on Node 20, not a hypothetical.
+  it('is not fooled by a host-shaped CREDENTIAL in front of a foreign host', () => {
+    // The userinfo sits BEFORE the host, so `includes('.ru')` on the whole DSN would pass this.
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgresql://zoolink.ru@ep-abroad.example.com/db',
+      }),
+    ).toThrow(/database host "ep-abroad\.example\.com" is NOT RF-resident/);
+  });
+
+  it('checks EVERY host of a libpq multi-host DSN, not the comma-joined string', () => {
+    // `new URL('postgres://u:p@localhost,eu2-x.upstash.io/db').hostname` is the ONE string
+    // "localhost,eu2-x.upstash.io" — dotless-adjacent and therefore waved through by any
+    // single-label rule, while the client happily fails over to the foreign host.
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgres://u:p@localhost,eu2-x.upstash.io/db',
+      }),
+    ).toThrow(/database host "eu2-x\.upstash\.io" is NOT RF-resident/);
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgres://u:p@postgres,ep-x.aws.neon.tech/db',
+      }),
+    ).toThrow(/database host "ep-x\.aws\.neon\.tech" is NOT RF-resident/);
+  });
+
+  it('checks the ?host= parameter too, where a host parser never looks', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgresql://u:p@localhost/db?host=ep-x.aws.neon.tech',
+      }),
+    ).toThrow(/database host "ep-x\.aws\.neon\.tech" is NOT RF-resident/);
+  });
+
+  // --- axis 3: fail-closed on anything unreadable. Both variables are boot-required, so there is no
+  // lawful "empty/disabled" mode to preserve — unlike SENTRY_DSN and MEDIA_CDN_HOST.
+  it.each([
+    'postgres://', // no authority at all
+    'postgres-evil://u:p@postgres:5432/db', // startsWith('postgres') accepted this — measured
+    'postgresql://u:p@%ZZbroken/db', // malformed percent-escape
+  ])('THROWS at boot on an unreadable DATABASE_URL %p (fail-closed)', (url) => {
+    expect(() => validateEnv({ ...prodBase, DATABASE_URL: url })).toThrow(
+      /Invalid environment configuration/,
+    );
+  });
+
+  it('pins the SCHEME rather than trusting the startsWith() prefix test', () => {
+    // `z.string().url().startsWith('postgres')` is a PREFIX test on the whole string: it admits
+    // `postgres-evil://…`, i.e. a value whose host slot would be read under the wrong grammar.
+    expect(RF_DATABASE_URL_SCHEMES).toEqual(['postgresql', 'postgres']);
+    expect(RF_REDIS_URL_SCHEMES).toEqual(['redis', 'rediss']);
+    expect(checkDatabaseUrl('postgres-evil://u:p@postgres:5432/db').reason).toBe(
+      'unparseable',
+    );
+    expect(checkRedisUrl('rediss-evil://x@redis:6379').reason).toBe('unparseable');
+    // …and the legitimate schemes are all still accepted.
+    expect(checkDatabaseUrl('postgresql://u:p@postgres:5432/db').ok).toBe(true);
+    expect(checkDatabaseUrl('postgres://u:p@postgres:5432/db').ok).toBe(true);
+    expect(checkRedisUrl('redis://redis:6379').ok).toBe(true);
+    expect(checkRedisUrl('rediss://:p@cache.zoolink.ru:6380').ok).toBe(true);
+  });
+
+  it('measures the shape that never reaches the refine: multi-host WITH ports is rejected by .url()', () => {
+    // `new URL('postgres://u:p@h1:5432,h2:5432/db')` throws ERR_INVALID_URL, so `z.string().url()`
+    // blocks the boot one step earlier. Documented as a KNOWN LIMIT of the form, not as coverage.
+    expect(() => new URL('postgres://u:p@h1:5432,h2:5432/db')).toThrow();
+    expect(() =>
+      validateEnv({ ...prodBase, DATABASE_URL: 'postgres://u:p@h1:5432,h2:5432/db' }),
+    ).toThrow(/Invalid environment configuration/);
+  });
+
+  // --- axis 4: NO-CAPABILITY-REGRESSION. Every value that exists in a LIVE config file today, plus
+  // every self-hosted shape the runbooks allow, must still boot. Sources are named per line.
+  it.each([
+    // .env.example:22 / deploy/gen-env.sh:345 — the documented prod topology (compose service name)
+    'postgresql://zoolink:__change_me__@postgres:5432/zoolink?schema=public',
+    // .github/workflows/ci.yml:23
+    'postgresql://zoolink:ci@localhost:5432/zoolink_test?schema=public',
+    // .github/workflows/performance-tests.yml:61 — note the shorter `postgres://` scheme
+    'postgres://postgres:postgres@localhost:5432/zoolink_perf_test?schema=public',
+    // backend/.env (local dev stand)
+    'postgresql://zoolink:zoolink@localhost:5432/zoolink?schema=public',
+    'postgresql://u:p@10.0.0.5:5432/db', // RFC1918 self-hosted PG
+    'postgresql://u:p@172.20.0.9:5432/db',
+    'postgresql://u:p@192.168.1.10:5432/db',
+    'postgresql://u:p@[fd00::5]:5432/db', // IPv6 ULA
+    'postgresql://u:p@[::1]:5432/db',
+    'postgresql:///zoolink?host=/var/run/postgresql', // unix socket, libpq query form
+    'postgresql://%2Fvar%2Frun%2Fpostgresql/zoolink', // unix socket, percent-encoded authority form
+    'postgresql://%2Fvar%2Frun%2Fpg.sock/zoolink', // …and one whose path contains a dot
+    'postgresql://u:p@pg.zoolink.ru:5432/db', // RF domain
+    'postgresql://u:p@PG.ZooLink.RU:5432/db', // case-insensitive
+    'postgres://u:p@pg-a.zoolink.ru,pg-b.zoolink.ru/db', // multi-host, both resident
+  ])('boots in production with the live/self-hosted DATABASE_URL %p', (url) => {
+    expect(() => validateEnv({ ...prodBase, DATABASE_URL: url })).not.toThrow();
+  });
+
+  it.each([
+    'redis://:__change_me__@redis:6379', // .env.example:26 / deploy/gen-env.sh:347
+    'redis://localhost:6379', // ci.yml:24, performance-tests.yml:67
+    'redis://172.20.0.9:6379',
+    'redis://[::1]:6379',
+    'redis://[fd00::5]:6379',
+    'rediss://:p@cache.zoolink.ru:6380', // TLS to an RF host
+    'redis://cache.zoolink.su:6379',
+  ])('boots in production with the live/self-hosted REDIS_URL %p', (url) => {
+    expect(() => validateEnv({ ...prodBase, REDIS_URL: url })).not.toThrow();
+  });
+
+  it('boots the ENTIRE live .env.example residency surface at once, with no .env edits', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgresql://zoolink:__change_me__@postgres:5432/zoolink?schema=public',
+        REDIS_URL: 'redis://:__change_me__@redis:6379',
+        S3_ENDPOINT: 'http://minio:9000',
+        MEDIA_CDN_HOST: '',
+        S3_REGION: 'ru-central1',
+        SENTRY_DSN: '',
+      }),
+    ).not.toThrow();
+  });
+
+  // --- axis 5: the dev escape hatch, and its absence in production. Identical discipline to every
+  // other clause: it relaxes only `non-rf-host`, only outside production, and never `unparseable`.
+  it('permits a foreign DATABASE_URL in dev ONLY with the explicit bypass', () => {
+    const foreign = 'postgresql://u:p@ep-x.aws.neon.tech/db';
+    expect(() =>
+      validateEnv({ ...prodBase, NODE_ENV: 'development', DATABASE_URL: foreign }),
+    ).toThrow(/database host .* is NOT RF-resident/);
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        DATABASE_URL: foreign,
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).not.toThrow();
+  });
+
+  it('permits a foreign REDIS_URL in dev ONLY with the explicit bypass', () => {
+    const foreign = 'rediss://d:p@eu2-x.upstash.io:6379';
+    expect(() =>
+      validateEnv({ ...prodBase, NODE_ENV: 'development', REDIS_URL: foreign }),
+    ).toThrow(/Redis host .* is NOT RF-resident/);
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        REDIS_URL: foreign,
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).not.toThrow();
+  });
+
+  it('IGNORES the dev bypass in production for both DSNs (residency is unconditional there)', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        DATABASE_URL: 'postgresql://u:p@ep-x.aws.neon.tech/db',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/database host .* is NOT RF-resident/);
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        REDIS_URL: 'rediss://d:p@eu2-x.upstash.io:6379',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/Redis host .* is NOT RF-resident/);
+  });
+
+  it('never lets the dev bypass rescue an UNREADABLE DSN', () => {
+    expect(() =>
+      validateEnv({
+        ...prodBase,
+        NODE_ENV: 'development',
+        DATABASE_URL: 'postgres://',
+        RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+      }),
+    ).toThrow(/Invalid environment configuration/);
+  });
+});
+
+/** DSN host rules in isolation — the unit the boot refine and the CI gate axis (5) both mirror. */
+describe('checkDatabaseUrl / checkRedisUrl / isResidentDataStoreHost', () => {
+  it('shares ONE host core with clauses 4 and 6 (no second rule to drift)', () => {
+    for (const suffix of RF_ALLOWED_HOST_SUFFIXES) {
+      expect(isResidentDataStoreHost(`pg${suffix}`)).toBe(true);
+    }
+    expect(isResidentDataStoreHost('postgres')).toBe(true); // single-label service name
+    expect(isResidentDataStoreHost('ep-x.aws.neon.tech')).toBe(false);
+  });
+
+  it('keeps the data-store rule NARROWER than the storage rule (a bucket is not a database)', () => {
+    // The object-storage carve-out must not leak into clause 1: `storage.yandexcloud.net` is an S3
+    // endpoint, and admitting it as a database host would widen clause 1 by accident.
+    expect(isResidentStorageHost('storage.yandexcloud.net')).toBe(true);
+    expect(isResidentDataStoreHost('storage.yandexcloud.net')).toBe(false);
+  });
+
+  it('reports every target it checked, so the verdict is auditable', () => {
+    expect(checkDatabaseUrl('postgres://u:p@pg-a.zoolink.ru,pg-b.zoolink.ru/db')).toEqual({
+      ok: true,
+      targets: ['pg-a.zoolink.ru', 'pg-b.zoolink.ru'],
+      offending: null,
+      reason: 'resident',
+    });
+    expect(checkDatabaseUrl('postgresql:///db?host=/var/run/postgresql')).toEqual({
+      ok: true,
+      targets: ['unix:/var/run/postgresql'],
+      offending: null,
+      reason: 'resident',
+    });
+  });
+
+  it('has NO lawful empty mode (both DSNs are boot-required)', () => {
+    expect(checkDatabaseUrl('')).toEqual({
+      ok: false,
+      targets: [],
+      offending: null,
+      reason: 'unparseable',
+    });
+    expect(checkRedisUrl('   ')).toEqual({
+      ok: false,
+      targets: [],
+      offending: null,
+      reason: 'unparseable',
+    });
   });
 });

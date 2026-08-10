@@ -256,6 +256,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The instrument's own axis runs FIRST: this gate derives its allowlists by parsing constant
+      # NAMES out of env.validation.ts, and a rename used to make it exit 1 — the code that means
+      # "violation found" — silently. Measured, not supposed (09.08.2026). If the coupling is broken,
+      # say "I don't know" (rc=2); never hand back a verdict. A green gate below is worth only as
+      # much as this step.
+      - name: Residency gate selftest (a broken coupling must not read as a verdict)
+        run: bash scripts/check-rf-residency.sh --selftest
       - name: RF data-residency check (fail-on-non-RF-region)
         run: bash scripts/check-rf-residency.sh
 

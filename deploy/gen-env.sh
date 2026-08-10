@@ -136,10 +136,19 @@ LAYOUT=(
   "@REDIS_URL"
   ""
   "# ---- Object storage (MinIO self-host default; Yandex Object Storage in prod — ADR-0008) ----"
+  "# RF data residency (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5): the bucket holds PII (provider documents,"
+  "# avatars, listing photos), so the S3_ENDPOINT HOST must be self-hosted (http://minio:9000 /"
+  "# localhost / a private address) or an approved RF store — an RF domain (.ru/.su/.рф) or"
+  "# https://storage.yandexcloud.net. A foreign bucket (s3.amazonaws.com, *.backblazeb2.com) is"
+  "# refused at boot and by scripts/check-rf-residency.sh. Pinning S3_REGION below does NOT make a"
+  "# foreign endpoint lawful: the region string and the host are independent checks."
   "@S3_ENDPOINT"
   "@S3_ACCESS_KEY"
   "@S3_SECRET_KEY"
   "@S3_BUCKET"
+  "# MEDIA_CDN_HOST is ADDED to the media-URL allowlist, so a foreign CDN would cache and serve"
+  "# avatars (PII, ADR-0012) outside the RF — non-RF CDNs are boot-blocking. Bare host[:port], no"
+  "# scheme. EMPTY = no CDN (the default, media served straight from the S3 origin)."
   "@MEDIA_CDN_HOST"
   "# RF data residency (ADR-0017 / ФЗ-152 ст.18 ч.5): every *_REGION must be an approved RF id."
   "@S3_REGION"
@@ -332,6 +341,16 @@ resolve_values() {
   [ -n "${HELD[PUBLIC_DOMAIN]+set}" ] || VAL[PUBLIC_DOMAIN]="$DOMAIN"
   # Derived AFTER the credentials above, so a held POSTGRES_PASSWORD is reused rather than a fresh
   # mint leaking into a connection string that no longer matches the database.
+  #
+  # RF RESIDENCY (ADR-0017 п.1, ФЗ-152 ст.18 ч.5): the hosts below are deliberately the COMPOSE SERVICE
+  # NAMES `postgres` / `redis` — i.e. self-hosted, inside our own network. DATABASE_URL is the PRIMARY
+  # store of personal data and REDIS_URL holds the counters/cached payloads derived from it, so both must
+  # stay self-hosted (service name / localhost / private address / unix socket) or move under an RF domain
+  # (.ru/.su/.рф). A managed FOREIGN endpoint (Neon, AWS RDS, Supabase, Upstash, Redis Cloud …) is
+  # FORBIDDEN. If you HOLD an existing value (the `HELD[...]` branch above preserves whatever is already
+  # in `.env`), that held value is NOT exempt: the boot validator rejects it and
+  # `scripts/check-rf-residency.sh` fails. This generator does not enforce residency itself — it only
+  # never introduces a violation; enforcement is layer 1 (boot) + layer 2 (the CI gate).
   [ -n "${HELD[DATABASE_URL]+set}" ] ||
     VAL[DATABASE_URL]="postgresql://${VAL[POSTGRES_USER]}:${VAL[POSTGRES_PASSWORD]}@postgres:5432/${VAL[POSTGRES_DB]}?schema=public"
   [ -n "${HELD[REDIS_URL]+set}" ] ||

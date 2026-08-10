@@ -6,13 +6,28 @@
 # and — as they are added — managed-PG / replica / backup / DR-failover / PII-bearing log-sink
 # region vars), plus any foreign cloud-region token embedded in an endpoint/host.
 #
-# It ALSO fails on a non-RF error/telemetry INGEST HOST (clause 6): `SENTRY_DSN` carries no region
-# string at all, so the region axes above are blind to it while it ships PII-bearing stack traces
-# abroad — the exact "three green layers, data still leaves" hole this axis closes.
+# It ALSO fails on any non-RF HOST-bearing value, which no region axis can see:
+#   * clause 6 — the error/telemetry ingest (`SENTRY_DSN`);
+#   * clause 4 — the PII-bearing object store (`S3_ENDPOINT`) and the CDN in front of it
+#     (`MEDIA_CDN_HOST`, whose host is ADDED to the media-URL allowlist, so it serves avatars);
+#   * clause 1 — the PRIMARY store of personal data (`DATABASE_URL`) and the cache/throttler store in
+#     front of it (`REDIS_URL`). Heaviest member of the class: measured 2026-08-09, with a
+#     region-token-free foreign endpoint (`postgresql://…@ep-x.aws.neon.tech/db` +
+#     `rediss://…@eu2-x.upstash.io:6379`) THIS GATE EXITED 0 and the boot validator accepted the
+#     config at NODE_ENV=production — the whole database of РФ-citizens' personal data abroad, silently.
+# NONE of them carries a region string at all: measured 2026-08-09, `S3_REGION=ru-central1` +
+# `S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com` + `MEDIA_CDN_HOST=cdn.cloudflare.com` made this
+# gate exit 0 — the exact "three green layers, data still leaves" hole these axes close. The defect is
+# ONE class ("the gate checks REGIONS, the data leaves by HOST"), so any NEW host-bearing env var
+# (OAuth endpoint, webhook/callback URL, provider base URL) belongs in axis (4) or (5) on the day it is
+# added.
 #
-# SINGLE SOURCE OF TRUTH: both allowlists are extracted from backend/src/config/env.validation.ts
-# (RF_ALLOWED_REGIONS and RF_ALLOWED_TELEMETRY_HOST_SUFFIXES) so the runtime refine (layer 1) and
-# this CI gate (layer 2) can never diverge. Runnable locally exactly as CI runs it: `bash scripts/check-rf-residency.sh`.
+# SINGLE SOURCE OF TRUTH: every allowlist is extracted from backend/src/config/env.validation.ts
+# (RF_ALLOWED_REGIONS, RF_ALLOWED_HOST_SUFFIXES, RF_ALLOWED_STORAGE_HOSTS, RF_DATABASE_URL_SCHEMES,
+# RF_REDIS_URL_SCHEMES) so the runtime refine (layer 1) and this CI gate (layer 2) can never diverge —
+# and `--selftest` proves a rename of ANY of them reads as rc=2 INCONCLUSIVE, never as a verdict.
+# Runnable locally exactly as CI runs it:
+# `bash scripts/check-rf-residency.sh`.
 #
 # Layers: runbook pin (doc) -> THIS CI gate (pre-deploy) -> boot refine (runtime). Defense in depth.
 set -euo pipefail
@@ -23,9 +38,47 @@ cd "$repo_root"
 env_validation="backend/src/config/env.validation.ts"
 [ -f "$env_validation" ] || { echo "::error::$env_validation not found — cannot derive the RF allowlist"; exit 2; }
 
+# --selftest — THE AXIS ON THE INSTRUMENT ITSELF (added 09.08.2026 after a measured defect).
+# This gate derives its allowlists by parsing constant names out of env.validation.ts, so a rename
+# breaks the coupling. The guards below are written to answer that with rc=2 (INCONCLUSIVE) — but
+# they were UNREACHABLE for three releases: `set -euo pipefail` killed the assignment first and the
+# gate exited 1, i.e. "residency violation found", with no output at all. A wrong verdict, not a
+# broken tool. Fixed by `|| true`; this mode is what keeps it fixed. Run it in CI beside the gate.
+if [ "${1:-}" = "--selftest" ]; then
+  work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+  mkdir -p "$work/scripts" "$work/backend/src/config" "$work/deploy"
+  cp "${BASH_SOURCE[0]}" "$work/scripts/"
+  cp .env.example docker-compose.yml "$work/"; cp deploy/Caddyfile "$work/deploy/"
+  fails=0
+  for c in RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS \
+           RF_DATABASE_URL_SCHEMES RF_REDIS_URL_SCHEMES; do
+    sed "s/$c/${c}_RENAMED/g" "$env_validation" > "$work/$env_validation"
+    out="$(bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "could not parse $c"; then
+      echo "  ok   $c renamed → rc=2 INCONCLUSIVE, and it says which constant"
+    else
+      echo "::error::$c renamed → rc=$rc (want 2). A broken coupling must NOT read as a verdict."; fails=$((fails+1))
+    fi
+  done
+  cp "$env_validation" "$work/$env_validation"
+  if bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" >/dev/null 2>&1; then
+    echo "  ok   canon unchanged → rc=0 (the selftest itself removes no capability)"
+  else
+    echo "::error::canon unchanged → non-zero: the harness is lying, fix it before trusting the gate"; fails=$((fails+1))
+  fi
+  [ "$fails" = 0 ] && { echo "✅ selftest passed — this gate can still say \"I don't know\""; exit 0; }
+  echo "❌ selftest failed ($fails)"; exit 1
+fi
+
 # Extract RF_ALLOWED_REGIONS from the single source of truth.
+# `|| true` is LOAD-BEARING, not defensive noise: under `set -euo pipefail` a parse that matches
+# nothing makes grep exit 1, the assignment inherits it, and the shell dies BEFORE the guard below —
+# silently, with rc=1, which in this gate MEANS "residency violation found". The honest rc=2
+# (INCONCLUSIVE) would never be reached, so a renamed constant would read as a verdict.
+# Measured on an isolated harness 09.08.2026 (rename → rc=1, zero output). Same law as
+# check-seed-parity.sh: setup failure must never be byte-identical to a verdict.
 allow="$(sed -n '/RF_ALLOWED_REGIONS = \[/,/\]/p' "$env_validation" \
-         | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u)"
+         | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u || true)"
 [ -n "$allow" ] || { echo "::error::could not parse RF_ALLOWED_REGIONS from $env_validation"; exit 2; }
 echo "RF allowlist (from $env_validation): $(echo "$allow" | tr '\n' ' ')"
 
@@ -59,7 +112,15 @@ done < <(grep -nHE '[A-Z0-9_]*_REGION[[:space:]]*[:=]' "${files[@]}" || true)
 
 # (2) Broad net: any foreign cloud-region token embedded anywhere in prod config (e.g. inside an
 #     endpoint/host) is a residency red flag. Matches AWS/GCP/Azure-style `<geo>-<dir>-<n>`.
-foreign='\b(us|eu|ap|sa|ca|af|me)-(east|west|central|north|south|southeast|northeast|northwest|southwest|northcentral|southcentral)-[0-9]\b'
+#
+#     `-[0-9]+\b` and NOT `-[0-9]\b`: measured 2026-08-09, the single-digit form MISSED
+#     `s3.us-west-004.backblazeb2.com` — after the `0` comes another `0`, which is a word character, so
+#     `\b` never held and the zero-padded Backblaze region sailed past. The axis was catching foreign
+#     regions only when the digit run happened to be one digit long, i.e. by luck. Widening it to `+`
+#     was measured for false positives across every scanned config plus ci.yml, performance-tests.yml
+#     and deploy/gen-env.sh: it adds exactly ONE new hit, on a COMMENT line of .env.example that this
+#     loop already skips. Zero false positives on a live assignment.
+foreign='\b(us|eu|ap|sa|ca|af|me)-(east|west|central|north|south|southeast|northeast|northwest|southwest|northcentral|southcentral)-[0-9]+\b'
 while IFS= read -r hit; do
   file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
   case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
@@ -72,16 +133,25 @@ done < <(grep -nHiE "$foreign" "${files[@]}" || true)
 #     (`https://<key>@o0.ingest.sentry.io/1`) contains no `*_REGION` and no `us-east-1` token, yet it
 #     ships stack traces — and the PII inside them — across the border. EMPTY value = sink disabled
 #     (lawful, and the MVP default). Allowlist comes from the SAME single source of truth as the
-#     regions: RF_ALLOWED_TELEMETRY_HOST_SUFFIXES in env.validation.ts.
-suffixes="$(sed -n '/RF_ALLOWED_TELEMETRY_HOST_SUFFIXES = \[/,/\]/p' "$env_validation" \
-            | grep -oE "'\.[^']+'" | tr -d "'" | sort -u)"
-[ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_TELEMETRY_HOST_SUFFIXES from $env_validation"; exit 2; }
+#     regions: RF_ALLOWED_HOST_SUFFIXES in env.validation.ts.
+suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \[/,/\]/p' "$env_validation" \
+            | grep -oE "'\.[^']+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
+[ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_HOST_SUFFIXES from $env_validation"; exit 2; }
 
-# Mirrors isResidentTelemetryHost() in env.validation.ts. Fail-closed: only positively-recognised
-# self-hosted (loopback / RFC1918 / IPv6-ULA / single-label service name) or RF-suffixed hosts pass.
-telemetry_host_ok() {
-  local h
+# Approved RF provider hosts that do NOT sit under an RF TLD (today: Yandex Object Storage). Used ONLY
+# by the storage/CDN axis — an object store is not an error sink, so the DSN axis must stay narrower.
+storage_hosts="$(sed -n '/RF_ALLOWED_STORAGE_HOSTS = \[/,/\]/p' "$env_validation" \
+                 | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
+[ -n "$storage_hosts" ] || { echo "::error::could not parse RF_ALLOWED_STORAGE_HOSTS from $env_validation"; exit 2; }
+echo "RF host suffixes: $(echo "$suffixes" | tr '\n' ' ')| approved provider hosts: $(echo "$storage_hosts" | tr '\n' ' ')"
+
+# Mirrors isResidentHost() in env.validation.ts. Fail-closed: only positively-recognised self-hosted
+# (loopback / RFC1918 / IPv6-ULA / single-label service name), RF-suffixed, or (when $2 = "storage")
+# explicitly-approved provider hosts pass.
+host_resident_ok() {
+  local h allow_storage
   h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  allow_storage="${2:-}"
   h="${h%.}"; h="${h#[}"; h="${h%]}"
   [ -n "$h" ] || return 1
   case "$h" in
@@ -95,11 +165,22 @@ telemetry_host_ok() {
   # Any other bare IPv4 literal: residency is unverifiable → refuse.
   case "$h" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 1 ;; esac
   case "$h" in *.*) ;; *) return 0 ;; esac                  # single-label = container/LAN name
+  if [ "$allow_storage" = storage ]; then
+    while IFS= read -r sh; do
+      [ -n "$sh" ] || continue
+      # Exact host or a real subdomain of it — the leading '.' is what stops
+      # `storage.yandexcloud.net.evil.com` from passing as a subdomain.
+      case "$h" in "$sh"|*".$sh") return 0 ;; esac
+    done <<<"$storage_hosts"
+  fi
   while IFS= read -r sfx; do
     case "$h" in *"$sfx") return 0 ;; esac
   done <<<"$suffixes"
   return 1
 }
+
+# Telemetry sinks get NO provider carve-out (clause 6 stays narrower than clause 4).
+telemetry_host_ok() { host_resident_ok "$1"; }
 
 while IFS= read -r hit; do
   file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
@@ -136,8 +217,214 @@ while IFS= read -r hit; do
   fi
 done < <(grep -nHE '(^|[^A-Z0-9_])SENTRY_DSN[[:space:]]*[:=]' "${files[@]}" || true)
 
+# Extracts the value of KEY from a `KEY=value` / `KEY: value` config line: strips the assignment,
+# quotes, and any trailing inline comment / whitespace. Same shape as the DSN extraction above.
+config_value() {   # $1 = raw line content, $2 = key name
+  printf '%s' "$1" \
+    | sed -E "s/.*$2[[:space:]]*[:=][[:space:]]*//" \
+    | tr -d "\"'" | sed -E 's/[[:space:]].*$//'
+}
+
+# (4) ADR-0017 clause 4 — the PII-bearing OBJECT STORE and the CDN in front of it. Neither carries a
+#     region: `S3_REGION=ru-central1` sat green while `S3_ENDPOINT` pointed at a Backblaze US-West
+#     bucket (measured). `MEDIA_CDN_HOST` is worse than the bucket — its host is ADDED to the
+#     media-URL allowlist, so a foreign CDN caches and serves avatars (PII, ADR-0012) abroad.
+while IFS= read -r hit; do
+  file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
+  case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  value="$(config_value "$content" S3_ENDPOINT)"
+  # Fail-CLOSED on anything that is not an http(s) URL — mirrors the `unparseable` branch of
+  # checkStorageEndpoint(). Empty is NOT a lawful mode here: the app cannot store media without a
+  # bucket, so an empty endpoint is an error, not a "disabled" state.
+  case "$value" in
+    http://*|https://*|HTTP://*|HTTPS://*) ;;
+    *)
+      echo "::error file=$file::S3_ENDPOINT is not a parseable http(s) endpoint — refusing (fail-closed): an object store whose host cannot be read cannot be shown to be RF-resident (ADR-0017 п.4). Use http(s)://host[:port], e.g. http://minio:9000."
+      fail=1; continue ;;
+  esac
+  # Host only. Real URL shape is honoured (scheme, then userinfo up to '@'), because
+  # `https://ru.example.com@evil.com/` resolves to evil.com while satisfying any substring check.
+  host="$(printf '%s' "$value" \
+          | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/@]*@##; s#[/?\#].*$##; s#:[0-9]+$##')"
+  if [ -z "$host" ]; then
+    echo "::error file=$file::S3_ENDPOINT is set but no host could be extracted — refusing (fail-closed, ADR-0017 п.4)."
+    fail=1; continue
+  fi
+  if host_resident_ok "$host" storage; then
+    echo "  ok   $file: S3_ENDPOINT host=$host (RF-resident / self-hosted)"
+  else
+    echo "::error file=$file::object-storage host '$host' is NOT RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5) — the bucket holds provider documents, avatars and listing photos. Allowed: self-hosted (loopback/private/single-label such as minio:9000), $(echo "$suffixes" | tr '\n' ' ')or an approved provider host ($(echo "$storage_hosts" | tr '\n' ' '))"
+    fail=1
+  fi
+done < <(grep -nHE '(^|[^A-Z0-9_])S3_ENDPOINT[[:space:]]*[:=]' "${files[@]}" || true)
+
+while IFS= read -r hit; do
+  file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
+  case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  value="$(config_value "$content" MEDIA_CDN_HOST)"
+  if [ -z "$value" ]; then
+    echo "  ok   $file: MEDIA_CDN_HOST empty (no CDN — media served from the S3 origin)"
+    continue
+  fi
+  # A BARE host[:port] and nothing else — mirrors checkMediaCdnHost(). Rejecting these characters
+  # before any parsing is what stops `https://cdn.zoolink.ru`, `evil.com/cdn.zoolink.ru`,
+  # `key@evil.com` and `evil.com%2f.ru` from reaching the suffix test dressed as a host.
+  case "$value" in
+    *[!A-Za-z0-9._:\[\]-]*)
+      echo "::error file=$file::MEDIA_CDN_HOST must be a bare host[:port] — no scheme, no path, no credentials (e.g. cdn.zoolink.ru) — refusing (fail-closed, ADR-0017 п.4). Leave it empty to serve media straight from the S3 origin."
+      fail=1; continue ;;
+  esac
+  host="$(printf '%s' "$value" | sed -E 's#^\[([^]]*)\](:[0-9]+)?$#\1#; s#:[0-9]+$##')"
+  if [ -z "$host" ]; then
+    echo "::error file=$file::MEDIA_CDN_HOST is set but no host could be extracted — refusing (fail-closed, ADR-0017 п.4)."
+    fail=1; continue
+  fi
+  if host_resident_ok "$host" storage; then
+    echo "  ok   $file: MEDIA_CDN_HOST host=$host (RF-resident / self-hosted)"
+  else
+    echo "::error file=$file::media CDN host '$host' is NOT RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5) — this host is ADDED to the media-URL allowlist, so it would cache and serve avatars and listing photos (personal data, ADR-0012) from outside the RF. Allowed: self-hosted (loopback/private/single-label), $(echo "$suffixes" | tr '\n' ' ')or an approved provider host ($(echo "$storage_hosts" | tr '\n' ' ')). Empty = no CDN."
+    fail=1
+  fi
+done < <(grep -nHE '(^|[^A-Z0-9_])MEDIA_CDN_HOST[[:space:]]*[:=]' "${files[@]}" || true)
+
+# (5) ADR-0017 clause 1 — the PRIMARY store of personal data (`DATABASE_URL`) and the cache/throttler
+#     store in front of it (`REDIS_URL`). Same class as (3) and (4), heaviest member: neither DSN
+#     carries a region string, so axes (1) and (2) are blind to them except by accident — measured
+#     2026-08-09, `ep-x.aws.neon.tech` + `eu2-x.upstash.io` produced rc=0 with no output at all.
+#     Accepted schemes come from the SAME single source of truth as every other list.
+db_schemes="$(grep -oE "RF_DATABASE_URL_SCHEMES = \[[^]]*\]" "$env_validation" \
+              | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
+[ -n "$db_schemes" ] || { echo "::error::could not parse RF_DATABASE_URL_SCHEMES from $env_validation"; exit 2; }
+redis_schemes="$(grep -oE "RF_REDIS_URL_SCHEMES = \[[^]]*\]" "$env_validation" \
+                 | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
+[ -n "$redis_schemes" ] || { echo "::error::could not parse RF_REDIS_URL_SCHEMES from $env_validation"; exit 2; }
+echo "DSN schemes: db=$(echo "$db_schemes" | tr '\n' ' ')| redis=$(echo "$redis_schemes" | tr '\n' ' ')"
+
+# Percent-decode, fail-closed. Mirrors decodeURIComponent() in dsnHostTarget(): a `%` that is not part
+# of a valid `%XX` escape makes the value unreadable, and unreadable is unclearable — so we return 1
+# rather than passing the raw text on to the host rules.
+pct_decode() {
+  local s="$1" stripped
+  case "$s" in
+    *%*) ;;
+    *) printf '%s' "$s"; return 0 ;;
+  esac
+  stripped="$(printf '%s' "$s" | sed -E 's/%[0-9A-Fa-f]{2}//g')"
+  case "$stripped" in *%*) return 1 ;; esac
+  # Backslashes are escaped first so printf '%b' cannot reinterpret them as its own escapes.
+  printf '%b' "$(printf '%s' "$s" | sed -E 's/\\/\\\\/g; s/%([0-9A-Fa-f]{2})/\\x\1/g')"
+}
+
+# One `host[:port]` piece → the target a client connects to. Mirrors dsnHostTarget() in
+# env.validation.ts, INCLUDING the order: the percent-decode comes FIRST, so libpq's
+# unix-socket-in-the-host-slot form (`postgresql://%2Fvar%2Frun%2Fpostgresql/db`) is recognised as a
+# LOCAL socket instead of being judged as a DNS name — which would reject a socket path with a dot in it.
+dsn_one_host() {
+  local piece="$1" decoded h
+  decoded="$(pct_decode "$piece")" || return 1
+  case "$decoded" in /*) printf 'unix:%s' "$decoded"; return 0 ;; esac
+  case "$piece" in
+    \[*\]*) h="${piece#\[}"; h="${h%%\]*}" ;;   # bracketed IPv6 literal; the :port after ] is dropped
+    *) h="${piece%%:*}" ;;                      # host[:port]
+  esac
+  h="$(pct_decode "$h")" || return 1
+  [ -n "$h" ] || return 1
+  printf '%s' "$h"
+}
+
+# Every connection target a DSN names, one per line (`unix:<path>` for a socket). Returns 1 (printing
+# nothing) when the value cannot be read under an approved scheme — the caller MUST treat that as
+# fail-closed, exactly like the `unparseable` verdict of checkDsnResidency().
+#
+# Hand-parsed for the same two reasons the TS twin is: the libpq MULTI-HOST form
+# (`postgres://u:p@a,b/db`) is one string to a URL parser, so `localhost,ep-abroad` would read as a
+# dotless "service name"; and the `?host=` form puts the real target in the QUERY, where a host parser
+# never looks. Both are split and every piece is checked — ANY of them may be the one that serves.
+dsn_targets() {   # $1 = dsn, $2 = newline-separated allowed schemes
+  local dsn="$1" schemes="$2" scheme rest authority query hostlist piece h kv k v found=0 ok=0 s
+  case "$dsn" in *://*) ;; *) return 1 ;; esac
+  scheme="$(printf '%s' "$dsn" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*)://.*$#\1#' | tr '[:upper:]' '[:lower:]')"
+  while IFS= read -r s; do [ "$scheme" = "$s" ] && ok=1; done <<<"$schemes"
+  [ "$ok" = 1 ] || return 1
+  rest="${dsn#*://}"
+  authority="$(printf '%s' "$rest" | sed -E 's#[/?#].*$##')"
+  query=""
+  case "$rest" in *\?*) query="${rest#*\?}"; query="${query%%#*}" ;; esac
+  hostlist="${authority##*@}"    # userinfo dropped at the LAST '@' — the delimiter WHATWG/libpq use, so
+                                 # a host-shaped credential can never be mistaken for the host
+  while IFS= read -r piece; do
+    [ -n "$piece" ] || continue
+    h="$(dsn_one_host "$piece")" || return 1
+    printf '%s\n' "$h"; found=1
+    # `printf '%s\n'` and NOT `printf '%s'`: measured 2026-08-09 — without the trailing newline `read`
+    # returns EOF on the FINAL (only) piece, the loop body never runs, `found` stays 0 and a perfectly
+    # good `postgres:5432` was reported as "no readable host". Fail-closed, so the direction was safe,
+    # but the verdict was wrong on the live config. Same fix applies to the two `host=` loops below.
+  done < <(printf '%s\n' "$hostlist" | tr ',' '\n')
+  if [ -n "$query" ]; then
+    while IFS= read -r kv; do
+      case "$kv" in *=*) ;; *) continue ;; esac
+      k="$(printf '%s' "${kv%%=*}" | tr '[:upper:]' '[:lower:]')"
+      [ "$k" = host ] || continue
+      v="${kv#*=}"
+      while IFS= read -r piece; do
+        [ -n "$piece" ] || continue
+        piece="$(pct_decode "$piece")" || return 1
+        case "$piece" in
+          /*) printf 'unix:%s\n' "$piece"; found=1; continue ;;
+        esac
+        h="$(dsn_one_host "$piece")" || return 1
+        printf '%s\n' "$h"; found=1
+      done < <(printf '%s\n' "$v" | tr ',' '\n')
+    done < <(printf '%s\n' "$query" | tr '&' '\n')
+  fi
+  # No target at all (`postgres://`, `redis://`) — a store whose location the config does not state is
+  # a store whose location cannot be cleared.
+  [ "$found" = 1 ] || return 1
+}
+
+# Runs axis (5) for ONE variable. $1 = var name, $2 = allowed schemes, $3 = the "why it holds PII"
+# sentence for the error message. Sets `fail` and `seen_<var>` in the caller's scope.
+check_dsn_var() {
+  local var="$1" schemes="$2" why="$3" hit file rest content value targets t seen=0
+  while IFS= read -r hit; do
+    file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
+    case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+    value="$(config_value "$content" "$var")"
+    seen=1
+    if ! targets="$(dsn_targets "$value" "$schemes")"; then
+      echo "::error file=$file::$var names no readable host under an approved scheme ($(echo "$schemes" | tr '\n' ' ')) — refusing (fail-closed): $why cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5)."
+      fail=1; continue
+    fi
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      case "$t" in
+        unix:*) echo "  ok   $file: $var target=$t (local unix socket)"; continue ;;
+      esac
+      if host_resident_ok "$t"; then
+        echo "  ok   $file: $var host=$t (RF-resident / self-hosted)"
+      else
+        # The DSN itself is NEVER echoed — it carries the database/Redis password.
+        echo "::error file=$file::$var host '$t' is NOT RF-resident (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5) — $why. Allowed: self-hosted (loopback/private/single-label service name such as postgres:5432 / redis:6379 / a unix socket) or $(echo "$suffixes" | tr '\n' ' ')"
+        fail=1
+      fi
+    done <<<"$targets"
+  done < <(grep -nHE "(^|[^A-Z0-9_])$var[[:space:]]*[:=]" "${files[@]}" || true)
+  # Neither variable has a lawful "absent" mode (both are boot-required with no default), so finding
+  # NO assignment at all is a broken scan, not a clean bill of health: silence must not read as green.
+  if [ "$seen" = 0 ]; then
+    echo "::error::$var was not found in any scanned prod config ($(printf '%s ' "${files[@]}")) — refusing (fail-closed): it is boot-required, so its absence means this axis measured nothing (ADR-0017 п.1)."
+    fail=1
+  fi
+}
+
+check_dsn_var DATABASE_URL "$db_schemes" \
+  "DATABASE_URL is the PRIMARY store of personal data (accounts, phone_hash, encrypted email/contact_phone per ADR-0012, listings, consents, the moderation audit trail)"
+check_dsn_var REDIS_URL "$redis_schemes" \
+  "Redis holds the rate-limit/throttler counters keyed by phone/IP, the per-user listing quota and cached profile/listing payloads — personal data derived from the primary store"
+
 if [ "$fail" -ne 0 ]; then
-  echo "::error::RF data-residency gate FAILED — a non-RF region is configured for prod (ADR-0017)."
+  echo "::error::RF data-residency gate FAILED — prod config points a PII-bearing store, sink or CDN outside the RF (ADR-0017)."
   exit 1
 fi
-echo "✅ RF data-residency gate passed — all region-bearing prod config is RF-resident."
+echo "✅ RF data-residency gate passed — every region- and host-bearing prod config value is RF-resident."

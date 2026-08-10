@@ -25,25 +25,32 @@ export function isRfRegion(value: string): boolean {
 }
 
 /**
- * ADR-0017 clause 6 (PII-bearing log/observability sinks are RF-resident) — the SINGLE canonical
- * allowlist of DNS suffixes an ERROR/TELEMETRY INGEST host may carry. Same shape and same role as
- * RF_ALLOWED_REGIONS above: a code constant, NOT an env var, and layer 2 (the CI residency gate)
- * parses THIS list so the two can never diverge.
+ * ADR-0017 (clauses 1, 4 and 6 — the primary PII store, PII-bearing object storage, and observability
+ * sinks are all RF-resident) — the SINGLE canonical allowlist of DNS suffixes ANY host-bearing config
+ * value may carry.
+ * Same shape and same role as RF_ALLOWED_REGIONS above: a code constant, NOT an env var, and layer 2
+ * (the CI residency gate) parses THIS list so the two can never diverge.
  *
- * WHY a code constant and not a `SENTRY_ALLOWED_HOSTS` env var: the thing being guarded and the
- * guard would then live in the SAME file. Whoever edits `.env` to point the DSN at a foreign ingest
- * edits the allowlist in the next line — a guard the attacker/operator can widen is not a guard, and
- * the CI gate (which reads env files) would read the widened list as authoritative. RF_ALLOWED_REGIONS
- * is deliberately un-overridable for exactly this reason; the DSN rule is symmetric.
+ * It is deliberately ONE list for the whole class, not one per variable: the recurring defect here is
+ * that "the gate checks REGIONS while the data leaves by HOST" (found first on SENTRY_DSN, then again
+ * on S3_ENDPOINT and MEDIA_CDN_HOST). Two suffix lists would be two things to keep in step; a second
+ * list that quietly grows a `.by` entry is exactly the drift this constant exists to prevent.
+ *
+ * WHY a code constant and not a `*_ALLOWED_HOSTS` env var: the thing being guarded and the guard
+ * would then live in the SAME file. Whoever edits `.env` to point a sink or a bucket at a foreign
+ * host edits the allowlist in the next line — a guard the attacker/operator can widen is not a guard,
+ * and the CI gate (which reads env files) would read the widened list as authoritative.
+ * RF_ALLOWED_REGIONS is deliberately un-overridable for exactly this reason; the host rules are
+ * symmetric.
  *
  * A `.ru` domain is no more proof of physical location than a region string is (same caveat as
  * RF_ALLOWED_REGIONS) — it is a config-hygiene guard layered on top of the provider choice, and its
- * real job is to make the one realistic accident impossible: pasting a foreign Sentry-SaaS ingest
- * (`*.ingest.sentry.io`) into `.env`, which ships stack traces — and the PII inside them — abroad.
- * `.рф` is listed in both its Unicode and punycode form because `new URL()` normalises to punycode
- * while the CI gate matches the raw text of a config file.
+ * real job is to make the realistic accidents impossible: pasting a foreign Sentry-SaaS ingest
+ * (`*.ingest.sentry.io`), a foreign bucket (`s3.us-west-004.backblazeb2.com`) or a foreign CDN
+ * (`cdn.cloudflare.com`) into `.env`. `.рф` is listed in both its Unicode and punycode form because
+ * `new URL()` normalises to punycode while the CI gate matches the raw text of a config file.
  */
-export const RF_ALLOWED_TELEMETRY_HOST_SUFFIXES = [
+export const RF_ALLOWED_HOST_SUFFIXES = [
   '.ru',
   '.su',
   '.рф',
@@ -51,17 +58,37 @@ export const RF_ALLOWED_TELEMETRY_HOST_SUFFIXES = [
 ] as const;
 
 /**
- * True when `host` is a telemetry sink we can treat as RF-resident (ADR-0017 п.6). Fail-CLOSED:
- * anything not positively recognised is rejected. Three accepted shapes:
+ * ADR-0017 п.4 — EXACT hostnames of RF-resident STORAGE/CDN providers whose FQDN does not sit under
+ * an RF TLD, so the suffix rule above cannot see them. Today exactly one entry, and it is not
+ * optional: `storage.yandexcloud.net` is the Yandex Object Storage endpoint chosen in ADR-0008 and
+ * named as the prod object store in `.env.example` — a suffix-only rule would have rejected our OWN
+ * documented production configuration (a lock that removes a capability, not one that checks a form).
+ *
+ * Matched as "host === entry OR host ends with `.` + entry", so the virtual-host bucket form
+ * (`zoolink-media.storage.yandexcloud.net`) is admitted while a look-alike
+ * (`storage.yandexcloud.net.evil.com`) is not. Any OTHER provider is a deliberate review: adding a
+ * host here is a code change that goes through the ADR/security gate, which is the entire point of
+ * keeping the list out of `.env`.
+ */
+export const RF_ALLOWED_STORAGE_HOSTS = ['storage.yandexcloud.net'] as const;
+
+/**
+ * True when `host` can be treated as RF-resident (ADR-0017). Fail-CLOSED: anything not positively
+ * recognised is rejected. Accepted shapes:
  *
  *  1. **Self-hosted / non-routable** — loopback, RFC1918 / IPv6-ULA / link-local literals, and
- *     single-label hostnames (`sentry`, the compose/k8s service name; a dotless name cannot be a
- *     public FQDN, so it is by construction inside our own network).
- *  2. **An RF domain** — one of RF_ALLOWED_TELEMETRY_HOST_SUFFIXES.
- *  3. Nothing else. In particular any OTHER IP literal is rejected: a bare public IP is exactly
+ *     single-label hostnames (`sentry`, `minio` — the compose/k8s service name; a dotless name
+ *     cannot be a public FQDN, so it is by construction inside our own network).
+ *  2. **An RF domain** — one of RF_ALLOWED_HOST_SUFFIXES.
+ *  3. **An explicitly approved exact host** — `allowedExactHosts` (and its subdomains), used for RF
+ *     providers that live under a non-RF TLD (RF_ALLOWED_STORAGE_HOSTS).
+ *  4. Nothing else. In particular any OTHER IP literal is rejected: a bare public IP is exactly
  *     the form in which residency cannot be checked at all.
  */
-export function isResidentTelemetryHost(rawHost: string): boolean {
+export function isResidentHost(
+  rawHost: string,
+  allowedExactHosts: readonly string[] = [],
+): boolean {
   const host = rawHost
     .trim()
     .toLowerCase()
@@ -98,18 +125,233 @@ export function isResidentTelemetryHost(rawHost: string): boolean {
   // Single-label hostname → a container/LAN name, not publicly routable.
   if (!host.includes('.')) return true;
 
-  return (RF_ALLOWED_TELEMETRY_HOST_SUFFIXES as readonly string[]).some((s) =>
+  // Explicitly approved RF provider host (or one of its subdomains — the virtual-host bucket form).
+  // `.` is prepended so `storage.yandexcloud.net.evil.com` cannot pass as a subdomain.
+  if (
+    allowedExactHosts.some(
+      (h) => host === h.toLowerCase() || host.endsWith(`.${h.toLowerCase()}`),
+    )
+  ) {
+    return true;
+  }
+
+  return (RF_ALLOWED_HOST_SUFFIXES as readonly string[]).some((s) =>
     host.endsWith(s),
   );
 }
 
-/** Verdict of the DSN residency check. `host` is null when nothing parseable could be extracted. */
-export interface TelemetryDsnVerdict {
+/**
+ * ADR-0017 п.6 — a telemetry/error ingest host. No provider carve-out: an error sink is either
+ * self-hosted or under an RF domain (`storage.yandexcloud.net` is an object store, not a sink).
+ */
+export function isResidentTelemetryHost(rawHost: string): boolean {
+  return isResidentHost(rawHost);
+}
+
+/**
+ * ADR-0017 п.1 — a PRIMARY DATA STORE host (PostgreSQL, Redis). No provider carve-out, for the same
+ * reason the telemetry rule has none: `storage.yandexcloud.net` is an object-storage endpoint and
+ * admitting it here would widen clause 1 by accident. Today's documented prod topology self-hosts both
+ * (`postgres:5432`, `redis:6379` — compose service names, rule 1 of `isResidentHost`), so a
+ * suffix-plus-self-hosted rule removes nothing. The day a MANAGED RF database is adopted (Yandex
+ * Managed PostgreSQL lives at `*.mdb.yandexcloud.net`, which no RF-suffix rule can see) its host joins
+ * an explicit constant here — a code change through the ADR/security gate, never an `.env` edit.
+ */
+export function isResidentDataStoreHost(rawHost: string): boolean {
+  return isResidentHost(rawHost);
+}
+
+/**
+ * ADR-0017 п.1 — accepted URI schemes for the two primary-store DSNs. Pinned, and pinned as CODE the
+ * CI gate parses (same single-source-of-truth discipline as RF_ALLOWED_HOST_SUFFIXES), because the
+ * pre-existing shape checks were `startsWith('postgres')` / `startsWith('redis')` — a PREFIX test on
+ * the whole string, which admits `postgres-anything://…` and therefore admits a value whose host slot
+ * this validator would be reading under the wrong grammar. `postgresql`/`postgres` are the two forms
+ * Prisma accepts; `redis`/`rediss` the two ioredis accepts (`rediss` = TLS). Anything else is
+ * fail-closed: a DSN we cannot read under a known grammar is a DSN whose host we cannot clear.
+ */
+export const RF_DATABASE_URL_SCHEMES = ['postgresql', 'postgres'] as const;
+export const RF_REDIS_URL_SCHEMES = ['redis', 'rediss'] as const;
+
+/**
+ * Verdict of a DSN residency check. `targets` lists EVERY connection target the DSN names (a DSN can
+ * name several — see `dsnTargets`), a unix socket rendered as `unix:<path>`. `offending` is the first
+ * target that could not be shown resident. Neither field ever carries the DSN itself: a DSN is a
+ * credential.
+ */
+export interface DsnResidencyVerdict {
   ok: boolean;
-  /** Ingest host, for the error message. NEVER the DSN itself (it carries a credential). */
+  targets: string[];
+  offending: string | null;
+  reason: 'resident' | 'unparseable' | 'non-rf-host';
+}
+
+/**
+ * Reads ONE `host[:port]` piece of a DSN authority (or of a `host=` query parameter) down to the thing
+ * a client would actually connect to. Returns null when the piece cannot be read at all — the caller
+ * turns that into a fail-closed `unparseable` verdict.
+ *
+ * The percent-decode happens FIRST and is not cosmetic: libpq's own unix-socket form puts the socket
+ * DIRECTORY in the host slot percent-encoded (`postgresql://%2Fvar%2Frun%2Fpostgresql/zoolink`). Left
+ * encoded it is a dotless string, which rule 1 of `isResidentHost` would wave through as a "service
+ * name" — right answer, wrong reason, and the wrong reason breaks the moment the path contains a dot
+ * (`%2Fvar%2Frun%2Fpg.sock` would then be judged as a DNS name and REJECTED). Recognising the socket
+ * explicitly is what keeps that capability.
+ *
+ * Everything else is resolved by a REAL URL parse through a synthetic `http://` prefix, so IPv6
+ * brackets, ports, uppercase and percent-escapes are normalised by the same host parser the runtime
+ * uses — not by a regex of ours.
+ */
+function dsnHostTarget(piece: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(piece);
+  } catch {
+    return null; // malformed percent-escape — unreadable, so unclearable
+  }
+  if (decoded.startsWith('/')) return `unix:${decoded}`;
+  let host: string;
+  try {
+    host = new URL(`http://${piece}`).hostname;
+  } catch {
+    return null;
+  }
+  return host === '' ? null : host;
+}
+
+/**
+ * Extracts EVERY connection target a DSN names, or null when the value cannot be read under an
+ * approved grammar (fail-closed). Deliberately hand-parsed rather than handed to `new URL()` whole,
+ * because the two real-world forms below are exactly the ones a single `new URL().hostname` gets
+ * wrong — measured 2026-08-09 on Node 20:
+ *
+ *  * **libpq multi-host** (`postgres://u:p@host1,host2/db`) — `new URL()` does NOT throw and reports
+ *    `hostname === "host1,host2"`, ONE string. Fed to the suffix rules that string is dotless, so
+ *    `postgres://u:p@localhost,evil-abroad/db` would have passed as a "service name" while the client
+ *    fails over to the second host. So the authority is split on `,` and each piece checked
+ *    independently: ALL of them must be resident, because ANY of them may be the one that serves.
+ *    (The with-ports variant `host1:5432,host2:5432` is rejected one step earlier by
+ *    `z.string().url()` — measured: `new URL()` throws ERR_INVALID_URL — so it is not a shape this
+ *    validator can be reached with.)
+ *  * **host as a query parameter** (`postgresql:///db?host=/var/run/postgresql`) — the authority is
+ *    EMPTY and the real target lives in the query, invisible to `.hostname`. The parameter is checked
+ *    IN ADDITION to any authority host rather than instead of it: which one libpq prefers when both
+ *    are present is a detail we refuse to depend on, and requiring both to be resident is the answer
+ *    that is safe under either reading.
+ *
+ * Userinfo is dropped at the LAST `@` — the delimiter WHATWG and libpq both use — so a host-shaped
+ * credential (`postgres://zoolink.ru@ep-abroad.example/db`) can never be mistaken for the host.
+ */
+function dsnTargets(
+  rawValue: string,
+  allowedSchemes: readonly string[],
+): string[] | null {
+  const value = rawValue.trim();
+  const schemeMatch = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(value);
+  if (!schemeMatch) return null;
+  if (!allowedSchemes.includes(schemeMatch[1].toLowerCase())) return null;
+
+  const rest = value.slice(schemeMatch[0].length);
+  const authorityEnd = rest.search(/[/?#]/);
+  const authority = authorityEnd === -1 ? rest : rest.slice(0, authorityEnd);
+
+  const qStart = rest.indexOf('?');
+  const hashStart = rest.indexOf('#');
+  const query =
+    qStart !== -1 && (hashStart === -1 || qStart < hashStart)
+      ? rest.slice(qStart + 1, hashStart === -1 ? undefined : hashStart)
+      : '';
+
+  const targets: string[] = [];
+
+  const at = authority.lastIndexOf('@');
+  const hostList = at === -1 ? authority : authority.slice(at + 1);
+  for (const piece of hostList.split(',')) {
+    const trimmed = piece.trim();
+    if (trimmed === '') continue;
+    const target = dsnHostTarget(trimmed);
+    if (target === null) return null;
+    targets.push(target);
+  }
+
+  for (const [key, raw] of new URLSearchParams(query)) {
+    if (key.toLowerCase() !== 'host') continue;
+    for (const piece of raw.split(',')) {
+      const trimmed = piece.trim();
+      if (trimmed === '') continue;
+      // URLSearchParams has already percent-decoded, so an absolute path arrives as one.
+      const target = trimmed.startsWith('/')
+        ? `unix:${trimmed}`
+        : dsnHostTarget(trimmed);
+      if (target === null) return null;
+      targets.push(target);
+    }
+  }
+
+  // No target at all (`postgres://`, `redis://`) — fail-closed: a store whose location the config does
+  // not state is a store whose location cannot be cleared.
+  return targets.length > 0 ? targets : null;
+}
+
+/**
+ * ADR-0017 п.1 gate shared by `DATABASE_URL` and `REDIS_URL`. A unix-socket target is resident by
+ * construction (a socket file is on THIS machine); every hostname target goes through the same
+ * `isResidentHost` core as clauses 4 and 6, so there is one rule to keep true, not four.
+ *
+ * There is no lawful "empty" mode for either variable — both are boot-required (no `.default()`), the
+ * app cannot run without them — so, unlike `SENTRY_DSN`/`MEDIA_CDN_HOST`, there is no `disabled`
+ * verdict: empty is `unparseable`.
+ */
+export function checkDsnResidency(
+  rawValue: string,
+  allowedSchemes: readonly string[],
+): DsnResidencyVerdict {
+  const targets = dsnTargets(rawValue, allowedSchemes);
+  if (targets === null) {
+    return { ok: false, targets: [], offending: null, reason: 'unparseable' };
+  }
+  const offending = targets.find(
+    (t) => !(t.startsWith('unix:') || isResidentDataStoreHost(t)),
+  );
+  if (offending !== undefined) {
+    return { ok: false, targets, offending, reason: 'non-rf-host' };
+  }
+  return { ok: true, targets, offending: null, reason: 'resident' };
+}
+
+/** ADR-0017 п.1 — the PRIMARY store of personal data. */
+export function checkDatabaseUrl(rawValue: string): DsnResidencyVerdict {
+  return checkDsnResidency(rawValue, RF_DATABASE_URL_SCHEMES);
+}
+
+/** ADR-0017 п.1 — the cache / throttler store sitting in front of it. */
+export function checkRedisUrl(rawValue: string): DsnResidencyVerdict {
+  return checkDsnResidency(rawValue, RF_REDIS_URL_SCHEMES);
+}
+
+/**
+ * ADR-0017 п.4 — an object-storage / media-CDN host. Same rules as the telemetry sink PLUS the
+ * approved RF provider hosts (RF_ALLOWED_STORAGE_HOSTS), because the ADR-0008 prod bucket lives at
+ * `storage.yandexcloud.net`, which no RF-suffix rule can recognise.
+ */
+export function isResidentStorageHost(rawHost: string): boolean {
+  return isResidentHost(rawHost, RF_ALLOWED_STORAGE_HOSTS);
+}
+
+/**
+ * Verdict of a host-residency check (DSN, storage endpoint, CDN host). `host` is null when nothing
+ * parseable could be extracted. `disabled` means the value was empty AND empty is a lawful "off"
+ * mode for that variable.
+ */
+export interface HostResidencyVerdict {
+  ok: boolean;
+  /** The host, for the error message. NEVER the raw value (a DSN carries a credential). */
   host: string | null;
   reason: 'disabled' | 'resident' | 'unparseable' | 'non-rf-host';
 }
+
+/** Historical name kept for the DSN call sites (same shape — one type, so it cannot diverge). */
+export type TelemetryDsnVerdict = HostResidencyVerdict;
 
 /**
  * ADR-0017 п.6 gate for a Sentry-style DSN (`https://<publicKey>@<host>[:port]/<projectId>`).
@@ -139,17 +381,162 @@ export function checkTelemetryDsn(dsn: string): TelemetryDsnVerdict {
     : { ok: false, host, reason: 'non-rf-host' };
 }
 
+/**
+ * Human-readable rendering of the RF suffix allowlist for an error message. Punycode duplicates are
+ * dropped: `.рф` and `.xn--p1ai` are the same TLD, and printing both only confuses the operator.
+ */
+function allowedSuffixesForMessage(): string {
+  return (RF_ALLOWED_HOST_SUFFIXES as readonly string[])
+    .filter((s) => !s.startsWith('.xn--'))
+    .join(', ');
+}
+
 /** Boot/init error text for a rejected DSN. Prints the HOST only, never the DSN (credential). */
 export function telemetryDsnRejectionMessage(
   verdict: TelemetryDsnVerdict,
 ): string {
-  const allowed = (RF_ALLOWED_TELEMETRY_HOST_SUFFIXES as readonly string[])
-    .filter((s) => !s.startsWith('.xn--'))
-    .join(', ');
+  const allowed = allowedSuffixesForMessage();
   if (verdict.reason === 'unparseable') {
     return `SENTRY_DSN is set but no http(s) ingest host could be parsed from it — refusing (fail-closed): an unverifiable error sink cannot be shown to be RF-resident (ADR-0017 п.6 / ФЗ-152 ст.18 ч.5). Leave SENTRY_DSN empty to disable error reporting.`;
   }
   return `error-sink host "${verdict.host ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.6 / ФЗ-152 ст.18 ч.5) — stack traces and error context carry PII, so the ingest must be self-hosted (loopback / private address / single-label service name) or under an RF domain (${allowed}). An empty SENTRY_DSN disables error reporting and is permitted. A non-RF sink is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
+}
+
+/**
+ * ADR-0017 п.4 gate for `S3_ENDPOINT` — the object store that holds PII (provider documents,
+ * avatars, listing photos; PII inventory in data-governance.md §1, encrypted per ADR-0012).
+ *
+ * WHY this is the same defect class as the DSN and NOT a new one: the residency guardrail as
+ * specified in the ADR scans REGION-bearing values, and a bucket is named by a HOST. `S3_REGION` can
+ * sit at an approved `ru-central1` while `S3_ENDPOINT` points at `s3.us-west-004.backblazeb2.com` —
+ * measured 2026-08-09: all three residency layers reported green with exactly that config.
+ *
+ * Form: a full URL, because that is what the value already is (`http://minio:9000`), and the host is
+ * taken by a REAL URL parse rather than a substring test — `https://ru.example.com@evil.com/` would
+ * satisfy any `includes('.ru')` check while resolving to `evil.com`. The scheme is additionally
+ * pinned to http(s): `z.string().url()` accepts ANY scheme (measured: `ftp://…` passed), and a
+ * non-http endpoint is both unusable by the S3 client and unverifiable here.
+ *
+ * There is NO lawful "empty" mode — S3_ENDPOINT is boot-required (no `.default()`), the app cannot
+ * store media without it — so unlike the DSN there is no `disabled` verdict. Empty/unparseable is
+ * fail-closed in every environment: a host we cannot read is a host we cannot clear.
+ *
+ * Enforced HERE only (plus the CI gate), unlike the DSN which also needs a check inside `initSentry`:
+ * nothing reads `S3_ENDPOINT` before Nest boots (`providers.module.ts` takes it off the validated
+ * config surface), so no byte can leave for the bucket before this refine has run.
+ */
+export function checkStorageEndpoint(rawValue: string): HostResidencyVerdict {
+  const value = rawValue.trim();
+  if (value === '') return { ok: false, host: null, reason: 'unparseable' };
+  let host: string;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return { ok: false, host: null, reason: 'unparseable' };
+    }
+    host = url.hostname;
+  } catch {
+    return { ok: false, host: null, reason: 'unparseable' };
+  }
+  if (host === '') return { ok: false, host: null, reason: 'unparseable' };
+  return isResidentStorageHost(host)
+    ? { ok: true, host, reason: 'resident' }
+    : { ok: false, host, reason: 'non-rf-host' };
+}
+
+/** Boot error text for a rejected `S3_ENDPOINT`. Names the HOST, never credentials. */
+export function storageEndpointRejectionMessage(
+  verdict: HostResidencyVerdict,
+): string {
+  const allowed = allowedSuffixesForMessage();
+  const providers = (RF_ALLOWED_STORAGE_HOSTS as readonly string[]).join(', ');
+  if (verdict.reason === 'unparseable') {
+    return `S3_ENDPOINT is not a parseable http(s) endpoint — refusing (fail-closed): an object store whose host cannot be read cannot be shown to be RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5). Use the form http(s)://host[:port], e.g. http://minio:9000.`;
+  }
+  return `object-storage host "${verdict.host ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5) — the bucket holds personal data (provider documents, avatars, listing photos), so the endpoint must be self-hosted (loopback / private address / single-label service name such as minio:9000), under an RF domain (${allowed}), or an approved RF provider host (${providers}). A non-RF endpoint is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
+}
+
+/**
+ * ADR-0017 п.4 gate for `MEDIA_CDN_HOST` — strictly MORE dangerous than the bucket itself, because
+ * this value is not merely *where we upload*: `mediaAllowedHosts()` ADDS it to the media-URL
+ * allowlist (lib/media/media-url.ts), so whatever host is named here becomes a host from which
+ * durable media — including user avatars, personal data under ADR-0012 — is legitimately cached and
+ * served. `MEDIA_CDN_HOST=cdn.cloudflare.com` therefore both exports PII to a foreign edge network
+ * AND widens the own-storage check that exists to stop moderation-swap and latent SSRF.
+ *
+ * Form differs from the DSN/endpoint: this is a BARE `host[:port]` with no scheme, so `new URL(value)`
+ * cannot be used directly. The value is first restricted to host characters — anything containing
+ * `/`, `@`, `%`, `?`, `#` or whitespace is refused outright — and only then parsed via a synthetic
+ * `http://` prefix. That order is what makes the parse trustworthy: `https://cdn.zoolink.ru`,
+ * `evil.com/cdn.zoolink.ru` and `key@evil.com` can never reach the suffix test wearing a host's
+ * clothes, and a value the operator *thinks* is a host but is not is a boot error rather than a
+ * silently-unmatchable allowlist entry.
+ *
+ * EMPTY = no CDN, which is lawful, is the documented MVP default and is today's live value in
+ * `.env.example` — that mode must keep working untouched (no-capability-regression).
+ */
+export function checkMediaCdnHost(rawValue: string): HostResidencyVerdict {
+  const value = rawValue.trim();
+  if (value === '') return { ok: true, host: null, reason: 'disabled' };
+  // Host characters only (letters, digits, dot, dash, underscore, colon for the port, brackets for
+  // an IPv6 literal). Everything else — scheme separators, userinfo, path, query, percent-escapes,
+  // whitespace — is refused before any parse is attempted.
+  if (!/^[A-Za-z0-9._:[\]-]+$/.test(value)) {
+    return { ok: false, host: null, reason: 'unparseable' };
+  }
+  let host: string;
+  try {
+    host = new URL(`http://${value}`).hostname;
+  } catch {
+    return { ok: false, host: null, reason: 'unparseable' };
+  }
+  if (host === '') return { ok: false, host: null, reason: 'unparseable' };
+  return isResidentStorageHost(host)
+    ? { ok: true, host, reason: 'resident' }
+    : { ok: false, host, reason: 'non-rf-host' };
+}
+
+/** Boot error text for a rejected `MEDIA_CDN_HOST`. */
+export function mediaCdnHostRejectionMessage(
+  verdict: HostResidencyVerdict,
+): string {
+  const allowed = allowedSuffixesForMessage();
+  const providers = (RF_ALLOWED_STORAGE_HOSTS as readonly string[]).join(', ');
+  if (verdict.reason === 'unparseable') {
+    return `MEDIA_CDN_HOST must be a bare host[:port] — no scheme, no path, no credentials (e.g. cdn.zoolink.ru) — refusing (fail-closed): a CDN host that cannot be read cannot be shown to be RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5). Leave it empty to serve media straight from the S3 origin.`;
+  }
+  return `media CDN host "${verdict.host ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5) — this host is ADDED to the media-URL allowlist, so it would cache and serve avatars and listing photos (personal data, ADR-0012) from outside the RF. It must be self-hosted (loopback / private address / single-label service name), under an RF domain (${allowed}), or an approved RF provider host (${providers}). An empty MEDIA_CDN_HOST (no CDN — the default) is permitted. A non-RF CDN is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
+}
+
+/**
+ * Boot error text for a rejected `DATABASE_URL` (ADR-0017 п.1). Names the offending HOST and nothing
+ * else — a DSN carries the database password.
+ */
+export function databaseUrlRejectionMessage(
+  verdict: DsnResidencyVerdict,
+): string {
+  const allowed = allowedSuffixesForMessage();
+  const schemes = (RF_DATABASE_URL_SCHEMES as readonly string[])
+    .map((s) => `${s}://`)
+    .join(' or ');
+  if (verdict.reason === 'unparseable') {
+    return `DATABASE_URL names no readable database host — refusing (fail-closed): the PRIMARY store of personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}user:password@host[:port]/db, e.g. postgresql://zoolink:***@postgres:5432/zoolink?schema=public (a unix socket via ?host=/var/run/postgresql is also accepted).`;
+  }
+  return `database host "${verdict.offending ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5) — DATABASE_URL is the PRIMARY store of personal data (accounts, phone_hash, encrypted email/contact_phone per ADR-0012, listings, consents, the moderation audit trail), so ФЗ-152 ст.18 ч.5 requires it to sit on RF territory. It must be self-hosted (loopback / private address / single-label service name such as postgres:5432 / a unix socket) or under an RF domain (${allowed}). A non-RF database is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
+}
+
+/**
+ * Boot error text for a rejected `REDIS_URL` (ADR-0017 п.1). Same discipline: the offending HOST only.
+ */
+export function redisUrlRejectionMessage(verdict: DsnResidencyVerdict): string {
+  const allowed = allowedSuffixesForMessage();
+  const schemes = (RF_REDIS_URL_SCHEMES as readonly string[])
+    .map((s) => `${s}://`)
+    .join(' or ');
+  if (verdict.reason === 'unparseable') {
+    return `REDIS_URL names no readable Redis host — refusing (fail-closed): a cache that also holds personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}[:password@]host[:port], e.g. redis://:***@redis:6379.`;
+  }
+  return `Redis host "${verdict.offending ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5) — Redis is not "just a cache": it stores the rate-limit and throttler counters keyed by phone/IP, the listing-creation quota keyed by user id, and cached profile/listing payloads, i.e. personal data derived from the primary store. It must be self-hosted (loopback / private address / single-label service name such as redis:6379) or under an RF domain (${allowed}). A non-RF Redis is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
 }
 
 /**
@@ -194,13 +581,26 @@ export const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
-  // PostgreSQL — single source of connectivity is DATABASE_URL.
+  // PostgreSQL — single source of connectivity is DATABASE_URL. Shape here; the ADR-0017 п.1
+  // RESIDENCY of the database HOST is enforced by the .superRefine below (checkDatabaseUrl). This is
+  // the HEAVIEST member of the "the host leaves the country through env" class: measured 2026-08-09,
+  // `DATABASE_URL=postgresql://u:p@ep-x.us-east-2.aws.neon.tech/db` booted cleanly at
+  // NODE_ENV=production with every other residency layer green — the PRIMARY store of РФ-citizen
+  // personal data, abroad, on one edited line. `.startsWith('postgres')` is kept as the fast early
+  // shape error, but it is a PREFIX test on the whole string and is NOT the scheme pin: that lives in
+  // RF_DATABASE_URL_SCHEMES, checked by the refine.
   DATABASE_URL: z.string().url().startsWith('postgres'),
 
-  // Redis — required for throttler storage + caching.
+  // Redis — required for throttler storage + caching. Same clause-1 refine as DATABASE_URL
+  // (checkRedisUrl): measured red-before `rediss://d:p@eu2-x.upstash.io:6379` was accepted in
+  // production. Redis holds rate-limit/quota counters keyed by phone/IP/user id and cached
+  // profile/listing payloads, so it is PII-bearing in practice, not a location-neutral cache.
   REDIS_URL: z.string().url().startsWith('redis'),
 
-  // Object storage (S3-compatible). Not exercised by Phase 0 health, but validated for shape.
+  // Object storage (S3-compatible). Shape here; the ADR-0017 п.4 RESIDENCY of the endpoint HOST is
+  // enforced by the .superRefine below (checkStorageEndpoint) — the bucket holds PII, and a region
+  // string cannot see a foreign host: S3_REGION=ru-central1 with
+  // S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com passed every layer until 2026-08-09.
   S3_ENDPOINT: z.string().url(),
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
@@ -215,8 +615,11 @@ export const envSchema = z.object({
   // over the bucket). When set, its host is ADDED to the media-URL allowlist (lib/media/media-url.ts)
   // alongside the S3_ENDPOINT host, so listing photos served from the CDN pass the own-storage check
   // (AUDIT3 media host allowlist, Wave B2). HOST only (no scheme/path), e.g. `cdn.zoolink.ru`. Empty =
-  // no CDN (S3 host is the sole allowed origin — the MVP default). Shape-only here; the allowlist build
-  // lives in lib/media so the rule stays testable in isolation.
+  // no CDN (S3 host is the sole allowed origin — the MVP default). The allowlist BUILD lives in
+  // lib/media so the rule stays testable in isolation; the ADR-0017 п.4 RESIDENCY of this host is
+  // enforced by the .superRefine below (checkMediaCdnHost). Residency matters MORE here than for the
+  // bucket: because the host is added to the media allowlist, a foreign CDN would legitimately cache
+  // and serve avatars (PII, ADR-0012) abroad — and widen the own-storage check at the same time.
   MEDIA_CDN_HOST: z.string().optional().default(''),
 
   // Auth / JWT — secrets must be long enough to be meaningful.
@@ -323,9 +726,12 @@ export const envSchema = z.object({
   // today; managed-PG / replica / backup / DR / log-sink region vars in future) and reject any
   // value outside RF_ALLOWED_REGIONS. Aggregates into the same boot-blocking error report as the
   // rest of the schema. The dev bypass applies ONLY outside production (residency is unconditional
-  // in prod). Non-string values (there are none today) are skipped defensively. The same block also
-  // enforces clause 6 of the ADR — the PII-bearing observability sink (SENTRY_DSN host) — so both
-  // "where data is stored" and "where errors are shipped" are gated by one boot-blocking report.
+  // in prod). Non-string values (there are none today) are skipped defensively.
+  //
+  // The same block also enforces the HOST-bearing clauses of the ADR, which no `*_REGION` scan can
+  // see: clause 6 (SENTRY_DSN — where errors are shipped) and clause 4 (S3_ENDPOINT + MEDIA_CDN_HOST —
+  // where media/PII is stored and from where it is served). One boot-blocking report covers all of
+  // "where data is stored", "from where it is served" and "where errors are shipped".
   .superRefine((val, ctx) => {
     const devBypass =
       val.NODE_ENV !== 'production' && val.RESIDENCY_ALLOW_NON_RF_DEV === true;
@@ -355,6 +761,57 @@ export const envSchema = z.object({
         code: z.ZodIssueCode.custom,
         path: ['SENTRY_DSN'],
         message: telemetryDsnRejectionMessage(dsnVerdict),
+      });
+    }
+
+    // ADR-0017 clause 4 — the PII-bearing OBJECT STORE and the CDN in front of it. Same defect class
+    // as the DSN above, in two more places: the region axes are blind to a HOST, so a foreign bucket
+    // (`s3.us-west-004.backblazeb2.com`) or a foreign CDN (`cdn.cloudflare.com`) sailed through every
+    // layer while S3_REGION sat innocently at `ru-central1`. Same dev-bypass discipline throughout:
+    // it relaxes only a `non-rf-host` verdict, only outside production, and NEVER an unparseable one.
+    const s3Verdict = checkStorageEndpoint(val.S3_ENDPOINT);
+    if (!s3Verdict.ok && !(s3Verdict.reason === 'non-rf-host' && devBypass)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['S3_ENDPOINT'],
+        message: storageEndpointRejectionMessage(s3Verdict),
+      });
+    }
+
+    const cdnVerdict = checkMediaCdnHost(val.MEDIA_CDN_HOST);
+    if (!cdnVerdict.ok && !(cdnVerdict.reason === 'non-rf-host' && devBypass)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MEDIA_CDN_HOST'],
+        message: mediaCdnHostRejectionMessage(cdnVerdict),
+      });
+    }
+
+    // ADR-0017 clause 1 — the PRIMARY store of personal data (`DATABASE_URL`) and the cache/throttler
+    // store in front of it (`REDIS_URL`). Last and HEAVIEST member of the same class as clauses 4 and 6:
+    // a region axis cannot see a host, and neither DSN carries a region string at all, so
+    // `S3_REGION=ru-central1` sat green while the database itself could be a US-East Neon endpoint
+    // (measured 2026-08-09: accepted at NODE_ENV=production, CI gate silent).
+    //
+    // Same core (`isResidentHost`), same dev-bypass discipline as every clause above — it relaxes only a
+    // `non-rf-host` verdict, only outside production, and NEVER an unparseable one. In production the
+    // rule is unconditional, because residency of the primary store is not a preference but the
+    // condition under which processing РФ-citizens' data is lawful at all (ФЗ-152 ст.18 ч.5).
+    const dbVerdict = checkDatabaseUrl(val.DATABASE_URL);
+    if (!dbVerdict.ok && !(dbVerdict.reason === 'non-rf-host' && devBypass)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DATABASE_URL'],
+        message: databaseUrlRejectionMessage(dbVerdict),
+      });
+    }
+
+    const redisVerdict = checkRedisUrl(val.REDIS_URL);
+    if (!redisVerdict.ok && !(redisVerdict.reason === 'non-rf-host' && devBypass)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['REDIS_URL'],
+        message: redisUrlRejectionMessage(redisVerdict),
       });
     }
   });
