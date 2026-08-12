@@ -49,11 +49,13 @@ if [ "${1:-}" = "--selftest" ]; then
   mkdir -p "$work/scripts" "$work/backend/src/config" "$work/deploy"
   cp "${BASH_SOURCE[0]}" "$work/scripts/"
   cp .env.example docker-compose.yml "$work/"; cp deploy/Caddyfile "$work/deploy/"
-  fails=0
+  fails=0; ran=0
+  declared=5
   for c in RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS \
            RF_DATABASE_URL_SCHEMES RF_REDIS_URL_SCHEMES; do
     sed "s/$c/${c}_RENAMED/g" "$env_validation" > "$work/$env_validation"
     out="$(bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
+    ran=$((ran+1))
     if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "could not parse $c"; then
       echo "  ok   $c renamed → rc=2 INCONCLUSIVE, and it says which constant"
     else
@@ -65,6 +67,14 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "  ok   canon unchanged → rc=0 (the selftest itself removes no capability)"
   else
     echo "::error::canon unchanged → non-zero: the harness is lying, fix it before trusting the gate"; fails=$((fails+1))
+  fi
+  # ЧИСЛО ПРОГНАННОГО РЯДОМ С ВЕРДИКТОМ, НОЛЬ = «НЕ ЗНАЮ» (ADR-0027, замер Стола 12.08.2026:
+  # свод напечатал «OK», прогнав НОЛЬ проверок — всё пропустилось в чужой среде). Здесь была та же
+  # дыра структурно: при пустом списке констант `fails` остался бы нулём и selftest сказал бы
+  # «passed», ничего не проверив. Ожидаемое число берём из самого списка, а не из памяти.
+  echo "  selftest: прогнано констант $ran из объявленных $declared"
+  if [ "$ran" = 0 ] || [ "$ran" -lt "$declared" ]; then
+    echo "::error::selftest прогнал $ran из $declared — это НЕ ЗНАЮ, а не «passed»"; exit 2
   fi
   [ "$fails" = 0 ] && { echo "✅ selftest passed — this gate can still say \"I don't know\""; exit 0; }
   echo "❌ selftest failed ($fails)"; exit 1
