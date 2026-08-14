@@ -73,6 +73,62 @@ export const RF_ALLOWED_HOST_SUFFIXES = [
 export const RF_ALLOWED_STORAGE_HOSTS = ['storage.yandexcloud.net'] as const;
 
 /**
+ * ИСХОДЯЩИЙ ПЕРИМЕТР: адреса провайдеров, ЗАШИТЫЕ В КОД адаптеров (ADR-0008). До 13.08.2026 они были
+ * невидимы для гейта резидентности ПО ПОСТРОЕНИЮ: гейт читает переменные окружения, а эти адреса
+ * живут в исходниках — значит новый адаптер с зарубежным хостом прошёл бы молча, и узнали бы мы об
+ * этом не от прибора, а случайно.
+ *
+ * Сегодняшние три (проверено чтением кода 13.08.2026, иных исходящих клиентов в backend/src нет —
+ * всё идёт через единственный `fetch` в `lib/providers/http.util.ts`):
+ *  · `sms.ru` — туда уходит телефон в E.164 и ТЕКСТ СМС, включая одноразовый код;
+ *  · `api.unisender.com` — email и тело письма. Российский провайдер под НЕ-РФ доменом: правило
+ *    «только .ru» отвергло бы наш же рабочий конфиг (тот же капкан, что с боевым бакетом Яндекса);
+ *  · `geocode-maps.yandex.ru` — адресная строка, которая может быть локацией продавца.
+ *
+ * Утечки на 13.08 НЕТ: все три провайдера российские. Это слепое место, а не нарушение — и замок
+ * ставится ради КЛАССА, а не ради трёх случаев.
+ */
+export const RF_ALLOWED_PROVIDER_HOSTS = [
+  'sms.ru',
+  'api.unisender.com',
+  'geocode-maps.yandex.ru',
+  // MAX Bot API — канал сообщений, добавлен по слову владельца 13.08.2026 («сюда нужно ещё и апи
+  // макса для сообщений»). Хост РФ-овый, но правило «любой .ru» здесь ОТКЛЮЧЕНО, поэтому без этой
+  // строки дверь отказала бы — что и есть смысл перечня.
+  //
+  // ОТКУДА ВЗЯТ ХОСТ (важно для доверия к строке): из НАШЕГО паспорта продукта
+  // `design/product-passports/passport-kwork-6-max-bot.md`, где он записан как база MAX Bot API
+  // (токен в заголовке Authorization, long-poll `GET /updates` + `POST /messages`) и где заявлен
+  // живой прогон 17.07.2026 (echo-бот ответил владельцу, HTTP 200). Я САМА этот прогон не
+  // повторяла и к первоисточнику вендора не обращалась — говорю прямо, чтобы строка не выглядела
+  // измеренной мной. НАПРАВЛЕНИЕ ОШИБКИ БЕЗОПАСНОЕ: если хост неверен, дверь ОТКАЖЕТ и канал не
+  // заработает — видимый отказ, а не утечка.
+  //
+  // ⚠️ РАЗРЕШЁННЫЙ ХОСТ ≠ РАБОТАЮЩИЙ КАНАЛ. `max.ru` подписан сертификатом НУЦ Минцифры, которого
+  // нет в обычных хранилищах доверия: нашему python-боту понадобился бандл
+  // `portfolio/max-bot/russian_trusted_ca.pem`. Значит для Node-рантайма ZooLink понадобится своя
+  // мера (NODE_EXTRA_CA_CERTS или образ с бандлом) — иначе TLS упадёт УЖЕ ПОСЛЕ этой проверки, и
+  // причина будет выглядеть как «сеть», хотя дело в доверии к сертификату. Это отдельная работа.
+  //
+  // Адаптера MAX в backend пока НЕТ: строка — предварительное разрешение, а не факт о коде
+  // (ADR-0026: утверждение без прибора объявляется намерением). Ось 6a гейта проверяет ОБЪЯВЛЕННЫЕ
+  // в коде адреса, поэтому неиспользуемая запись ничего не ломает и ничего не доказывает.
+  'platform-api2.max.ru',
+] as const;
+
+/**
+ * Разрешён ли ИСХОДЯЩИЙ хост провайдера. Строже, чем `isResidentHost`: правило «любой РФ-домен»
+ * ОТКЛЮЧЕНО (иначе перечень выше — украшение). Проходят только: точный хост из перечня и его
+ * поддомены («свой, а не похожий»: `sms.ru.evil.com` не пройдёт) либо заведомо своё —
+ * loopback / RFC1918 / IPv6-ULA / односегментное имя, где ни один байт не покидает машину
+ * (это нужно живым стендам и мокам, и без этого замок отнял бы способность тестировать).
+ * Новый провайдер добавляется КОД-РЕВЬЮ, а не правкой `.env` — в этом и смысл.
+ */
+export function isAllowedProviderHost(rawHost: string): boolean {
+  return isResidentHost(rawHost, RF_ALLOWED_PROVIDER_HOSTS, { allowRfSuffixes: false });
+}
+
+/**
  * True when `host` can be treated as RF-resident (ADR-0017). Fail-CLOSED: anything not positively
  * recognised is rejected. Accepted shapes:
  *
@@ -88,7 +144,9 @@ export const RF_ALLOWED_STORAGE_HOSTS = ['storage.yandexcloud.net'] as const;
 export function isResidentHost(
   rawHost: string,
   allowedExactHosts: readonly string[] = [],
+  opts: { allowRfSuffixes?: boolean } = {},
 ): boolean {
+  const allowRfSuffixes = opts.allowRfSuffixes !== false;
   const host = rawHost
     .trim()
     .toLowerCase()
@@ -135,6 +193,11 @@ export function isResidentHost(
     return true;
   }
 
+  // Правило «любой РФ-домен» ВЫКЛЮЧАЕМО: для ИСХОДЯЩИХ адресов провайдеров оно сделало бы
+  // перечень разрешённых хостов декоративным (два из трёх наших и так под .ru), и новый адаптер
+  // с любым .ru-хостом прошёл бы БЕЗ код-ревью. Резидентности он не нарушает — но класс
+  // «новый адаптер тихо добавил хост» закрывается только явным перечнем.
+  if (!allowRfSuffixes) return false;
   return (RF_ALLOWED_HOST_SUFFIXES as readonly string[]).some((s) =>
     host.endsWith(s),
   );
@@ -675,6 +738,10 @@ export const envSchema = z.object({
   UNISENDER_LIST_ID: z.string().optional().default(''), // Unisender list for unsubscribe footer
   EMAIL_FROM: z.string().optional().default(''), // verified sender address
   EMAIL_FROM_NAME: z.string().optional().default('ZooLink'),
+  // Канал сообщений (MAX Bot API, ADR-0008; по слову владельца 13.08.2026). Как у соседей по шву:
+  // без токена фабрика берёт заглушку, поэтому переменная необязательна и канал по умолчанию спит.
+  MESSENGER_PROVIDER: z.string().default('max'),
+  MAX_BOT_TOKEN: z.string().optional().default(''),
   YANDEX_MAPS_API_KEY: z.string().optional().default(''),
 
   // OAuth providers (ADR-0008). Empty → that provider is stub-in-dev / rejected-in-prod.

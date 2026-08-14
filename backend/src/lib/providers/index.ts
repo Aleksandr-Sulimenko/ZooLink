@@ -8,3 +8,4 @@ export * from './maps/geo.util';
 export * from './storage/object-storage.port';
 export * from './payment/payment-provider.port';
 export { ProvidersModule } from './providers.module';
+export * from './messenger/messenger-provider.port';

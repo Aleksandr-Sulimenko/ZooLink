@@ -4,6 +4,7 @@ import {
   EMAIL_PROVIDER,
   MAPS_PROVIDER,
   OBJECT_STORAGE,
+  MESSENGER_PROVIDER,
   PAYMENT_PROVIDER,
   SMS_PROVIDER,
 } from './provider.tokens';
@@ -15,6 +16,8 @@ import { YandexMapsAdapter } from './maps/yandex-maps.adapter';
 import { StubMapsProvider } from './maps/stub-maps.adapter';
 import { S3ObjectStorage } from './storage/s3.adapter';
 import { StubPaymentProvider } from './payment/stub-payment.adapter';
+import { MaxBotAdapter } from './messenger/max-bot.adapter';
+import { StubMessengerProvider } from './messenger/stub-messenger.adapter';
 
 const log = new Logger('ProvidersModule');
 
@@ -77,6 +80,27 @@ const objectStorage: Provider = {
     }),
 };
 
+const messengerProvider: Provider = {
+  provide: MESSENGER_PROVIDER,
+  inject: [AppConfigService],
+  useFactory: (cfg: AppConfigService) => {
+    if (cfg.get('MESSENGER_PROVIDER') === 'max' && cfg.get('MAX_BOT_TOKEN')) {
+      log.log('Messenger provider: MAX Bot API');
+      // Предупреждаем ЗАРАНЕЕ, а не после падения: домен MAX подписан НУЦ Минцифры, которого нет
+      // в хранилище доверия по умолчанию. Разрешённый хост ≠ работающий канал.
+      if (!process.env.NODE_EXTRA_CA_CERTS) {
+        log.warn(
+          'MAX включён, но NODE_EXTRA_CA_CERTS не задан: домен подписан НУЦ Минцифры, и без ' +
+            'российского корневого сертификата TLS упадёт (адаптер назовёт это прямо, не «сетью»).',
+        );
+      }
+      return new MaxBotAdapter(cfg.get('MAX_BOT_TOKEN'));
+    }
+    log.warn('Messenger provider: STUB (no bot token configured)');
+    return new StubMessengerProvider();
+  },
+};
+
 const paymentProvider: Provider = {
   // Always stub in the MVP; the real ЮKassa adapter arrives with feature_toggles.payments.
   provide: PAYMENT_PROVIDER,
@@ -90,7 +114,21 @@ const paymentProvider: Provider = {
  */
 @Global()
 @Module({
-  providers: [smsProvider, emailProvider, mapsProvider, objectStorage, paymentProvider],
-  exports: [SMS_PROVIDER, EMAIL_PROVIDER, MAPS_PROVIDER, OBJECT_STORAGE, PAYMENT_PROVIDER],
+  providers: [
+    smsProvider,
+    emailProvider,
+    mapsProvider,
+    objectStorage,
+    paymentProvider,
+    messengerProvider,
+  ],
+  exports: [
+    SMS_PROVIDER,
+    EMAIL_PROVIDER,
+    MAPS_PROVIDER,
+    OBJECT_STORAGE,
+    PAYMENT_PROVIDER,
+    MESSENGER_PROVIDER,
+  ],
 })
 export class ProvidersModule {}

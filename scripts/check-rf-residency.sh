@@ -50,8 +50,8 @@ if [ "${1:-}" = "--selftest" ]; then
   cp "${BASH_SOURCE[0]}" "$work/scripts/"
   cp .env.example docker-compose.yml "$work/"; cp deploy/Caddyfile "$work/deploy/"
   fails=0; ran=0
-  declared=5
-  for c in RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS \
+  declared=6
+  for c in RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS RF_ALLOWED_PROVIDER_HOSTS \
            RF_DATABASE_URL_SCHEMES RF_REDIS_URL_SCHEMES; do
     sed "s/$c/${c}_RENAMED/g" "$env_validation" > "$work/$env_validation"
     out="$(bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
@@ -432,6 +432,65 @@ check_dsn_var DATABASE_URL "$db_schemes" \
   "DATABASE_URL is the PRIMARY store of personal data (accounts, phone_hash, encrypted email/contact_phone per ADR-0012, listings, consents, the moderation audit trail)"
 check_dsn_var REDIS_URL "$redis_schemes" \
   "Redis holds the rate-limit/throttler counters keyed by phone/IP, the per-user listing quota and cached profile/listing payloads — personal data derived from the primary store"
+
+# (6) ADR-0017 — ИСХОДЯЩИЙ ПЕРИМЕТР, ЗАШИТЫЙ В КОД. Оси (1)-(5) читают ПЕРЕМЕННЫЕ, а адрес,
+#     вписанный прямо в адаптер, им не виден ПО ПОСТРОЕНИЮ: до 13.08.2026 гейт его не видел вовсе.
+#     Три замка, каждый на свой способ обойти дверь:
+#       6a. ОБЪЯВЛЕНИЯ адресов (const …ENDPOINT/URL/BASE… = 'http…') покрыты RF_ALLOWED_PROVIDER_HOSTS.
+#           ПРЕДЕЛ НАЗЫВАЮ ПРЯМО: сканируются ОБЪЯВЛЕНИЯ, а не любой литерал. Первая редакция брала
+#           любое вхождение "http://…" и краснела на нашем же `zoolink.ru` ИЗ КОММЕНТАРИЯ и на
+#           строках ТЕСТОВ — 20 ложных тревог. Адаптер, назвавший переменную иначе, этой осью не
+#           поймается: его ловит замок в двери (6c) во время работы, fail-closed. Ось 6a — про
+#           ВИДИМОСТЬ периметра в CI, а не про сам запрет.
+#       6b. ОДНА ДВЕРЬ: иных сетевых клиентов нет и прямого fetch() вне шва нет.
+#       6c. ЗАМОК В ДВЕРИ НА МЕСТЕ: http.util.ts сверяет хост ДО запроса.
+provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS = \[/,/\] as const/p' "$env_validation" \
+                  | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"
+[ -n "$provider_hosts" ] || { echo "::error::could not parse RF_ALLOWED_PROVIDER_HOSTS from $env_validation"; exit 2; }
+echo "RF outbound provider hosts: $(echo "$provider_hosts" | tr '\n' ' ')"
+
+src_root="backend/src"
+# Условие на КАТАЛОГ ПРОВАЙДЕРОВ, а не на backend/src: изолированный стенд самопроверки копирует
+# только env.validation.ts (то есть создаёт backend/src/config), адаптеров там нет — и мой честный
+# отказ «ни одного объявления не найдено» краснел ЗАКОННО, но не по делу. Поймано своей же
+# самопроверкой: контрольный прогон «канон как есть» стал ненулевым.
+if [ -d "$src_root/lib/providers" ]; then
+  decl_hosts="$(grep -rhoE "(const|let|var)[[:space:]]+[A-Za-z0-9_]*(ENDPOINT|URL|BASE)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*'https?://[A-Za-z0-9._-]+" "$src_root" --include='*.ts' 2>/dev/null \
+                | sed -E "s#.*https?://##" | sort -u || true)"
+  if [ -z "$decl_hosts" ]; then
+    echo "::error::ни одного ОБЪЯВЛЕНИЯ исходящего адреса не найдено — либо шаблон устарел, либо адаптеры переписаны. Это НЕ «чисто», это «не знаю»"
+    fail=1
+  fi
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if echo "$provider_hosts" | grep -qxF "$h"; then
+      echo "  ok   outbound endpoint $h (в RF_ALLOWED_PROVIDER_HOSTS)"
+    elif host_resident_ok "$h" 2>/dev/null; then
+      echo "  ok   outbound endpoint $h (заведомо своё)"
+    else
+      echo "::error::объявленный в коде исходящий адрес '$h' НЕ в RF_ALLOWED_PROVIDER_HOSTS — зашитые в код хосты гейт не видит, поэтому провайдер добавляется в константу код-ревью, иначе адрес уедет незамеченным"
+      fail=1
+    fi
+  done <<< "$decl_hosts"
+
+  others="$(grep -rlE "from 'axios'|require\('axios'\)|from 'undici'|from 'got'|from 'node-fetch'" "$src_root" --include='*.ts' 2>/dev/null || true)"
+  if [ -n "$others" ]; then
+    echo "::error::сетевой клиент ВНЕ единственного шва: $(echo "$others" | tr '\n' ' ')"; fail=1
+  fi
+  direct="$(grep -rlE "(^|[^.[:alnum:]])fetch\(" "$src_root" --include='*.ts' 2>/dev/null | grep -v 'lib/providers/http.util.ts' | grep -v '\.spec\.ts' || true)"
+  if [ -n "$direct" ]; then
+    echo "::error::прямой fetch() вне lib/providers/http.util.ts — периметр перестаёт быть виден в одном месте: $(echo "$direct" | tr '\n' ' ')"; fail=1
+  else
+    echo "  ok   одна дверь: единственный исходящий клиент — lib/providers/http.util.ts"
+  fi
+
+  if grep -q 'assertOutboundHostAllowed(provider, url)' "$src_root/lib/providers/http.util.ts" 2>/dev/null; then
+    echo "  ok   дверь сверяет хост ДО запроса"
+  else
+    echo "::error::lib/providers/http.util.ts больше не зовёт assertOutboundHostAllowed перед fetch — проверка периметра снята"; fail=1
+  fi
+fi
+
 
 if [ "$fail" -ne 0 ]; then
   echo "::error::RF data-residency gate FAILED — prod config points a PII-bearing store, sink or CDN outside the RF (ADR-0017)."

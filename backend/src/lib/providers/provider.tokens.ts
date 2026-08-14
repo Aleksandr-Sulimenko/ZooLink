@@ -9,3 +9,5 @@ export const EMAIL_PROVIDER = Symbol('EmailProvider');
 export const MAPS_PROVIDER = Symbol('MapsProvider');
 export const OBJECT_STORAGE = Symbol('ObjectStorage');
 export const PAYMENT_PROVIDER = Symbol('PaymentProvider');
+/** Канал сообщений в мессенджер (MAX Bot API в MVP) — рядом с СМС и почтой, ADR-0008. */
+export const MESSENGER_PROVIDER = Symbol('MessengerProvider');
