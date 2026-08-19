@@ -12,13 +12,13 @@ import { z } from 'zod';
  * is a config-hygiene guard, NOT proof of physical location — it layers on top of provider choice,
  * it does not replace it. TODO(legal): confirm the exact approved zone set (уточнить с legal).
  */
-export const RF_ALLOWED_REGIONS = [
+export const RF_ALLOWED_REGIONS = Object.freeze([
   'ru-central1',
   'ru-central1-a',
   'ru-central1-b',
   'ru-central1-c',
   'ru-central1-d',
-] as const;
+] as const);
 
 export function isRfRegion(value: string): boolean {
   return (RF_ALLOWED_REGIONS as readonly string[]).includes(value);
@@ -50,12 +50,12 @@ export function isRfRegion(value: string): boolean {
  * (`cdn.cloudflare.com`) into `.env`. `.рф` is listed in both its Unicode and punycode form because
  * `new URL()` normalises to punycode while the CI gate matches the raw text of a config file.
  */
-export const RF_ALLOWED_HOST_SUFFIXES = [
+export const RF_ALLOWED_HOST_SUFFIXES = Object.freeze([
   '.ru',
   '.su',
   '.рф',
   '.xn--p1ai',
-] as const;
+] as const);
 
 /**
  * ADR-0017 п.4 — EXACT hostnames of RF-resident STORAGE/CDN providers whose FQDN does not sit under
@@ -70,7 +70,7 @@ export const RF_ALLOWED_HOST_SUFFIXES = [
  * host here is a code change that goes through the ADR/security gate, which is the entire point of
  * keeping the list out of `.env`.
  */
-export const RF_ALLOWED_STORAGE_HOSTS = ['storage.yandexcloud.net'] as const;
+export const RF_ALLOWED_STORAGE_HOSTS = Object.freeze(['storage.yandexcloud.net'] as const);
 
 /**
  * ИСХОДЯЩИЙ ПЕРИМЕТР: адреса провайдеров, ЗАШИТЫЕ В КОД адаптеров (ADR-0008). До 13.08.2026 они были
@@ -88,7 +88,10 @@ export const RF_ALLOWED_STORAGE_HOSTS = ['storage.yandexcloud.net'] as const;
  * Утечки на 13.08 НЕТ: все три провайдера российские. Это слепое место, а не нарушение — и замок
  * ставится ради КЛАССА, а не ради трёх случаев.
  */
-export const RF_ALLOWED_PROVIDER_HOSTS = [
+// `Object.freeze` — прибор, а не соглашение: `as const` живёт только в типах, и в рантайме в перечень
+// можно было ДОПИСАТЬ хост (замерено спецом — дверь начинала его пропускать). Заморозка делает «новый
+// провайдер только код-ревью» проверяемым, а не обещанным.
+export const RF_ALLOWED_PROVIDER_HOSTS = Object.freeze([
   'sms.ru',
   'api.unisender.com',
   'geocode-maps.yandex.ru',
@@ -106,15 +109,21 @@ export const RF_ALLOWED_PROVIDER_HOSTS = [
   //
   // ⚠️ РАЗРЕШЁННЫЙ ХОСТ ≠ РАБОТАЮЩИЙ КАНАЛ. `max.ru` подписан сертификатом НУЦ Минцифры, которого
   // нет в обычных хранилищах доверия: нашему python-боту понадобился бандл
-  // `portfolio/max-bot/russian_trusted_ca.pem`. Значит для Node-рантайма ZooLink понадобится своя
-  // мера (NODE_EXTRA_CA_CERTS или образ с бандлом) — иначе TLS упадёт УЖЕ ПОСЛЕ этой проверки, и
+  // `portfolio/max-bot/russian_trusted_ca.pem`. ⚠️ ЧЕТВЁРТОЕ МЕСТО ОДНОГО ПРЕДПИСАНИЯ, СВЕДЕНО
+  // 17.08.2026 (круг 3): здесь стояло «NODE_EXTRA_CA_CERTS или образ с бандлом», тогда как три
+  // других места пака это ПРЯМО ЗАПРЕЩАЮТ — переменная процесса расширяет доверие для БД, кэша,
+  // хранилища и всех вендоров разом. Верное средство одно: УЗКИЙ бандл на ЭТОТ вызов, и оно
+  // сегодня в коде НЕ ПРОВЯЗАНО (замерено грепом: ни dispatcher, ни undici Agent, ни опций ca/tls
+  // в backend/src нет) — то есть включение канала упирается в отсутствующий механизм, и это
+  // названо находкой, а не решено умолчанием. Иначе TLS упадёт УЖЕ ПОСЛЕ этой проверки, и
   // причина будет выглядеть как «сеть», хотя дело в доверии к сертификату. Это отдельная работа.
   //
-  // Адаптера MAX в backend пока НЕТ: строка — предварительное разрешение, а не факт о коде
-  // (ADR-0026: утверждение без прибора объявляется намерением). Ось 6a гейта проверяет ОБЪЯВЛЕННЫЕ
-  // в коде адреса, поэтому неиспользуемая запись ничего не ломает и ничего не доказывает.
+  // Адаптер MAX живёт в `lib/providers/messenger/max-bot.adapter.ts` (добавлен тем же паком). Сама
+  // ФОРМА вызова тела/ответа — гипотеза из паспорта до первого живого прогона (ADR-0026: утверждение
+  // о коде подтверждается прибором, а не текстом). Порт пока никем не инжектится — «шов готов,
+  // потребителя нет»; проведение канала до потребителя — отдельная продуктовая работа со своим гейтом.
   'platform-api2.max.ru',
-] as const;
+] as const);
 
 /**
  * Разрешён ли ИСХОДЯЩИЙ хост провайдера. Строже, чем `isResidentHost`: правило «любой РФ-домен»
@@ -124,8 +133,24 @@ export const RF_ALLOWED_PROVIDER_HOSTS = [
  * (это нужно живым стендам и мокам, и без этого замок отнял бы способность тестировать).
  * Новый провайдер добавляется КОД-РЕВЬЮ, а не правкой `.env` — в этом и смысл.
  */
+/**
+ * Послабление для СТЕНДОВЫХ односегментных имён у исходящей двери (решение держателя 17.08.2026).
+ *
+ * Значение читается СТРОГО: включает только явное `1` / `true` / `yes` (без регистра и пробелов).
+ * Пустая строка, `0`, `false`, опечатка — это СТРОГИЙ режим, а не «включено». Третий полюс оси
+ * поставлен по прямому требованию держателя и по свежему уроку находки №60: значение, которое
+ * ВЫГЛЯДИТ как выключение, не смеет включать.
+ */
+function standHostsAllowed(): boolean {
+  const raw = (process.env.ALLOW_LOCAL_STAND_HOSTS ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 export function isAllowedProviderHost(rawHost: string): boolean {
-  return isResidentHost(rawHost, RF_ALLOWED_PROVIDER_HOSTS, { allowRfSuffixes: false });
+  return isResidentHost(rawHost, RF_ALLOWED_PROVIDER_HOSTS, {
+    allowRfSuffixes: false,
+    outbound: true,
+  });
 }
 
 /**
@@ -144,9 +169,22 @@ export function isAllowedProviderHost(rawHost: string): boolean {
 export function isResidentHost(
   rawHost: string,
   allowedExactHosts: readonly string[] = [],
-  opts: { allowRfSuffixes?: boolean } = {},
+  opts: { allowRfSuffixes?: boolean; outbound?: boolean } = {},
 ): boolean {
   const allowRfSuffixes = opts.allowRfSuffixes !== false;
+  // ИСХОДЯЩИЙ периметр строже РЕЗИДЕНТНОСТИ, и вот почему они не могут быть одним правилом.
+  // Резидентность отвечает на вопрос «лежат ли данные в РФ» — там IPv6-ULA (`fd00::5`) законно
+  // означает «своя машина в своей сети», и БД/кэш по такому адресу мы принимаем (это работающая
+  // способность, снимать её нельзя). Исходящий периметр отвечает на другой вопрос — «куда уйдёт
+  // байт», и там ровно те же адреса означают метаданные облака: IPv4-IMDS живёт в link-local
+  // (169.254.169.254, закрыт ниже для всех), а IPv6-IMDS — В САМОЙ ULA (`fd00:ec2::254` у AWS).
+  // Значит для двери ULA и link-local закрываются ЦЕЛИКОМ — «весь диапазон, а не точечно IMDS»,
+  // тем же доводом, каким закрыт 169.254/16. Замерено reviewer-qa на ре-гейте 15.08.2026:
+  // до этой правки `http://[fe80::1]/x` и `http://[fd00:ec2::254]/latest/meta-data/` ПРОХОДИЛИ
+  // дверь (calls=1) — предписание находки №6 требовало закрыть fe80::/10, и было выполнено
+  // только для IPv4. Стенды и моки не страдают: наружу они ходят по loopback/RFC1918/
+  // односегментному имени (замерено грепом по конфигам — ни одного ULA-адреса в исходящих).
+  const outbound = opts.outbound === true;
   const host = rawHost
     .trim()
     .toLowerCase()
@@ -155,15 +193,26 @@ export function isResidentHost(
     .replace(/\.$/, '');
   if (host === '') return false;
 
-  // Loopback by name.
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  // ИМЯ ПЕТЛИ. Для РЕЗИДЕНТНОСТИ подходит и `*.localhost` (RFC 6761 обещает петлю), для ДВЕРИ —
+  // только ТОЧНОЕ `localhost`. Лечение находки №9 закрыло односегментные имена и оставило открытым
+  // тот же класс ЭТАЖОМ ВЫШЕ: `evil.localhost` проходил дверь БЕЗ флага стендов, потому что эта
+  // строка стоит выше всей outbound-логики. Замерено безопасником тремя приборами (круг 2, 17.08):
+  // дверь пускала `evil.localhost` и `sub.evil.localhost` при УДАЛЁННОМ флаге, включая открытый
+  // http; в нашем же рантайм-образе (node:20-alpine, musl) имя `evil.localhost` НЕ особое — его
+  // разрешает РЕЗОЛВЕР СРЕДЫ (при подсунутом ответе вернулся 203.0.113.9), то есть обещание RFC
+  // держит не среда, а вера в неё; и гейт на стенде печатал «ok outbound endpoint
+  // collector.localhost» с rc=0. Способность не отнята: `.localhost` — единственное вхождение во
+  // всём backend/src, ни один конфиг и ни один свод его не использует (проверено грепом).
+  if (host === 'localhost') return true;
+  if (host.endsWith('.localhost')) return !outbound;
 
   // IPv6 literal (checked BEFORE the suffix rules: `fd…`/`fc…` prefixes must never be tested
   // against a DNS name like `fdservice.com`).
   if (host.includes(':')) {
     if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
-    if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true; // fc00::/7 unique-local
-    if (/^fe80:/.test(host)) return true; // link-local
+    // Для ДВЕРИ (outbound) ULA и link-local закрыты целиком — см. довод выше у `outbound`.
+    if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return !outbound; // fc00::/7 unique-local
+    if (/^fe80:/.test(host)) return !outbound; // link-local
     return false; // any other IPv6 literal — location unverifiable
   }
 
@@ -176,12 +225,29 @@ export function isResidentHost(
     if (a === 10) return true;
     if (a === 192 && b === 168) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 169 && b === 254) return true; // link-local
+    // 169.254.0.0/16 (link-local) НЕ считается «своим» для ИСХОДЯЩЕГО периметра: единственный живой
+    // адрес там — `169.254.169.254`, метаданные облака (Yandex/AWS/GCP выдают по нему IAM-токены
+    // инстанса), и любой будущий SSRF, попавший на него, стал бы кражей облачных ключей. Ни один наш
+    // стенд link-local наружу не зовёт (compose/k8s — это RFC1918 и односегментные имена), поэтому
+    // закрыт весь диапазон, а не точечно IMDS. Найдено спецом-безопасником при гейте 14.08.2026.
     return false;
   }
 
-  // Single-label hostname → a container/LAN name, not publicly routable.
-  if (!host.includes('.')) return true;
+  // ОДНОСЕГМЕНТНОЕ ИМЯ: для РЕЗИДЕНТНОСТИ — своё (контейнер/LAN: `postgres`, `redis`, `minio`),
+  // для ИСХОДЯЩЕЙ ДВЕРИ — строго по умолчанию. Разрешение такого имени отдано `resolv.conf`
+  // МАШИНЫ, а не нашему перечню: при заданном search-домене `http://evilhost/x` уходит НАРУЖУ, и
+  // докстринг «ни один байт не покидает машину» на этом ломается (находка №9 ре-гейта, вес важно
+  // поставлен держателем 15.08).
+  //
+  // ФОРМА ПОСЛАБЛЕНИЯ — РЕШЕНИЕ ДЕРЖАТЕЛЯ 17.08, И ОНА ПЕРЕВЁРНУТА ОТНОСИТЕЛЬНО ОЧЕВИДНОЙ.
+  // Очевидная («строго только при NODE_ENV=production») отвергнута им как FAIL-OPEN ПО УМОЛЧАНИЮ:
+  // переменная не выставлена — периметр открыт; опечатка «Production»/«prod» — открыт; боевой
+  // процесс без неё — открыт. То есть строгость держалась бы на том, что кто-то ПОМНИЛ выставить
+  // переменную, и была бы слабее всего там, где дороже всего. Вдобавок NODE_ENV трогает половина
+  // инструментов сборки — вешать на общую переменную замок периметра нельзя.
+  // Поэтому: СТРОГО ВСЕГДА, послабление — только при ЯВНОМ отдельном флаге. Стенды способность не
+  // теряют (закон храповика), но включают её ОСОЗНАННО, а не попутно.
+  if (!host.includes('.')) return outbound ? standHostsAllowed() : true;
 
   // Explicitly approved RF provider host (or one of its subdomains — the virtual-host bucket form).
   // `.` is prepended so `storage.yandexcloud.net.evil.com` cannot pass as a subdomain.
@@ -233,8 +299,8 @@ export function isResidentDataStoreHost(rawHost: string): boolean {
  * Prisma accepts; `redis`/`rediss` the two ioredis accepts (`rediss` = TLS). Anything else is
  * fail-closed: a DSN we cannot read under a known grammar is a DSN whose host we cannot clear.
  */
-export const RF_DATABASE_URL_SCHEMES = ['postgresql', 'postgres'] as const;
-export const RF_REDIS_URL_SCHEMES = ['redis', 'rediss'] as const;
+export const RF_DATABASE_URL_SCHEMES = Object.freeze(['postgresql', 'postgres'] as const);
+export const RF_REDIS_URL_SCHEMES = Object.freeze(['redis', 'rediss'] as const);
 
 /**
  * Verdict of a DSN residency check. `targets` lists EVERY connection target the DSN names (a DSN can
@@ -623,6 +689,18 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  // ПОСЛАБЛЕНИЕ ПЕРИМЕТРА НА ТИПИЗИРОВАННОЙ ПОВЕРХНОСТИ КОНФИГУРАЦИИ (находка круга 2 безопасника).
+  // Раньше флаг читался ПРЯМО из process.env и в схеме не значился вовсе: он не проверялся при
+  // старте, его состояние нигде не печаталось, а `gen-env.sh` и `validateEnv` не видели его совсем —
+  // строгость периметра в бою держалась на том, что никто не вписал строку. Форма — та же, что у
+  // соседа выше: строгий enum, где ОПЕЧАТКА РОНЯЕТ ЗАГРУЗКУ, а не молча означает «выключено».
+  // Дверь по-прежнему читает `process.env` напрямую (она вызывается вне DI, из статической функции),
+  // поэтому схема здесь — ВТОРОЙ рубеж и объявление намерения, а не единственный источник истины;
+  // сказано прямо, чтобы никто не счёл объявление достаточным.
+  ALLOW_LOCAL_STAND_HOSTS: z
+    .enum(['true', 'false', '1', '0', 'yes', 'no'])
+    .default('false'),
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_DOMAIN: z.string().min(1).default('localhost'),
 

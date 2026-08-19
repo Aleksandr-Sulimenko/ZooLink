@@ -124,8 +124,41 @@ Same defect as clause 6, in two more places: **the guardrail checks REGIONS whil
 - **`MEDIA_CDN_HOST` host allowlist** (`checkMediaCdnHost`) — stricter in effect than the bucket, because this host is **ADDED to the media-URL allowlist** (`lib/media/media-url.ts`): a foreign value both serves avatars (PII, ADR-0012) from abroad and widens the own-storage check that stops moderation-swap and latent SSRF. The value is a **bare `host[:port]`**, so it is first restricted to host characters (anything with `/`, `@`, `%`, `?`, `#` or whitespace is refused) and only then parsed — otherwise `https://cdn.zoolink.ru` would become a silently-unmatchable allowlist entry instead of a boot error. **EMPTY = no CDN is lawful and is the live default**, and keeps working untouched.
 - **One suffix list for the whole class** — `RF_ALLOWED_TELEMETRY_HOST_SUFFIXES` was renamed `RF_ALLOWED_HOST_SUFFIXES` and is shared by all host rules; a second list is a second thing to keep in step. The provider carve-out is deliberately *not* shared: an object store is not an error sink, so clause 6 stays narrower than clause 4.
 - **CI gate `scripts/check-rf-residency.sh`** — new axis (4) reads the same two constants and fails on a foreign, look-alike (`storage.yandexcloud.net.evil.com`), non-http or malformed value for either variable. Enforced at boot **once** for these two (unlike the DSN, which also needs a check inside `initSentry`): nothing reads `S3_ENDPOINT` / `MEDIA_CDN_HOST` before Nest boots, so no byte can leave before the refine has run.
-- **Standing rule for the class** — any NEW host-bearing env var (OAuth endpoint, webhook/callback URL, provider base URL) joins axis (4) on the day it is added; hosts hard-coded in adapter code (`sms.ru`, `api.unisender.com`, `geocode-maps.yandex.ru`) are invisible to this gate by construction and are governed by ADR-0008 review, not by it.
-- **The gate now has an axis on itself** — `check-rf-residency.sh --selftest` (CI step, runs before the gate). Because layer 2 derives its allowlists by parsing constant *names* out of `env.validation.ts`, a rename breaks the coupling; the `exit 2` guards written for exactly that were **unreachable** — `set -euo pipefail` killed the assignment first, so the gate exited **1**, the code that means "residency violation found", printing nothing. Measured on an isolated harness 2026-08-09, then fixed (`|| true`) and pinned by the selftest, which renames each canonical constant in turn (five of them today, including the two added by clause 1) and demands rc=2 plus the constant's name. A broken instrument must say "I don't know", never hand back a verdict.
+- **Standing rule for the class** — any NEW host-bearing env var (OAuth endpoint, webhook/callback URL, provider base URL) joins axis (4) on the day it is added. **Superseded on 2026-08-13 for hard-coded hosts** (see Clause 6a below): the sentence that used to stand here said such hosts are *invisible to this gate by construction and are governed by ADR-0008 review*. Both halves became false in one commit — the gate now sees them (axis 6a parses `const …ENDPOINT/URL/BASE = 'http…'` out of `backend/src`), the door checks them before every request, and no ADR-0008 review procedure ever existed. The sentence is kept here struck through rather than deleted, because it was the most-cited line of this ADR and someone may act on the memory of it.
+- **The gate now has an axis on itself** — `check-rf-residency.sh --selftest` (CI step, runs before the gate). Because layer 2 derives its allowlists by parsing constant *names* out of `env.validation.ts`, a rename breaks the coupling; the `exit 2` guards written for exactly that were **unreachable** — `set -euo pipefail` killed the assignment first, so the gate exited **1**, the code that means "residency violation found", printing nothing. Measured on an isolated harness 2026-08-09, then fixed (`|| true`) and pinned by the selftest, which renames each canonical constant in turn (**six** of them today — the count is the very counter this ADR offers as proof of the axis-on-itself, so it is kept in step with the instrument, which prints «прогнано констант 6 из объявленных 6») and demands rc=2 plus the constant's name. A broken instrument must say "I don't know", never hand back a verdict.
+
+### Clause 6a — the outbound perimeter in ONE door (implemented 2026-08-13, owner's word; hardened 2026-08-15…18)
+
+**The layer this ADR did not have.** Clauses 1/4/6 read env vars. Provider addresses are **hard-coded in
+adapter code**, so no env-reading guardrail could ever see them: a new adapter with a foreign host would ship
+silently. Measured before the fix: `https://evil.example.com/steal`, `https://sms.ru.evil.com/x` and
+`http://api.telegram.org/x` all **left the machine** — the only refusal came from the transport, i.e. leakage
+was bounded by whether the far side answered, not by us.
+
+- **The door** — `backend/src/lib/providers/http.util.ts`. Every outbound request in `backend/src` goes
+  through one `fetch`; the host is checked **before** the request, fail-closed, against
+  `RF_ALLOWED_PROVIDER_HOSTS` (a canonical constant, frozen at runtime). Unparseable address, non-http(s)
+  scheme, `http://` to a public host, IPv6 link-local/ULA (the v6 form of cloud IMDS) and `*.localhost` are
+  refused. Single-label stand names (`mock-sms`, `minio`) are refused **by default** and open only under an
+  explicit `ALLOW_LOCAL_STAND_HOSTS`, which axis 7 of the CI gate refuses to see in production topology.
+- **One hop only** — `redirect: 'error'` is set **after** `...init` so a caller cannot override it: a 302 from
+  an approved vendor would otherwise carry the request (and on 307/308 the **body**, i.e. the key or the
+  one-time code) to a host the door never saw.
+- **The body is bounded** — responses are read through a byte budget (1 MiB), on **both** the success and the
+  failure path, and the stream is cancelled before the throw. Measured: a ~3 GiB body previously aborted the
+  whole Node process (`Check failed: i::kMaxInt >= len`, core dumped) with the 5-second deadline never firing,
+  and 300 unread error bodies held 600 file descriptors indefinitely.
+- **Foreign response bodies are never logged** — only status, content-type and declared length. A vendor's
+  echo can contain our own key (sms.ru and the geocoder carry it in the query string), and newlines in a
+  foreign body forge log lines; `pino.redact` walks object paths, not free text, so redaction cannot help here.
+- **Layer 2 sees it too** — `check-rf-residency.sh` axis 6 (a: declared addresses are inside the allowlist,
+  b: there is exactly one outbound client, c: the door still calls the check) plus axis 7 (the stand
+  relaxation must not appear in production topology). The gate's own `--selftest` carries mutants of these
+  fixes: break one and the named axis must go red **and say which one**.
+
+**Standing rule, replacing the struck-through sentence above:** a hard-coded outbound address is admitted by
+**code review that adds it to `RF_ALLOWED_PROVIDER_HOSTS`**, never by editing `.env`; the gate refuses any
+declared address that is not in that constant.
 
 ### Clause 1 — how the primary PII store is closed (implemented 2026-08-09, security)
 **Last and heaviest member of the same class**, and the one the guardrail specification above never named: clauses (a) and (b) scan region-bearing values, and **`DATABASE_URL` carries no region string at all** — it names a host. Measured at `NODE_ENV=production`, with every other residency layer green, **6 of 6** foreign DSN configurations were accepted at boot (`postgresql://…@ep-x.us-east-2.aws.neon.tech/db`, AWS RDS, Supabase, `rediss://…@eu2-x.upstash.io:6379`), and on the region-token-free variants (`ep-x.aws.neon.tech`, `eu2-x.upstash.io`) the CI gate exited **0 with no output at all**. One edited `.env` line moved the entire database of РФ-citizens' personal data abroad while three layers reported compliance. `REDIS_URL` is in scope for the same reason and is not "just a cache": it stores the rate-limit/throttler counters keyed by phone/IP, the per-user listing-creation quota, and cached profile/listing payloads — personal data derived from the primary store. Now closed by:

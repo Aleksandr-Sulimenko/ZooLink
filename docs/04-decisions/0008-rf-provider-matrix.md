@@ -44,6 +44,7 @@ concrete vendors marked *Фаза 2+* are deferred but their interface is define
 | **Monitoring / APM** | Datadog, New Relic | **Prometheus + Grafana** | VictoriaMetrics, Yandex Monitoring | MVP |
 | **Error tracking** | — | **Sentry (self-hosted)** | GlitchTip | MVP |
 | **KMS / key management** | AWS KMS, GCP KMS, Azure Key Vault | **Yandex KMS** (dev = local key) | VK Cloud KMS, HashiCorp Vault (self-hosted) | Фаза 2+ (form in MVP per ADR-0012; behaviour gated) |
+| **Messenger (bot channel)** | Telegram Bot API (RF-blocked as a delivery channel) | **MAX Bot API** | — (no second RF messenger vetted yet) | MVP (seam only — see note) |
 
 > **ЧТО:** добавлена строка возможности **KMS / key management** в матрицу провайдеров — default
 > Yandex KMS, alt VK Cloud KMS / self-hosted Vault, dev = локальный ключ.
@@ -53,6 +54,26 @@ concrete vendors marked *Фаза 2+* are deferred but their interface is define
 > **ПОЧЕМУ ТАК ЛУЧШЕ:** канон провайдера ключей зафиксирован в одном месте (эта матрица), а не размазан
 > по ADR-0012; форма (адаптер) живёт в MVP, поведение (подключение KMS) gated — переписывания нет, и
 > RF-комплаенс (ФЗ-152: данные/ключи в РФ-инфраструктуре) сохранён.
+
+> **ЧТО:** добавлена строка возможности **Messenger (bot channel)** — default MAX Bot API, Telegram
+> Bot API отмечен RF-blocked как канал доставки, альтернатив пока нет.
+> **ПОЧЕМУ:** пак «исходящий периметр» (13.08.2026, по слову владельца) ввёл порт `MessengerProvider`
+> и адаптер MAX, и код в ПЯТИ местах ссылался на «(ADR-0008)» как на состоявшееся решение, которого
+> в этом ADR не было ни строкой. Ссылка на несуществующее основание хуже отсутствия ссылки: она
+> выглядит обоснованием. Найдено ре-гейтом 15.08, вылечено 18.08.
+> **ПОЧЕМУ ТАК ЛУЧШЕ:** канон снова отвечает на вопрос, на который код на него ссылается, а будущий
+> инженер видит и выбор, и его границы.
+> **ГРАНИЦЫ, НАЗВАННЫЕ ЧЕСТНО (без них строка обещала бы больше, чем есть):**
+> · сегодня это **шов, а не работающий канал**: порт не инжектится ни одним потребителем, а в спеке
+>   уведомлений и в схеме БД канала MAX нет (`notification_logs.type` = EMAIL|SMS|IN_APP);
+> · **адресация иная, чем у СМС**: адрес мессенджера — `chat_id`, выданный площадкой при первом
+>   обращении человека К БОТУ, а не телефон; отправить «по номеру» нельзя в принципе. Поэтому это
+>   ОТДЕЛЬНЫЙ порт, а не расширение `SmsProvider`, и ограничение держится В ТИПЕ;
+> · **форма вызова НАШЕГО хоста не проверена никем**: `platform-api2.max.ru` требует российского
+>   корня доверия (замерено 17.08), а рабочий у соседнего трека — `botapi.max.ru` на обычных корнях;
+>   у них же замерено, что заголовок идёт БЕЗ префикса `Bearer`, а наш код шлёт с ним. Включение
+>   канала наружу — отдельное окно владельца (ADR-0014), и оно закрывает эти вопросы живым вызовом.
+
 
 ## Consequences
 

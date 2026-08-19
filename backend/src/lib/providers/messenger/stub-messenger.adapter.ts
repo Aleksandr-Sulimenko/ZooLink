@@ -16,8 +16,13 @@ import type {
 export class StubMessengerProvider implements MessengerProvider {
   private readonly logger = new Logger('StubMessengerProvider');
 
-  sendMessage(msg: MessengerMessage): Promise<MessengerSendResult> {
-    this.logger.warn(`[STUB] сообщение в мессенджер не отправлено (chat=${msg.chatId})`);
+  sendMessage(_msg: MessengerMessage): Promise<MessengerSendResult> {
+    // ИДЕНТИФИКАТОР ПОЛУЧАТЕЛЯ В ЖУРНАЛ НЕ ИДЁТ — то же правило, что у боевого адаптера
+    // (pii.util.ts; соседи по шву маскируют телефон и почту). Заглушка работает в конфигурации ПО
+    // УМОЛЧАНИЮ (токен пуст), поэтому здесь это правило нарушалось бы на КАЖДОЙ отправке.
+    this.logger.warn(
+      '[STUB] сообщение в мессенджер НЕ отправлено: провайдер не настроен (токен пуст)',
+    );
     return Promise.resolve({ accepted: true, providerMessageId: null });
   }
 }

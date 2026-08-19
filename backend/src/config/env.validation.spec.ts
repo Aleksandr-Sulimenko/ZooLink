@@ -1,5 +1,6 @@
 import {
   validateEnv,
+  RF_ALLOWED_PROVIDER_HOSTS,
   RF_ALLOWED_REGIONS,
   RF_ALLOWED_HOST_SUFFIXES,
   RF_ALLOWED_STORAGE_HOSTS,
@@ -14,6 +15,8 @@ import {
   checkMediaCdnHost,
   checkDatabaseUrl,
   checkRedisUrl,
+  isAllowedProviderHost,
+  isResidentHost,
 } from './env.validation';
 
 /**
@@ -993,5 +996,151 @@ describe('checkDatabaseUrl / checkRedisUrl / isResidentDataStoreHost', () => {
       offending: null,
       reason: 'unparseable',
     });
+  });
+});
+
+
+/**
+ * ДВЕРЬ ИСХОДЯЩЕГО ПЕРИМЕТРА: IPv6 link-local и ULA закрыты ЦЕЛИКОМ (находка №6 ре-гейта 15.08).
+ *
+ * Предписание находки требовало закрыть link-local «169.254.0.0/16 И fe80::/10», а выполнено было
+ * только для IPv4 — и исход стоял «починена», пока reviewer-qa не замерил обратное на поставляемом
+ * коде. Отсюда две оси СРАЗУ, а не одна: дверь обязана ОТКАЗЫВАТЬ, и резидентность обязана
+ * ПРОДОЛЖАТЬ ПРИНИМАТЬ те же адреса — иначе лечение отняло бы работающую способность (БД/кэш по
+ * ULA-адресу, `no-capability-regression`). Класс, ради которого ось стоит ПАРОЙ полюсов:
+ * «лечение взводит мину» и «ось-встречающая».
+ */
+describe('isAllowedProviderHost — IPv6 link-local / ULA (ре-гейт 15.08, находка №6)', () => {
+  const IMDS_AND_FRIENDS = [
+    'fe80::1', // link-local, форма из замера лейна
+    '[fe80::1]', // та же в скобочной форме — дверь получает host из URL
+    'fe80::a00:27ff:fe4e:66a1',
+    'fd00:ec2::254', // IPv6-IMDS у AWS — ЖИВЁТ В ULA, а не в link-local
+    'fc00::1',
+    'fd12:3456:789a::1',
+  ];
+
+  it.each(IMDS_AND_FRIENDS)('дверь ОТКАЗЫВАЕТ %s', (host) => {
+    expect(isAllowedProviderHost(host)).toBe(false);
+  });
+
+  it('дверь по-прежнему пускает ::1 — loopback остаётся своим', () => {
+    expect(isAllowedProviderHost('::1')).toBe(true);
+    expect(isAllowedProviderHost('0:0:0:0:0:0:0:1')).toBe(true);
+  });
+
+  it('РЕЗИДЕНТНОСТЬ (не дверь) те же ULA/link-local ПРИНИМАЕТ — способность не отнята', () => {
+    // Без outbound-строгости `fd00::5` — законная «своя машина в своей сети»: по такому адресу
+    // у нас принимаются DATABASE_URL и REDIS_URL (env.validation.spec:852,869). Если эта ось
+    // покраснеет, значит починка двери отняла работающую способность.
+    expect(isResidentHost('fd00::5')).toBe(true);
+    expect(isResidentHost('fe80::1')).toBe(true);
+  });
+
+  it('дверь не путает ULA-литерал с ДОМЕННЫМ именем, начинающимся так же', () => {
+    // `fdcompany.com` — не литерал; правило префикса не должно ловить имена.
+    expect(isAllowedProviderHost('fdcompany.com')).toBe(false);
+    expect(isAllowedProviderHost('fe80.example.com')).toBe(false);
+  });
+});
+
+/**
+ * ОДНОСЕГМЕНТНЫЕ ИМЯ У ДВЕРИ: СТРОГО ВСЕГДА, ПОСЛАБЛЕНИЕ — ТОЛЬКО ЯВНЫМ ФЛАГОМ (находка №9).
+ *
+ * Ось ТРЁХПОЛЮСНАЯ по прямому требованию держателя: (1) без флага — отказ; (2) с флагом — проход
+ * (способность стендов не отнята, закон храповика); (3) значение, ВЫГЛЯДЯЩЕЕ как выключение
+ * (`0`, `false`, пустое, опечатка), — тоже отказ. Третий полюс поставлен потому, что находка №60
+ * показала обратный случай: пустое значение вырождало сопоставление в «совпадает со всем».
+ * Отдельно проверяется, что РЕЗИДЕНТНОСТЬ односегментные имена принимает всегда — иначе лечение
+ * убило бы `postgres`/`redis`/`minio` в DATABASE_URL и REDIS_URL.
+ */
+describe('isAllowedProviderHost — односегментное имя и флаг стендов (находка №9)', () => {
+  const saved = process.env.ALLOW_LOCAL_STAND_HOSTS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    else process.env.ALLOW_LOCAL_STAND_HOSTS = saved;
+  });
+
+  it('без флага — ОТКАЗ (fail-closed по умолчанию)', () => {
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    expect(isAllowedProviderHost('mock-sms')).toBe(false);
+    expect(isAllowedProviderHost('evilhost')).toBe(false);
+  });
+
+  it.each(['1', 'true', 'TRUE', 'yes', ' 1 '])('с явным флагом «%s» — проход', (v) => {
+    process.env.ALLOW_LOCAL_STAND_HOSTS = v;
+    expect(isAllowedProviderHost('mock-sms')).toBe(true);
+  });
+
+  it.each(['0', 'false', '', 'да', 'Production'])(
+    'значение «%s» выглядит как выключение либо мусор — СТРОГО',
+    (v) => {
+      process.env.ALLOW_LOCAL_STAND_HOSTS = v;
+      expect(isAllowedProviderHost('mock-sms')).toBe(false);
+    },
+  );
+
+  it('РЕЗИДЕНТНОСТЬ односегментные принимает всегда — postgres/redis/minio не отняты', () => {
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    expect(isResidentHost('postgres')).toBe(true);
+    expect(isResidentHost('redis')).toBe(true);
+    expect(isResidentHost('minio')).toBe(true);
+  });
+});
+
+/**
+ * `*.localhost` У ДВЕРИ ЗАКРЫТ (находка безопасника, круг 2 — блокер).
+ *
+ * Лечение находки №9 закрыло односегментные имена и оставило тот же класс ЭТАЖОМ ВЫШЕ: ветка
+ * «имя петли» стояла выше всей outbound-логики, поэтому `evil.localhost` проходил дверь БЕЗ флага,
+ * включая ОТКРЫТЫЙ http. Обещание RFC 6761 («*.localhost — это петля») держит не наш перечень, а
+ * резолвер среды: в нашем же образе node:20-alpine имя разрешалось в подсунутый чужой адрес.
+ * Ось двухполюсная: дверь ОТКАЗЫВАЕТ, резидентность ПРИНИМАЕТ (способность не отнята).
+ */
+describe('isAllowedProviderHost — *.localhost закрыт для двери (круг 2)', () => {
+  const saved = process.env.ALLOW_LOCAL_STAND_HOSTS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    else process.env.ALLOW_LOCAL_STAND_HOSTS = saved;
+  });
+
+  it.each(['evil.localhost', 'sub.evil.localhost', 'collector.localhost'])(
+    'дверь ОТКАЗЫВАЕТ %s без флага стендов',
+    (host) => {
+      delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+      expect(isAllowedProviderHost(host)).toBe(false);
+    },
+  );
+
+  it('ТОЧНЫЙ localhost остаётся своим — способность стендов не отнята', () => {
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    expect(isAllowedProviderHost('localhost')).toBe(true);
+  });
+
+  it('РЕЗИДЕНТНОСТЬ *.localhost принимает — правило действует только у двери', () => {
+    expect(isResidentHost('evil.localhost')).toBe(true);
+  });
+});
+
+/**
+ * ЗАМОРОЖЕНЫ ВСЕ ЧЕТЫРЕ ПЕРЕЧНЯ (находка безопасника круга 2: заморозили два из четырёх, и
+ * незамороженным остался САМЫЙ ШИРОКИЙ — суффиксы, которые стерегут DATABASE_URL, REDIS_URL, S3,
+ * CDN и Sentry разом). Ось на СВОЙСТВО, а не на строку: дозапись обязана бросать.
+ */
+describe('перечни резидентности заморожены (круг 2)', () => {
+  it.each([
+    // ПЕРЕЧЕНЬ ДВЕРИ ПЕРВЫМ: его пропуск в этой оси доказан мутацией круга 3 — снятие Object.freeze
+    // с RF_ALLOWED_PROVIDER_HOSTS проходило 256/256 ЗЕЛЁНЫМ, при том что это ЕДИНСТВЕННЫЙ перечень,
+    // которым живёт дверь, и именно для него в коде записан замер «дверь начинала пропускать
+    // дописанный хост». Ось, забывшая свой главный предмет, — худший вид зелёного.
+    ['RF_ALLOWED_PROVIDER_HOSTS', RF_ALLOWED_PROVIDER_HOSTS],
+    ['RF_ALLOWED_REGIONS', RF_ALLOWED_REGIONS],
+    ['RF_ALLOWED_HOST_SUFFIXES', RF_ALLOWED_HOST_SUFFIXES],
+    ['RF_ALLOWED_STORAGE_HOSTS', RF_ALLOWED_STORAGE_HOSTS],
+    ['RF_DATABASE_URL_SCHEMES', RF_DATABASE_URL_SCHEMES],
+    ['RF_REDIS_URL_SCHEMES', RF_REDIS_URL_SCHEMES],
+  ])('%s не расширяется в рантайме', (_name, list) => {
+    expect(Object.isFrozen(list)).toBe(true);
+    expect(() => (list as unknown as string[]).push('.evil')).toThrow();
   });
 });

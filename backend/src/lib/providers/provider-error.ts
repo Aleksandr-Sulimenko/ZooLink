@@ -11,13 +11,49 @@ export type ProviderErrorKind =
   | 'config'; // adapter not configured / capability disabled (e.g. payments off)
 
 export class ProviderError extends Error {
+  /**
+   * ЗАПРОС МОГ ДОЙТИ ДО ПЛОЩАДКИ, хотя ответа мы не получили (находка круга 3, замерена дублями).
+   *
+   * `kind` отвечает на вопрос «чинить или ждать», а этот признак — на другой: «повтор безопасен?».
+   * Замерено на сервере со счётчиком обработанных запросов: дедлайн ПОСЛЕ приёма и обрыв сокета в
+   * середине тела дают ProviderError/network, и повтор доводит счётчик до 2 — то есть у ЖИВОГО
+   * человека появляется ДУБЛЬ сообщения. Без отдельного признака политика повторов не может
+   * отличить «не дошло» от «мог дойти», потому что оба выглядят как сеть.
+   */
   constructor(
     readonly provider: string,
     readonly kind: ProviderErrorKind,
     message: string,
     readonly cause?: unknown,
+    // Транспортный код рантайма (Node/undici: `DEPTH_ZERO_SELF_SIGNED_CERT`,
+    // `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ETIMEDOUT`, …), извлечённый из цепочки `cause`. Причина
+    // отказа fetch живёт НЕ в `message` (там всегда «fetch failed»), а на несколько уровней ниже —
+    // и без явного поля любой разбор по подстроке `message` промахивается ПО ПОСТРОЕНИЮ.
+    readonly code?: string,
+    /**
+     * ЗАПРОС МОГ ДОЙТИ ДО ПЛОЩАДКИ, хотя ответа мы не получили (находка круга 3, замерена ДУБЛЯМИ).
+     * `kind` отвечает на вопрос «чинить или ждать», а этот признак — на другой: «БЕЗОПАСЕН ЛИ ПОВТОР».
+     * Замерено на сервере со счётчиком обработанных запросов: дедлайн ПОСЛЕ приёма и обрыв сокета в
+     * середине тела дают kind=network, и повтор доводит счётчик до 2 — у ЖИВОГО человека появляется
+     * ДУБЛЬ. Без отдельного признака политика повторов не отличит «не дошло» от «мог дойти»: оба
+     * выглядят как сеть. Ставится ТОЛЬКО там, где заголовки уже пришли.
+     */
+    readonly mayHaveArrived: boolean = false,
   ) {
     super(`[${provider}] ${message}`);
     this.name = 'ProviderError';
   }
+}
+
+/**
+ * Первый непустой `.code` в цепочке `.cause` ошибки рантайма. undici бросает `TypeError('fetch
+ * failed')` без кода, а НАСТОЯЩАЯ причина (например `DEPTH_ZERO_SELF_SIGNED_CERT`) лежит в
+ * `err.cause` уровнем ниже — замерено на живом рантайме, не предположено. Возвращает `undefined`,
+ * если кода нет нигде.
+ */
+export function extractRuntimeErrorCode(err: unknown, depth = 0): string | undefined {
+  if (err == null || depth > 6) return undefined;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string' && code.length > 0) return code;
+  return extractRuntimeErrorCode((err as { cause?: unknown }).cause, depth + 1);
 }

@@ -54,7 +54,10 @@ if [ "${1:-}" = "--selftest" ]; then
   for c in RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS RF_ALLOWED_PROVIDER_HOSTS \
            RF_DATABASE_URL_SCHEMES RF_REDIS_URL_SCHEMES; do
     sed "s/$c/${c}_RENAMED/g" "$env_validation" > "$work/$env_validation"
-    out="$(bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
+    # Стенд самопроверки копирует ТОЛЬКО env.validation.ts — адаптеров в нём нет ПО ПОСТРОЕНИЮ, поэтому
+    # ось 6 объявляется пропущенной ЯВНЫМ флагом (иначе новый громкий «двери нет» перебил бы предмет
+    # проверки — согласованность констант). Это и есть тот самый явный флаг вместо «молча по каталогу».
+    out="$(RF_GATE_EXPECT_ADAPTERS=0 bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
     ran=$((ran+1))
     if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "could not parse $c"; then
       echo "  ok   $c renamed → rc=2 INCONCLUSIVE, and it says which constant"
@@ -63,7 +66,72 @@ if [ "${1:-}" = "--selftest" ]; then
     fi
   done
   cp "$env_validation" "$work/$env_validation"
-  if bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" >/dev/null 2>&1; then
+
+  # ═══ МУТАЦИИ ПОЧИНОК (добавлено 17.08.2026). ЗАЧЕМ: круг 2 ре-гейта замерил, что три починки
+  # КРИТ-класса не стерегло НИЧТО — мутация «снять потолок» проходила свод зелёной. У кода стражем
+  # служит jest; у ЭТОГО скрипта свода не было вовсе, значит каждая его починка держалась ничем.
+  # ФОРМА: стенд с НАСТОЯЩЕЙ дверью и подставным объявлением адреса; ось 6 в этих прогонах НЕ
+  # пропускается (иначе объявления не сканируются вовсе — на этом первая редакция мутантов и
+  # оказалась ложно-зелёной, поймано тем же прогоном).
+  mkdir -p "$work/backend/src/lib/providers"
+  cp backend/src/lib/providers/http.util.ts "$work/backend/src/lib/providers/"
+  cp "$env_validation" "$work/$env_validation"
+  decl="$work/backend/src/lib/providers/_selftest_decls.ts"
+  gate_copy="$work/scripts/$(basename "${BASH_SOURCE[0]}")"
+
+  mutant(){ # имя · объявление (пусто = нет файла) · sed по копии гейта (пусто = без порчи) · ожидание FAIL|OK · [что ОБЯЗАН назвать вывод]
+    # ПЯТЫЙ ДОВОД ОБЯЗАТЕЛЕН ТАМ, ГДЕ КОДА ВОЗВРАТА МАЛО. Урок круга 3, сформулированный треком:
+    # rc=1 не отличает «покраснел ПО ДЕЛУ» от «покраснел ВООБЩЕ» — страж, проверяемый только кодом,
+    # принимает любой посторонний отказ за доказательство своей починки. Замерено на userinfo:
+    # и с починкой, и без неё гейт даёт rc=1, но БЕЗ починки в выводе стоит «ok outbound endpoint
+    # sms.ru» — то есть ложное одобрение видно только в ТЕКСТЕ.
+    local name="$1" declline="$2" expr="$3" want="$4" must="${5:-}"
+    cp "${BASH_SOURCE[0]}" "$gate_copy"
+    [ -n "$expr" ] && sed -i "$expr" "$gate_copy"
+    if [ -n "$declline" ]; then printf '%s\n' "$declline" > "$decl"; else rm -f "$decl"; fi
+    out="$(cd "$work" && bash "scripts/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && rc=0 || rc=$?
+    ran=$((ran+1))
+    local said=ok
+    if [ -n "$must" ] && ! printf '%s' "$out" | grep -qF "$must"; then said=нет; fi
+    if { { [ "$want" = FAIL ] && [ "$rc" = 1 ]; } || { [ "$want" = OK ] && [ "$rc" = 0 ]; }; } && [ "$said" = ok ]; then
+      echo "  ok   мутант «$name» → rc=$rc (ожидалось $want)${must:+, и вывод назвал «$must»}"
+    elif [ "$said" != ok ]; then
+      echo "::error::мутант «$name» → rc=$rc, но вывод НЕ НАЗВАЛ «$must» — красное не доказывает починку"; fails=$((fails+1))
+    else
+      echo "::error::мутант «$name» → rc=$rc, ожидалось $want — починку НЕ СТЕРЕЖЁТ НИЧТО"; fails=$((fails+1))
+    fi
+  }
+  declared=$((declared+9))
+  # ЗАКОННОЕ объявление обязано быть в КАЖДОМ прогоне: без единого объявления гейт по делу
+  # говорит «не знаю» (шаблон устарел или адаптеры переписаны) — и первая редакция мутантов
+  # ловила именно ЭТОТ красный, а не свой. Поймано этим же прогоном: предмет мутанта обязан
+  # быть ОДИН, иначе зелёное и красное перестают что-либо доказывать.
+  LEGIT="const OK_ENDPOINT = 'https://sms.ru/sms/send';"
+  mutant "стенд-хост mock-sms в объявлении" "$LEGIT
+const STAND_ENDPOINT = 'https://mock-sms/v1/send';" "" FAIL
+  mutant "collector.localhost в объявлении" "$LEGIT
+const EXFIL_URL = 'http://collector.localhost/x';" "" FAIL
+  mutant "возврат дыры .localhost в зеркало" "$LEGIT
+const EXFIL_URL = 'http://collector.localhost/x';" \
+    's@\*\.localhost) \[ "\$no_suffix" = nosuffix \] && return 1 || return 0 ;;@*.localhost) return 0 ;;@' OK
+  mutant "только законное объявление — зелено" "$LEGIT" "" OK
+  # userinfo: и с починкой, и без неё гейт красен — доказывает ТОЛЬКО текст (см. довод у mutant()).
+  mutant "userinfo в объявлении назван по ИСТИННОМУ хосту" "$LEGIT
+const EXFIL_ENDPOINT = 'https://sms.ru@evil.example.com/steal';" "" FAIL "evil.example.com"
+  # МУТАНТЫ НА ПОЧИНКИ ОСИ 7 (круг 3 замерил, что обе проходили selftest ЗЕЛЁНЫМИ).
+  # Стенд самопроверки несёт .env.example БЕЗ флага, поэтому обе пробы ставят флаг САМИ.
+  printf '%s\n' "ALLOW_LOCAL_STAND_HOSTS=1" >> "$work/.env.example"
+  mutant "флаг в боевой топологии виден" "$LEGIT" "" FAIL
+  mutant "снят срез номера строки в оси 7" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL
+  sed -i '/^ALLOW_LOCAL_STAND_HOSTS=1$/d' "$work/.env.example"
+  printf '%s\n' "# ALLOW_LOCAL_STAND_HOSTS=1 — только для стендов, в бою не ставить" >> "$work/.env.example"
+  mutant "закомментированный флаг НЕ обвиняется" "$LEGIT" "" OK
+  mutant "без среза номера комментарий обвиняется ЛОЖНО" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL
+  sed -i '/ALLOW_LOCAL_STAND_HOSTS/d' "$work/.env.example"
+  rm -f "$decl"
+
+  cp "$env_validation" "$work/$env_validation"
+  if RF_GATE_EXPECT_ADAPTERS=0 bash "$work/scripts/$(basename "${BASH_SOURCE[0]}")" >/dev/null 2>&1; then
     echo "  ok   canon unchanged → rc=0 (the selftest itself removes no capability)"
   else
     echo "::error::canon unchanged → non-zero: the harness is lying, fix it before trusting the gate"; fails=$((fails+1))
@@ -87,7 +155,13 @@ fi
 # (INCONCLUSIVE) would never be reached, so a renamed constant would read as a verdict.
 # Measured on an isolated harness 09.08.2026 (rename → rc=1, zero output). Same law as
 # check-seed-parity.sh: setup failure must never be byte-identical to a verdict.
-allow="$(sed -n '/RF_ALLOWED_REGIONS = \[/,/\]/p' "$env_validation" \
+# ШАБЛОН ТЕРПИТ ОБЕ ФОРМЫ ОБЪЯВЛЕНИЯ (`= [` и `= Object.freeze([`). 17.08 перечни были заморожены по
+# находке безопасника, форма объявления изменилась — и гейт немедленно перестал их разбирать, выйдя
+# rc=2 «could not parse». Прибор сработал ВЕРНО (честное «не знаю» вместо вердикта), но это ещё один
+# случай «лечение в одном файле ломает прибор в другом»: шаблон, привязанный к форме записи чужого
+# языка, хрупок по построению. Терпимость к обеим формам — заплата; настоящее лечение (разбор через
+# tsc/ts-node, а не sed) названо долгом.
+allow="$(sed -n '/RF_ALLOWED_REGIONS = \(Object.freeze(\)\?\[/,/\]/p' "$env_validation" \
          | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u || true)"
 [ -n "$allow" ] || { echo "::error::could not parse RF_ALLOWED_REGIONS from $env_validation"; exit 2; }
 echo "RF allowlist (from $env_validation): $(echo "$allow" | tr '\n' ' ')"
@@ -103,15 +177,38 @@ done
 [ "${#files[@]}" -gt 0 ] || { echo "::error::no deploy config files found to scan"; exit 2; }
 
 fail=0
+# СЧЁТЧИКИ ПРОГНАННОГО ПО ОСЯМ (ADR-0027, «ноль прогнанных = НЕ ЗНАЮ»). Оси 1/3/4 построены как
+# while read … < <(grep … || true): не совпало ничего — тело цикла не выполнилось, и гейт печатал
+# «✅ every value is RF-resident», НЕ ИЗМЕРИВ НИ ОДНОГО. Замерено backend-лейном на круге 2: удалить
+# четыре строки из .env.example — rc=0 и зелёный вердикт; при этом ПУСТОЕ значение той же строки
+# краснеет. То есть ОТСУТСТВИЕ переменной было разрешительнее её обнуления — наоборот безопасному
+# направлению. Лечение уже было написано в этом же файле (check_dsn_var, «silence must not read as
+# green») и применено к двум переменным из шести.
+seen_region=0; seen_dsn=0; seen_s3=0; seen_cdn=0
 
 # (1) Every `*_REGION` assignment must be an approved RF region. Handles `KEY=value` (env) and
 #     `KEY: value` / `KEY=value` (compose). Comment lines (leading #) are ignored.
 while IFS= read -r hit; do
   file="${hit%%:*}"; line="${hit#*:}"
+  # НОМЕР СТРОКИ ОТРЕЗАЕТСЯ ДО ПРОВЕРКИ НА КОММЕНТАРИЙ (как в пяти соседних циклах и в оси 7).
+  # Без второго среза в `line` оставалось ведущее «номер:», и комментарий не распознавался
+  # НИКОГДА: закомментированная строка региона давала отказ, ПОБУКВЕННО равный ответу на живое
+  # присваивание того же значения (замерено кругом 3).
+  line="${line#*:}"
   case "$(echo "$line" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  # СЧЁТЧИК СВОЕЙ ОСИ И ТОЛЬКО ПОСЛЕ ФИЛЬТРА КОММЕНТАРИЯ. Круг 2 поставил здесь ЧЕТЫРЕ инкремента
+  # (свой и ТРИ ЧУЖИХ) ДО фильтра — и тем воспроизвёл ровно ту дыру, которую закрывал: оси 3/4a/4b
+  # своих счётчиков не вели вовсе, а одна закомментированная строка удовлетворяла все четыре.
+  seen_region=$((seen_region+1))
   value="$(echo "$line" | grep -oE '[A-Z0-9_]*_REGION[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9-]+' \
-           | sed -E 's/.*[:=][[:space:]]*"?//' | tr -d '"')"
-  [ -n "$value" ] || continue
+           | sed -E 's/.*[:=][[:space:]]*"?//' | tr -d '"' || true)"   # `|| true` НЕСУЩИЙ: пустое значение под set -e убивало ОБОЛОЧКУ, и гейт выходил rc=1 — код «нарушение найдено». Предпосылка круга 2 «пустое краснеет» была верна ПО СЛУЧАЙНОСТИ (круг 3)
+  # ПУСТОЕ ЗНАЧЕНИЕ РЕГИОНА — ЭТО НЕ «ok» И НЕ «пропустить». Регион объявлен, но не назван: замерить
+  # нечего, а промолчать значило бы засчитать замер, которого не было (счётчик выше уже сработал).
+  # Круг 3 замерил, что прежде такая строка РОНЯЛА гейт под set -e, и это читалось как «нарушение».
+  if [ -z "$value" ]; then
+    echo "::error::$file: *_REGION объявлен, но ПУСТ — измерить нечего. Это «НЕ ЗНАЮ», а не «ok» (ADR-0027)"; fail=1
+    continue
+  fi
   if is_allowed "$value"; then
     echo "  ok   $file: *_REGION=$value"
   else
@@ -119,6 +216,9 @@ while IFS= read -r hit; do
     fail=1
   fi
 done < <(grep -nHE '[A-Z0-9_]*_REGION[[:space:]]*[:=]' "${files[@]}" || true)
+if [ "${seen_region}" -eq 0 ]; then
+  echo "::error::ось «*_REGION»: ПРОГНАНО НОЛЬ ЗАМЕРОВ — переменная не найдена ни в одном сканируемом файле. Это НЕ «чисто», это «НЕ ЗНАЮ» (ADR-0027): отсутствие значения не смеет читаться разрешительнее, чем пустое значение"; fail=1
+fi
 
 # (2) Broad net: any foreign cloud-region token embedded anywhere in prod config (e.g. inside an
 #     endpoint/host) is a residency red flag. Matches AWS/GCP/Azure-style `<geo>-<dir>-<n>`.
@@ -144,13 +244,18 @@ done < <(grep -nHiE "$foreign" "${files[@]}" || true)
 #     ships stack traces — and the PII inside them — across the border. EMPTY value = sink disabled
 #     (lawful, and the MVP default). Allowlist comes from the SAME single source of truth as the
 #     regions: RF_ALLOWED_HOST_SUFFIXES in env.validation.ts.
-suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \[/,/\]/p' "$env_validation" \
+suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\)\?\[/,/\]/p' "$env_validation" \
             | grep -oE "'\.[^']+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
 [ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_HOST_SUFFIXES from $env_validation"; exit 2; }
 
 # Approved RF provider hosts that do NOT sit under an RF TLD (today: Yandex Object Storage). Used ONLY
 # by the storage/CDN axis — an object store is not an error sink, so the DSN axis must stay narrower.
-storage_hosts="$(sed -n '/RF_ALLOWED_STORAGE_HOSTS = \[/,/\]/p' "$env_validation" \
+# РАЗБИРАЕМ ОДНОСТРОЧНОЕ ОБЪЯВЛЕНИЕ, НЕ sed-ДИАПАЗОНОМ. Диапазон `/начало/,/конец/` НЕ закрывается на
+# СТАРТОВОЙ строке: у однострочной константы `[...]` он не находил `]` на той же строке и добегал до
+# `]` СЛЕДУЮЩЕГО блока (RF_ALLOWED_PROVIDER_HOSTS) — allowlist хранилищ ТИХО расширялся с 1 хоста до 5,
+# и `MEDIA_CDN_HOST=api.unisender.com` начинал проходить (замерено A/B, регрессия оси 4, ADR-0017).
+# Константа объявлена на ОДНОЙ строке → берём именно её.
+storage_hosts="$(grep -E 'export const RF_ALLOWED_STORAGE_HOSTS =' "$env_validation" \
                  | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
 [ -n "$storage_hosts" ] || { echo "::error::could not parse RF_ALLOWED_STORAGE_HOSTS from $env_validation"; exit 2; }
 echo "RF host suffixes: $(echo "$suffixes" | tr '\n' ' ')| approved provider hosts: $(echo "$storage_hosts" | tr '\n' ' ')"
@@ -162,19 +267,53 @@ host_resident_ok() {
   local h allow_storage
   h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   allow_storage="${2:-}"
+  # РЕЖИМ «БЕЗ СУФФИКСОВ» — для оси 6a (объявленные в КОДЕ адреса). Дверь в рантайме зовёт
+  # isAllowedProviderHost, то есть isResidentHost с allowRfSuffixes:false: РФ-домен сам по себе
+  # дверь НЕ открывает, нужен явный перечень. Гейт же звал зеркало с суффиксами и потому объявлял
+  # «заведомо своим» ЛЮБОЙ зашитый в код .ru-адрес. ЗАМЕРЕНО (reviewer-qa, ре-гейт 15.08):
+  # const ENDPOINT = https://api.sberbank.ru/x → «ok outbound endpoint (заведомо своё)», rc=0,
+  # тогда как дверь его ОТКАЗЫВАЕТ и http.util.spec держит этот адрес как обязательный отказ.
+  # Слой-2 был РАЗРЕШАЮЩЕЕ слоя-1 на самом вероятном случае — новом РФ-провайдере.
+  no_suffix="${3:-}"
   h="${h%.}"; h="${h#[}"; h="${h%]}"
   [ -n "$h" ] || return 1
   case "$h" in
-    localhost|*.localhost) return 0 ;;
+    localhost) return 0 ;;
+    # `*.localhost` — «своё» только для РЕЗИДЕНТНОСТИ. Для объявлений исходящих адресов (режим
+    # nosuffix, ось 6a) оно закрыто, как и в двери: имя разрешает резолвер МАШИНЫ, и в нашем же
+    # образе node:20-alpine `evil.localhost` спокойно резолвится в чужой адрес (замерено круг 2).
+    *.localhost) [ "$no_suffix" = nosuffix ] && return 1 || return 0 ;;
     ::1|0:0:0:0:0:0:0:1) return 0 ;;
     f[cd]*:*|fe80:*) return 0 ;;
     *:*) return 1 ;;                                        # any other IPv6 literal
-    127.*|10.*|192.168.*|169.254.*) return 0 ;;
-    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
   esac
-  # Any other bare IPv4 literal: residency is unverifiable → refuse.
-  case "$h" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 1 ;; esac
-  case "$h" in *.*) ;; *) return 0 ;; esac                  # single-label = container/LAN name
+  # ЛИТЕРАЛ ЛИ ЭТО ВООБЩЕ — РЕШАЕТСЯ ПЕРВЫМ (находка ре-гейта 15.08, две ленты независимо).
+  # Было наоборот: глобы приватных диапазонов стояли ВЫШЕ этой проверки, а в `case` точка — обычный
+  # символ, поэтому `10.evil.com`, `127.attacker.example.com`, `192.168.evil.com`, `172.31.evil.com`
+  # и даже `127.0.0.1.evil.com` объявлялись РЕЗИДЕНТНЫМИ. ЗАМЕРЕНО: гейт печатал по каждому
+  # «ok … (RF-resident / self-hosted)» и выходил rc=0 с итоговым «every value is RF-resident», тогда
+  # как TS-зеркало (`isResidentHost`) их ОТВЕРГАЕТ — то есть слой 2 расходился со слоем 1 в
+  # РАЗРЕШАЮЩУЮ сторону, ровно на том классе, ради которого гейт и написан. Шапка файла при этом
+  # утверждала «layer 1 and this CI gate can never diverge» — утверждение опровергнуто замером.
+  # Форма квартета берётся строгая (1-3 цифры в каждом октете), как в TS: `10.evil.com` в неё не
+  # попадает и уходит в общий разбор имён ниже.
+  if printf '%s' "$h" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+    case "$h" in
+      127.*|10.*) return 0 ;;                               # 169.254/16 закрыт: IMDS облака, см. TS-зеркало
+      192.168.*) return 0 ;;
+      172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+      *) return 1 ;;                                        # любой другой голый IPv4 — не проверяем
+    esac
+  fi
+  # ОДНОСЕГМЕНТНОЕ ИМЯ. Для резидентности — своё (контейнер/LAN). Для ОБЪЯВЛЕНИЙ исходящих адресов
+  # (nosuffix) — НЕТ: дверь с 17.08 пускает такие имена только при явном ALLOW_LOCAL_STAND_HOSTS, а
+  # гейт про флаг не знал и печатал «ok (заведомо своё)» на том, что дверь ОТКАЗЫВАЕТ. Слой 2 был
+  # разрешительнее слоя 1 ровно на новом правиле (замерено двумя лейнами круга 2). Шапка файла
+  # обещает, что слои «can never diverge» — эта строка и есть плата за обещание.
+  case "$h" in
+    *.*) ;;
+    *) [ "$no_suffix" = nosuffix ] && return 1 || return 0 ;;
+  esac
   if [ "$allow_storage" = storage ]; then
     while IFS= read -r sh; do
       [ -n "$sh" ] || continue
@@ -183,7 +322,15 @@ host_resident_ok() {
       case "$h" in "$sh"|*".$sh") return 0 ;; esac
     done <<<"$storage_hosts"
   fi
+  [ "$no_suffix" = nosuffix ] && return 1
   while IFS= read -r sfx; do
+    # ПУСТАЯ СТРОКА ЗДЕСЬ ОТКРЫВАЛА ВСЁ: шаблон `*""` — это `*`, и он совпадает с ЛЮБЫМ хостом.
+    # Значит при пустом (или недоразобранном) перечне суффиксов функция объявляла резидентным
+    # что угодно — fail-OPEN ровно в том месте, которое стережёт границу. У соседнего цикла по
+    # storage-хостам такая страховка стоит (`[ -n "$sh" ] || continue`), здесь её не было.
+    # Найдено 17.08.2026 при лечении: мой же пробник с пустым перечнем показал «резидент» на всех
+    # 15 адресах, включая 8.8.8.8 — то есть дыру видно ровно тогда, когда прибор берут В РУКИ.
+    [ -n "$sfx" ] || continue
     case "$h" in *"$sfx") return 0 ;; esac
   done <<<"$suffixes"
   return 1
@@ -195,6 +342,7 @@ telemetry_host_ok() { host_resident_ok "$1"; }
 while IFS= read -r hit; do
   file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
   case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  seen_dsn=$((seen_dsn+1))   # счётчик СВОЕЙ оси, ПОСЛЕ фильтра комментария (круг 3: раньше его вёл чужой цикл)
   value="$(printf '%s' "$content" \
            | sed -E 's/.*SENTRY_DSN[[:space:]]*[:=][[:space:]]*//' \
            | tr -d "\"'" | sed -E 's/[[:space:]].*$//')"
@@ -226,6 +374,9 @@ while IFS= read -r hit; do
     fail=1
   fi
 done < <(grep -nHE '(^|[^A-Z0-9_])SENTRY_DSN[[:space:]]*[:=]' "${files[@]}" || true)
+if [ "${seen_dsn}" -eq 0 ]; then
+  echo "::error::ось «SENTRY_DSN»: ПРОГНАНО НОЛЬ ЗАМЕРОВ — переменная не найдена ни в одном сканируемом файле. Это НЕ «чисто», это «НЕ ЗНАЮ» (ADR-0027): отсутствие значения не смеет читаться разрешительнее, чем пустое значение"; fail=1
+fi
 
 # Extracts the value of KEY from a `KEY=value` / `KEY: value` config line: strips the assignment,
 # quotes, and any trailing inline comment / whitespace. Same shape as the DSN extraction above.
@@ -242,6 +393,7 @@ config_value() {   # $1 = raw line content, $2 = key name
 while IFS= read -r hit; do
   file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
   case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  seen_s3=$((seen_s3+1))   # счётчик СВОЕЙ оси, ПОСЛЕ фильтра комментария (круг 3: раньше его вёл чужой цикл)
   value="$(config_value "$content" S3_ENDPOINT)"
   # Fail-CLOSED on anything that is not an http(s) URL — mirrors the `unparseable` branch of
   # checkStorageEndpoint(). Empty is NOT a lawful mode here: the app cannot store media without a
@@ -267,10 +419,14 @@ while IFS= read -r hit; do
     fail=1
   fi
 done < <(grep -nHE '(^|[^A-Z0-9_])S3_ENDPOINT[[:space:]]*[:=]' "${files[@]}" || true)
+if [ "${seen_s3}" -eq 0 ]; then
+  echo "::error::ось «S3_ENDPOINT»: ПРОГНАНО НОЛЬ ЗАМЕРОВ — переменная не найдена ни в одном сканируемом файле. Это НЕ «чисто», это «НЕ ЗНАЮ» (ADR-0027): отсутствие значения не смеет читаться разрешительнее, чем пустое значение"; fail=1
+fi
 
 while IFS= read -r hit; do
   file="${hit%%:*}"; rest="${hit#*:}"; content="${rest#*:}"
   case "$(echo "$content" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+  seen_cdn=$((seen_cdn+1))   # счётчик СВОЕЙ оси, ПОСЛЕ фильтра комментария (круг 3: раньше его вёл чужой цикл)
   value="$(config_value "$content" MEDIA_CDN_HOST)"
   if [ -z "$value" ]; then
     echo "  ok   $file: MEDIA_CDN_HOST empty (no CDN — media served from the S3 origin)"
@@ -296,16 +452,19 @@ while IFS= read -r hit; do
     fail=1
   fi
 done < <(grep -nHE '(^|[^A-Z0-9_])MEDIA_CDN_HOST[[:space:]]*[:=]' "${files[@]}" || true)
+if [ "${seen_cdn}" -eq 0 ]; then
+  echo "::error::ось «MEDIA_CDN_HOST»: ПРОГНАНО НОЛЬ ЗАМЕРОВ — переменная не найдена ни в одном сканируемом файле. Это НЕ «чисто», это «НЕ ЗНАЮ» (ADR-0027): отсутствие значения не смеет читаться разрешительнее, чем пустое значение"; fail=1
+fi
 
 # (5) ADR-0017 clause 1 — the PRIMARY store of personal data (`DATABASE_URL`) and the cache/throttler
 #     store in front of it (`REDIS_URL`). Same class as (3) and (4), heaviest member: neither DSN
 #     carries a region string, so axes (1) and (2) are blind to them except by accident — measured
 #     2026-08-09, `ep-x.aws.neon.tech` + `eu2-x.upstash.io` produced rc=0 with no output at all.
 #     Accepted schemes come from the SAME single source of truth as every other list.
-db_schemes="$(grep -oE "RF_DATABASE_URL_SCHEMES = \[[^]]*\]" "$env_validation" \
+db_schemes="$(grep -oE "RF_DATABASE_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
               | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
 [ -n "$db_schemes" ] || { echo "::error::could not parse RF_DATABASE_URL_SCHEMES from $env_validation"; exit 2; }
-redis_schemes="$(grep -oE "RF_REDIS_URL_SCHEMES = \[[^]]*\]" "$env_validation" \
+redis_schemes="$(grep -oE "RF_REDIS_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
                  | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
 [ -n "$redis_schemes" ] || { echo "::error::could not parse RF_REDIS_URL_SCHEMES from $env_validation"; exit 2; }
 echo "DSN schemes: db=$(echo "$db_schemes" | tr '\n' ' ')| redis=$(echo "$redis_schemes" | tr '\n' ' ')"
@@ -444,52 +603,128 @@ check_dsn_var REDIS_URL "$redis_schemes" \
 #           ВИДИМОСТЬ периметра в CI, а не про сам запрет.
 #       6b. ОДНА ДВЕРЬ: иных сетевых клиентов нет и прямого fetch() вне шва нет.
 #       6c. ЗАМОК В ДВЕРИ НА МЕСТЕ: http.util.ts сверяет хост ДО запроса.
-provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS = \[/,/\] as const/p' "$env_validation" \
+# КОММЕНТАРИЙ — НЕ ДАННЫЕ. Разбор снимает строки-комментарии (`//`) и хвосты после `//` ДО того,
+# как ищет кавычки. Без этого ЗАМЕРЕНО (reviewer-qa, ре-гейт 15.08): строка внутри литерала
+#   «…не разрешаем: 'evil.example.com' — только для пояснения»
+# попадала в ПЕРЕЧЕНЬ РАЗРЕШЁННЫХ, и гейт печатал её среди хостов, выходя rc=0. Это тот же класс,
+# что крит-находка №14 (sed-диапазон захватил чужой блок), воспроизведённый на константе, которую
+# добавил тот же пак: РАЗБОР ЧУЖОГО ЯЗЫКА РЕГУЛЯРКОЙ ЧИТАЕТ ПРОЗУ КАК ОБЪЯВЛЕНИЕ.
+provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS =/,/\] as const/p' "$env_validation" \
+                  | sed -E 's@^[[:space:]]*//.*@@; s@//.*@@' \
                   | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"
 [ -n "$provider_hosts" ] || { echo "::error::could not parse RF_ALLOWED_PROVIDER_HOSTS from $env_validation"; exit 2; }
 echo "RF outbound provider hosts: $(echo "$provider_hosts" | tr '\n' ' ')"
 
 src_root="backend/src"
-# Условие на КАТАЛОГ ПРОВАЙДЕРОВ, а не на backend/src: изолированный стенд самопроверки копирует
-# только env.validation.ts (то есть создаёт backend/src/config), адаптеров там нет — и мой честный
-# отказ «ни одного объявления не найдено» краснел ЗАКОННО, но не по делу. Поймано своей же
-# самопроверкой: контрольный прогон «канон как есть» стал ненулевым.
-if [ -d "$src_root/lib/providers" ]; then
-  decl_hosts="$(grep -rhoE "(const|let|var)[[:space:]]+[A-Za-z0-9_]*(ENDPOINT|URL|BASE)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*'https?://[A-Za-z0-9._-]+" "$src_root" --include='*.ts' 2>/dev/null \
-                | sed -E "s#.*https?://##" | sort -u || true)"
-  if [ -z "$decl_hosts" ]; then
-    echo "::error::ни одного ОБЪЯВЛЕНИЯ исходящего адреса не найдено — либо шаблон устарел, либо адаптеры переписаны. Это НЕ «чисто», это «не знаю»"
-    fail=1
-  fi
-  while IFS= read -r h; do
-    [ -n "$h" ] || continue
-    if echo "$provider_hosts" | grep -qxF "$h"; then
-      echo "  ok   outbound endpoint $h (в RF_ALLOWED_PROVIDER_HOSTS)"
-    elif host_resident_ok "$h" 2>/dev/null; then
-      echo "  ok   outbound endpoint $h (заведомо своё)"
-    else
-      echo "::error::объявленный в коде исходящий адрес '$h' НЕ в RF_ALLOWED_PROVIDER_HOSTS — зашитые в код хосты гейт не видит, поэтому провайдер добавляется в константу код-ревью, иначе адрес уедет незамеченным"
-      fail=1
+door="$src_root/lib/providers/http.util.ts"
+# ЯКОРЬ ОСИ 6 — ФАЙЛ ДВЕРИ, НЕ НАЛИЧИЕ КАТАЛОГА. Прежнее `if [ -d lib/providers ]` было FAIL-OPEN:
+# переименуй каталог адаптеров — весь блок молча пропускался, а гейт печатал «passed» rc=0 (замерено
+# спецом 14.08.2026: `lib/dvernaya` с адаптером на evil.example.com дал зелёное). Теперь: ось 6 обязана
+# прогнаться, если дерево `backend/src` присутствует; «стенд без адаптеров» объявляется ЯВНЫМ флагом
+# `RF_GATE_EXPECT_ADAPTERS=0`, а не выводится из наличия каталога. И считаем число ПРОГНАННЫХ замков —
+# «сколько прошло» отличает «чисто» от «ничего не проверено» (класс «свод печатает OK, прогнав ноль»).
+expect_adapters="${RF_GATE_EXPECT_ADAPTERS:-1}"
+if [ "$expect_adapters" = 0 ]; then
+  echo "  skip axis-6: стенд ОБЪЯВЛЕН без адаптеров (RF_GATE_EXPECT_ADAPTERS=0) — исходящий периметр здесь не проверяется"
+elif [ ! -d "$src_root" ]; then
+  echo "::error::$src_root отсутствует, а RF_GATE_EXPECT_ADAPTERS≠0 — исходящий периметр не проверить. Это НЕ «чисто», это «не знаю»"; fail=1
+else
+  locks=0
+  if [ ! -f "$door" ]; then
+    # Дверь по КАНОНИЧЕСКОМУ пути. Нет её здесь = снята или каталог переименован → громкий отказ,
+    # а не тихий пропуск. Ровно та дыра, что сделала ось fail-open.
+    echo "::error::единственная дверь периметра $door НЕ НАЙДЕНА (снята или каталог переименован) — ось 6 держать не может"; fail=1
+  else
+    # 6a. ОБЪЯВЛЕНИЯ адресов покрыты перечнем. Кавычки — ЛЮБЫЕ (' " `): prettier не запрещает бэктик,
+    #     и адрес в двойных/шаблонных кавычках прошёл бы мимо (замерено). Предел прежний и назван:
+    #     сканируются ОБЪЯВЛЕНИЯ …ENDPOINT/URL/BASE, не любой литерал (иначе ложные на комментариях/тестах).
+    locks=$((locks+1))
+    # USERINFO СНИМАЕТСЯ, КАК В ОСЯХ 3 И 4. Шаблон брал класс [A-Za-z0-9._-]+ и ОСТАНАВЛИВАЛСЯ на @,
+    # выдавая за хост пользовательскую часть: объявление https://sms.ru@evil.example.com/steal давало
+    # «ok outbound endpoint sms.ru», rc=0 (замерено кругом 3). Дверь такой адрес отказывает, то есть
+    # периметр не открыт — но гейт УТВЕРЖДАЛ имя доверенного вендора там, где адрес ведёт к чужому.
+    decl_hosts="$(grep -rhoE "(const|let|var)[[:space:]]+[A-Za-z0-9_]*(ENDPOINT|URL|BASE)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*['\"\`]https?://[A-Za-z0-9._@:-]+" "$src_root" --include='*.ts' 2>/dev/null \
+                  | sed -E "s#.*https?://##" | sed -E 's#^[^/@]*@##' | sed -E 's#[:/].*$##' | sort -u || true)"
+    if [ -z "$decl_hosts" ]; then
+      echo "::error::ни одного ОБЪЯВЛЕНИЯ исходящего адреса не найдено при ЖИВОЙ двери — шаблон устарел или адаптеры переписаны. Это НЕ «чисто», это «не знаю»"; fail=1
     fi
-  done <<< "$decl_hosts"
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      if echo "$provider_hosts" | grep -qxF "$h"; then
+        echo "  ok   outbound endpoint $h (в RF_ALLOWED_PROVIDER_HOSTS)"
+      elif host_resident_ok "$h" "" nosuffix 2>/dev/null; then
+        echo "  ok   outbound endpoint $h (заведомо своё: loopback/RFC1918/односегментное)"
+      else
+        echo "::error::объявленный в коде исходящий адрес '$h' НЕ в RF_ALLOWED_PROVIDER_HOSTS — зашитые в код хосты гейт не видит, поэтому провайдер добавляется в константу код-ревью, иначе адрес уедет незамеченным"
+        fail=1
+      fi
+    done <<< "$decl_hosts"
 
-  others="$(grep -rlE "from 'axios'|require\('axios'\)|from 'undici'|from 'got'|from 'node-fetch'" "$src_root" --include='*.ts' 2>/dev/null || true)"
-  if [ -n "$others" ]; then
-    echo "::error::сетевой клиент ВНЕ единственного шва: $(echo "$others" | tr '\n' ' ')"; fail=1
-  fi
-  direct="$(grep -rlE "(^|[^.[:alnum:]])fetch\(" "$src_root" --include='*.ts' 2>/dev/null | grep -v 'lib/providers/http.util.ts' | grep -v '\.spec\.ts' || true)"
-  if [ -n "$direct" ]; then
-    echo "::error::прямой fetch() вне lib/providers/http.util.ts — периметр перестаёт быть виден в одном месте: $(echo "$direct" | tr '\n' ' ')"; fail=1
-  else
-    echo "  ok   одна дверь: единственный исходящий клиент — lib/providers/http.util.ts"
-  fi
+    # 6b. ОДНА ДВЕРЬ. Перечень чужих клиентов расширен на node:http(s)/http2/ws/nodemailer (сырой
+    #     `request()` мимо шва). Шаблон fetch БОЛЬШЕ НЕ исключает точку — `globalThis.fetch(` и алиас
+    #     `const go=fetch; go(` прошли бы мимо анти-точечного `[^.]fetch\(` (замерено). Легитимных
+    #     `.fetch(` в backend/src нет ни одного (проверено). ОСТАТОК НАЗВАН: сырой `net`/`tls` не
+    #     сканируем модульным импортом — `node:net` законно используется в client-ip.ts ради `isIP`
+    #     (чистая проверка, не сокет); их сырой bypass — ниже вероятностью, назван долгом.
+    locks=$((locks+1))
+    others="$(grep -rlE "from '(axios|undici|got|node-fetch|node:http|node:https|node:http2|http|https|http2|ws|nodemailer)'|require\('(axios|undici|got|node-fetch|node:http|node:https|node:http2|http|https|http2|ws|nodemailer)'\)" "$src_root" --include='*.ts' 2>/dev/null | grep -v '\.spec\.ts' || true)"
+    if [ -n "$others" ]; then
+      echo "::error::сетевой клиент ВНЕ единственного шва: $(echo "$others" | tr '\n' ' ')"; fail=1
+    fi
+    direct="$(grep -rlE "\bfetch[[:space:]]*\(|(globalThis|global|window)\.fetch[[:space:]]*\(" "$src_root" --include='*.ts' 2>/dev/null | grep -v "lib/providers/http.util.ts" | grep -v '\.spec\.ts' || true)"
+    if [ -n "$direct" ]; then
+      echo "::error::прямой fetch() вне lib/providers/http.util.ts — периметр перестаёт быть виден в одном месте: $(echo "$direct" | tr '\n' ' ')"; fail=1
+    else
+      echo "  ok   одна дверь: единственный исходящий клиент — lib/providers/http.util.ts"
+    fi
 
-  if grep -q 'assertOutboundHostAllowed(provider, url)' "$src_root/lib/providers/http.util.ts" 2>/dev/null; then
-    echo "  ok   дверь сверяет хост ДО запроса"
-  else
-    echo "::error::lib/providers/http.util.ts больше не зовёт assertOutboundHostAllowed перед fetch — проверка периметра снята"; fail=1
+    # 6c. ЗАМОК В ДВЕРИ. Наличие строки вызова ловится лишь в одной форме (вызов есть, а
+    #     isAllowedProviderHost обезврежен → зелёно); ПОВЕДЕНИЕ проверяет юнит-свод `http.util.spec`,
+    #     который идёт в CI job `unit` рядом с этим гейтом — он и есть несущий свидетель. Здесь —
+    #     дешёвая страховка на снятие вызова.
+    locks=$((locks+1))
+    if grep -q 'assertOutboundHostAllowed(provider, url)' "$door" 2>/dev/null; then
+      echo "  ok   дверь зовёт assertOutboundHostAllowed ДО запроса (поведение — http.util.spec, шаг CI unit)"
+    else
+      echo "::error::$door больше не зовёт assertOutboundHostAllowed перед fetch — проверка периметра снята"; fail=1
+    fi
   fi
+  echo "  axis-6: прогнано замков $locks (6a объявления + 6b одна-дверь + 6c вызов); дверь=$([ -f "$door" ] && echo есть || echo НЕТ)"
 fi
+
+# (7) ПОСЛАБЛЕНИЕ СТЕНДОВ НЕ СМЕЕТ ЖИТЬ В БОЕВОЙ КОНФИГУРАЦИИ (решение держателя 17.08.2026).
+#     Дверь пускает односегментные имена (`mock-sms`, `minio`) только при явном
+#     ALLOW_LOCAL_STAND_HOSTS — это сохранённая способность стендов (закон храповика), но в бою она
+#     означала бы, что разрешение имени отдано resolv.conf МАШИНЫ (находка №9). Пока флаг проверялся
+#     только кодом, «в проде послабление выключено» было ОБЕЩАНИЕМ. Здесь оно становится ОСЬЮ.
+#     Замечание о полноте: гейт видит объявленную топологию (.env.example, compose, Caddyfile), а не
+#     развёрнутый .env оператора — это назван предел, а не покрытие (находка ре-гейта про gen-env.sh).
+stand_flag_hits=0
+# Сканируем НЕ ТОЛЬКО объявленную топологию: боевое окружение приходит из .env (docker-compose
+# отдаёт его сервисам через env_file), а пишет .env — deploy/gen-env.sh. Ось, смотрящая только в
+# .env.example, печатала «найдено 0» и ЧИТАЛАСЬ КАК ПОКРЫТИЕ, не покрывая единственное место, куда
+# флаг и вписывают (найдено безопасником, круг 2).
+stand_scan=("${files[@]}")
+for extra in .env deploy/gen-env.sh; do
+  [ -f "$extra" ] && stand_scan+=("$extra")
+done
+for f in "${stand_scan[@]}"; do
+  while IFS= read -r line; do
+    # СНАЧАЛА ОТРЕЗАЕМ «НОМЕР:» ОТ grep -n, ПОТОМ смотрим, комментарий ли это. Без этого проверка
+    # видела строку целиком («107:# ALLOW_…») и комментарий НИКОГДА не распознавался — ось выносила
+    # ЛОЖНОЕ обвинение на закомментированной строке и тем блокировала единственный правильный способ
+    # закрыть контрактную дыру: задокументировать флаг. Замерено reviewer-qa на круге 2. Пять
+    # соседних циклов этого файла делают правильно; этот — не делал.
+    body="${line#*:}"
+    case "$(echo "$body" | sed 's/^[[:space:]]*//')" in \#*) continue ;; esac
+    stand_flag_hits=$((stand_flag_hits+1))
+    echo "::error::$f объявляет ALLOW_LOCAL_STAND_HOSTS — послабление стендов в боевой топологии: односегментные имена разрешаются resolv.conf машины, а не нашим перечнем (находка №9)"
+    fail=1
+    # Форма БЕЗ знака равенства («- ALLOW_LOCAL_STAND_HOSTS» в compose) — это сквозная передача
+    # значения из окружения хоста, то есть то же послабление. Ловим и её.
+  done < <(grep -n 'ALLOW_LOCAL_STAND_HOSTS' "$f" 2>/dev/null || true)
+done
+echo "  axis-7: послабление стендов в боевой топологии — найдено вхождений: $stand_flag_hits (ожидается 0)"
 
 
 if [ "$fail" -ne 0 ]; then
