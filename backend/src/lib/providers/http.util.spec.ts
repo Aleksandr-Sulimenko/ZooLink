@@ -120,6 +120,12 @@ describe('дверь и редирект (живой loopback)', () => {
     });
     const bp = await listen(b);
     a = createServer((req, res) => {
+      if (req.url?.includes('slow')) {
+        // МЕДЛЕННЫЙ ОТВЕТ — стенд для оси на отмену вызывающим: без него сервер отвечал бы
+        // редиректом мгновенно, и ось проверяла бы совсем не то, что названа проверять.
+        setTimeout(() => res.end('{"ok":true}'), 2000).unref();
+        return;
+      }
       res.statusCode = req.url?.includes('307') ? 307 : 302;
       res.setHeader('location', `http://127.0.0.1:${bp}/landed`);
       res.end();
@@ -138,6 +144,51 @@ describe('дверь и редирект (живой loopback)', () => {
   it('302 от разрешённого хоста НЕ уходит на второй хоп', async () => {
     await expect(fetchJson('проба', `${aUrl}/302`)).rejects.toBeInstanceOf(ProviderError);
     expect(bHits).toHaveLength(0); // второй сервер не тронут — дверь не пустила дальше
+  });
+
+  it('ВЫЗЫВАЮЩИЙ НЕ МОЖЕТ ПЕРЕОПРЕДЕЛИТЬ redirect (порядок полей запаян осью, а не комментарием)', async () => {
+    // Мутант «перенести redirect:'error' ПЕРЕД ...init» оставался зелёным на всех 26 осях: свойство
+    // держалось комментарием. Здесь вызывающий ЯВНО просит follow — и всё равно не проходит.
+    await expect(
+      fetchJson('проба', `${aUrl}/302`, { redirect: 'follow' }),
+    ).rejects.toBeInstanceOf(ProviderError);
+    expect(bHits).toHaveLength(0);
+  });
+
+  it('редирект отличим от обрыва связи: постоянный отказ, назван словами, помечен «мог дойти»', async () => {
+    const err = (await fetchJson('проба', `${aUrl}/302`).catch((e: unknown) => e)) as ProviderError;
+    expect(err.kind).toBe('config'); // не 'network': чинится код-ревью, а не повтором
+    expect(err.message).toContain('ПЕРЕНАПРАВЛЕНИЕМ');
+    expect(err.message).toContain('ПОСТОЯННЫЙ');
+    expect(err.mayHaveArrived).toBe(true); // 3xx — это ОТВЕТ: площадка запрос приняла
+  });
+
+  it('сигнал ВЫЗЫВАЮЩЕГО не съедается нашим таймаутом (отмена работает)', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 20);
+    const err = (await fetchJson('проба', `${aUrl}/slow`, { signal: ac.signal }).catch(
+      (e: unknown) => e,
+    )) as ProviderError;
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.kind).toBe('network'); // отменено, а не «дожили до ответа»
+  });
+
+  it('КОД РАНТАЙМА НАЗВАН В САМОМ СООБЩЕНИИ, а не только в поле (три адаптера из четырёх его не читали)', async () => {
+    // 127.0.0.1 с заведомо закрытым портом: реальный ECONNREFUSED, а не подделка ошибки.
+    // Порт берётся ЗАНЯТЫМ И ТУТ ЖЕ ОСВОБОЖДЁННЫМ, а не выдуманным: `:1` даёт у undici «bad port»
+    // БЕЗ кода рантайма — то есть ось проверяла бы не тот отказ, что названа (поймано при написании).
+    const { createServer } = await import('node:http');
+    const tmp = createServer();
+    const port = await new Promise<number>((r) =>
+      tmp.listen(0, '127.0.0.1', () => r((tmp.address() as { port: number }).port)),
+    );
+    await new Promise<void>((r) => tmp.close(() => r()));
+    const err = (await fetchJson('проба', `http://127.0.0.1:${port}/x`).catch(
+      (e: unknown) => e,
+    )) as ProviderError;
+    expect(err.kind).toBe('network');
+    expect(err.code).toBe('ECONNREFUSED');
+    expect(err.message).toContain('ECONNREFUSED'); // человек видит причину, а не «fetch failed»
   });
 
   it('307 НЕ переотправляет тело (ключ/код) на второй хоп', async () => {
@@ -185,6 +236,27 @@ describe('исходящий периметр: односегментное им
   it('БЕЗ флага стенд-имя отвергается ДО запроса (fail-closed, до сети не дошло)', async () => {
     delete process.env.ALLOW_LOCAL_STAND_HOSTS;
     await expect(fetchJson('проба', 'http://mock-sms:8080/x')).rejects.toBeInstanceOf(ProviderError);
+    expect(hits).toHaveLength(0);
+  });
+
+  it('ОТКАЗ НАЗЫВАЕТ ПУТЬ НАРУЖУ: стенд по http видит имя флага, а не «публичный хост»', async () => {
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    // Проверка схемы стоит ВЫШЕ проверки перечня, поэтому это ЕДИНСТВЕННОЕ сообщение, которое
+    // стенд когда-либо увидит — и до круга 3 именно в нём флаг назван НЕ БЫЛ (находка круга 3).
+    const err = await fetchJson('проба', 'http://mock-sms:8080/x').catch((e: unknown) => e);
+    const текст = (err as ProviderError).message;
+    expect(текст).toContain('ALLOW_LOCAL_STAND_HOSTS=1');
+    expect(текст).toContain('выключен'); // состояние флага названо, а не оставлено гадать
+    expect(текст).not.toContain('публичный хост'); // стенд — не публичный хост
+    expect(текст).not.toMatch(/http — лишь для .*локального имени/); // обещание, опровергнутое тут же
+  });
+
+  it('*.localhost: отказ говорит, что флаг ЕГО НЕ ОТКРЫВАЕТ — иначе оператор идёт по ложному следу', async () => {
+    process.env.ALLOW_LOCAL_STAND_HOSTS = '1'; // флаг ВКЛЮЧЁН — и всё равно закрыто
+    const err = await fetchJson('проба', 'http://evil.localhost/x').catch((e: unknown) => e);
+    const текст = (err as ProviderError).message;
+    expect(текст).toContain('*.localhost');
+    expect(текст).toMatch(/закрыты ВСЕГДА|флаг их не открывает/);
     expect(hits).toHaveLength(0);
   });
 
@@ -358,5 +430,63 @@ describe('исходящий периметр: тело отменяется п�
       );
     await fetchJson('проба', 'https://sms.ru/x').catch(() => undefined);
     expect(state.cancelled).toBe(true);
+  });
+});
+
+/**
+ * «МОГ ДОЙТИ» НА ВСЕХ ЧЕТЫРЁХ ВЕТКАХ ЗА ОДНИМ РУБЕЖОМ (круг 4, два лейна независимо).
+ *
+ * Признак ставился на ОДНОЙ ветке из четырёх, а умолчание `false` читается как «повтор безопасен».
+ * Во всех четырёх случаях заголовки УЖЕ пришли — площадка запрос ПРИНЯЛА, — и повтор дал бы ДУБЛЬ
+ * живому человеку. Ось на КАЖДУЮ ветку, а не на одну: класс ловится только полным перебором.
+ */
+describe('исходящий периметр: «мог дойти» на всех ветках после ответа (круг 4)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+  const reply = (body: BodyInit, init: ResponseInit) => {
+    globalThis.fetch = () => Promise.resolve(new Response(body, init));
+  };
+  const err = async () =>
+    (await fetchJson('проба', 'https://sms.ru/x').catch((e: unknown) => e)) as ProviderError;
+
+  it('не-2xx — мог дойти', async () => {
+    reply('нет', { status: 500, headers: { 'content-type': 'text/plain' } });
+    expect((await err()).mayHaveArrived).toBe(true);
+  });
+
+  it('невалидный JSON — мог дойти', async () => {
+    reply('не json', { status: 200, headers: { 'content-type': 'application/json' } });
+    expect((await err()).mayHaveArrived).toBe(true);
+  });
+
+  it('объявленное превышение потолка — мог дойти', async () => {
+    reply('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 * 64) },
+    });
+    expect((await err()).mayHaveArrived).toBe(true);
+  });
+
+  it('фактическое превышение потолка — мог дойти', async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (sent > 1024 * 1024 * 4) return c.close();
+        sent += chunk.byteLength;
+        c.enqueue(chunk);
+      },
+    });
+    reply(stream, { status: 200, headers: { 'content-type': 'application/json' } });
+    expect((await err()).mayHaveArrived).toBe(true);
+  });
+
+  it('отказ ДО отправки (хост вне перечня) — НЕ мог дойти', async () => {
+    const e = (await fetchJson('проба', 'https://evil.example.com/x').catch(
+      (x: unknown) => x,
+    )) as ProviderError;
+    expect(e.mayHaveArrived).toBe(false);
   });
 });

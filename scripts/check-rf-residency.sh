@@ -44,6 +44,29 @@ env_validation="backend/src/config/env.validation.ts"
 # they were UNREACHABLE for three releases: `set -euo pipefail` killed the assignment first and the
 # gate exited 1, i.e. "residency violation found", with no output at all. A wrong verdict, not a
 # broken tool. Fixed by `|| true`; this mode is what keeps it fixed. Run it in CI beside the gate.
+# НЕИЗВЕСТНЫЙ АРГУМЕНТ = ОТКАЗ, А НЕ ОБЫЧНЫЙ ПРОГОН (находка №116, замер 20.08.2026). До этой
+# строки `bash scripts/check-rf-residency.sh --самопроверка` молча прогонял ОБЫЧНЫЙ гейт и печатал
+# «✅ gate passed» — вызывающий получал зелёное НЕ ЗА ТО, ЧТО ПРОСИЛ, и принимал утверждение о МИРЕ
+# («периметр резидентен») за утверждение о ПРИБОРЕ («самопроверка прошла»). Тот же замок стоит в
+# scripts/rollback-outbound-perimeter.sh с круга 4; здесь он не был смётен — лечение по одному
+# месту из двух. rc=2 = НЕ ЗНАЮ (ADR-0027), а не 1 («нарушение найдено»).
+# РАЗБОР ЧУЖОГО ЯЗЫКА — ОДНОЙ ФУНКЦИЕЙ, ЧТОБЫ ЕГО БЫЛО ЧЕМ ПРОВЕРИТЬ (находка №44: крит-класс
+# «комментарий прочитан как ОБЪЯВЛЕНИЕ» воспроизводился на константе, добавленной этим же паком).
+# Прежде цепочка sed жила ВНУТРИ оси 6a, и самопроверка могла бы проверить только ЕЁ КОПИЮ — а копия
+# источника зеленеет вместе с источником (закон общего эталона, замерен флотом 14.08). Теперь и ось,
+# и самопроверка зовут ОДНУ функцию: сломается разбор — покраснеет самопроверка.
+strip_comments_and_quote_hosts() {
+  sed -E 's@^[[:space:]]*//.*@@; s@//.*@@' | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true
+}
+
+case "${1:-}" in
+  ''|--selftest) : ;;
+  *)
+    echo "::error::неизвестный аргумент «$1». Допустимо: без аргументов (гейт) или --selftest (ось на сам прибор)." >&2
+    exit 2
+    ;;
+esac
+
 if [ "${1:-}" = "--selftest" ]; then
   work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
   mkdir -p "$work/scripts" "$work/backend/src/config" "$work/deploy"
@@ -101,7 +124,7 @@ if [ "${1:-}" = "--selftest" ]; then
       echo "::error::мутант «$name» → rc=$rc, ожидалось $want — починку НЕ СТЕРЕЖЁТ НИЧТО"; fails=$((fails+1))
     fi
   }
-  declared=$((declared+9))
+  declared=$((declared+13))  # +2 за мутантов IMDS (IPv4 169.254 и ULA IPv6 в скобках), 20.08.2026
   # ЗАКОННОЕ объявление обязано быть в КАЖДОМ прогоне: без единого объявления гейт по делу
   # говорит «не знаю» (шаблон устарел или адаптеры переписаны) — и первая редакция мутантов
   # ловила именно ЭТОТ красный, а не свой. Поймано этим же прогоном: предмет мутанта обязан
@@ -115,6 +138,35 @@ const EXFIL_URL = 'http://collector.localhost/x';" "" FAIL
 const EXFIL_URL = 'http://collector.localhost/x';" \
     's@\*\.localhost) \[ "\$no_suffix" = nosuffix \] && return 1 || return 0 ;;@*.localhost) return 0 ;;@' OK
   mutant "только законное объявление — зелено" "$LEGIT" "" OK
+  # ЧЕТЫРЕ ПОЧИНКИ, КОТОРЫЕ ШАПКА ОБЪЯВЛЯЛА СТЕРЕЖЁННЫМИ, А МУТАНТОВ НА НИХ НЕ БЫЛО (находка №95,
+  # круг 3: замерено 7 порч — краснели 3). Добавлены 20.08.2026; каждый несёт ПЯТЫЙ ДОВОД — что
+  # обязан назвать вывод, — потому что rc=1 не отличает «покраснел по делу» от «покраснел вообще».
+  # ИМЯ ОБЪЯВЛЕНИЯ ОБЯЗАНО НЕСТИ ENDPOINT|URL|BASE — иначе ось 6a его НЕ ВИДИТ, и мутант краснеет
+  # не по делу, а по пустому месту. Первая редакция звалась IMDS и дала rc=0 «зелено»: мутант
+  # проверял не то, что назван (мой промах, замерен 20.08 и оставлен здесь как предупреждение).
+  # ОСЬ НА САМ РАЗБОР (находка №44). Зовём ТУ ЖЕ функцию, которой пользуется ось 6a — не копию:
+  # синтетический кусок литерала, где хост стоит В КОММЕНТАРИИ, а рядом законный. Комментарий не
+  # смеет попасть в перечень разрешённых, иначе крит-находка №14 воспроизводится на нашей константе.
+  ran=$((ran+1)); declared=$((declared+1))
+  parsed="$(printf '%s\n' "  // не разрешаем: 'evil.example.com' — только для пояснения" "  'sms.ru'," "  'api.unisender.com', // хвост-комментарий: 'evil2.example.com'" | strip_comments_and_quote_hosts | tr '\n' ' ')"
+  if [ "$parsed" = "api.unisender.com sms.ru " ]; then
+    echo "  ok   разбор литерала: комментарий (строкой и хвостом) НЕ попал в перечень — «$parsed»"
+  else
+    echo "::error::разбор литерала вернул «$parsed», ожидалось «api.unisender.com sms.ru » — комментарий читается как объявление"; fails=$((fails+1))
+  fi
+
+  # ВЕРДИКТ И СЧЁТ (находки круга 1 №37 и №38, вылечены 20.08.2026).
+  mutant "пропуск оси 6 назван в самом вердикте, а не молчит" "$LEGIT" \
+    's@^skipped=""@skipped="ось-проба "@' OK "ПРОПУЩЕНО по объявлению"
+  mutant "число прогнанных замков сверяется с ожидаемым" "$LEGIT" \
+    's@locks+1@locks+0@g' FAIL "прогнала 0 замков из 3"
+  mutant "закрыт 169.254 (IMDS облака) как «своё»" "$LEGIT
+const IMDS_URL = 'http://169.254.169.254/latest/meta-data/';" "" FAIL \
+    "169.254.169.254"
+  mutant "ULA IPv6 в скобках виден оси и закрыт (IPv6-IMDS)" "$LEGIT
+const IMDS6_URL = 'http://[fd00:ec2::254]/latest/meta-data/';" "" FAIL \
+    "fd00:ec2::254"
+
   # userinfo: и с починкой, и без неё гейт красен — доказывает ТОЛЬКО текст (см. довод у mutant()).
   mutant "userinfo в объявлении назван по ИСТИННОМУ хосту" "$LEGIT
 const EXFIL_ENDPOINT = 'https://sms.ru@evil.example.com/steal';" "" FAIL "evil.example.com"
@@ -122,11 +174,16 @@ const EXFIL_ENDPOINT = 'https://sms.ru@evil.example.com/steal';" "" FAIL "evil.e
   # Стенд самопроверки несёт .env.example БЕЗ флага, поэтому обе пробы ставят флаг САМИ.
   printf '%s\n' "ALLOW_LOCAL_STAND_HOSTS=1" >> "$work/.env.example"
   mutant "флаг в боевой топологии виден" "$LEGIT" "" FAIL
-  mutant "снят срез номера строки в оси 7" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL
+  # ПЯТЫЙ ДОВОД (находка №108: мутант был тавтологичен — при раскомментированном флаге ось краснеет
+  # и с починкой, и без неё, доказано соседним мутантом «та же конфигурация без порчи, тот же rc»).
+  # Теперь красное обязано НАЗВАТЬ найденное вхождение, а не просто случиться.
+  mutant "снят срез номера строки в оси 7" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL \
+    "найдено вхождений: 1"
   sed -i '/^ALLOW_LOCAL_STAND_HOSTS=1$/d' "$work/.env.example"
   printf '%s\n' "# ALLOW_LOCAL_STAND_HOSTS=1 — только для стендов, в бою не ставить" >> "$work/.env.example"
   mutant "закомментированный флаг НЕ обвиняется" "$LEGIT" "" OK
-  mutant "без среза номера комментарий обвиняется ЛОЖНО" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL
+  mutant "без среза номера комментарий обвиняется ЛОЖНО" "$LEGIT" 's@  body="${line#\*:}"@  body="$line"@' FAIL \
+    "найдено вхождений: 1"
   sed -i '/ALLOW_LOCAL_STAND_HOSTS/d' "$work/.env.example"
   rm -f "$decl"
 
@@ -141,7 +198,10 @@ const EXFIL_ENDPOINT = 'https://sms.ru@evil.example.com/steal';" "" FAIL "evil.e
   # дыра структурно: при пустом списке констант `fails` остался бы нулём и selftest сказал бы
   # «passed», ничего не проверив. Ожидаемое число берём из самого списка, а не из памяти.
   echo "  selftest: прогнано констант $ran из объявленных $declared"
-  if [ "$ran" = 0 ] || [ "$ran" -lt "$declared" ]; then
+  # СЧЁТ ЧЕСТЕН В ОБЕ СТОРОНЫ (находка 20.08: было строго «меньше», и прогон 17 из объявленных 15
+  # печатал ✅ — прибор молча описывал себя неверно, а это ровно «утверждение без прибора»).
+  # Больше объявленного = кто-то добавил мутанта и не объявил его: сам прибор устарел ⇒ НЕ ЗНАЮ.
+  if [ "$ran" = 0 ] || [ "$ran" -lt "$declared" ] || [ "$ran" -gt "$declared" ]; then
     echo "::error::selftest прогнал $ran из $declared — это НЕ ЗНАЮ, а не «passed»"; exit 2
   fi
   [ "$fails" = 0 ] && { echo "✅ selftest passed — this gate can still say \"I don't know\""; exit 0; }
@@ -284,7 +344,11 @@ host_resident_ok() {
     # образе node:20-alpine `evil.localhost` спокойно резолвится в чужой адрес (замерено круг 2).
     *.localhost) [ "$no_suffix" = nosuffix ] && return 1 || return 0 ;;
     ::1|0:0:0:0:0:0:0:1) return 0 ;;
-    f[cd]*:*|fe80:*) return 0 ;;
+    # ULA/link-local IPv6 — «своё» ТОЛЬКО для резидентности. Для объявлений исходящих (nosuffix)
+    # закрыто, как в двери с outbound:true: IPv6-IMDS живёт В САМОЙ ULA (`fd00:ec2::254` у AWS),
+    # и зеркало без этой строки объявляло бы «заведомо своим» ровно тот адрес, который дверь
+    # ОТКАЗЫВАЕТ — расхождение слоёв в РАЗРЕШАЮЩУЮ сторону (находка круга 4, семейство №107).
+    f[cd]*:*|fe80:*) [ "$no_suffix" = nosuffix ] && return 1 || return 0 ;;
     *:*) return 1 ;;                                        # any other IPv6 literal
   esac
   # ЛИТЕРАЛ ЛИ ЭТО ВООБЩЕ — РЕШАЕТСЯ ПЕРВЫМ (находка ре-гейта 15.08, две ленты независимо).
@@ -305,6 +369,11 @@ host_resident_ok() {
       *) return 1 ;;                                        # любой другой голый IPv4 — не проверяем
     esac
   fi
+  # ОДНИ ЦИФРЫ — IPv4 В ДЕСЯТИЧНОЙ ФОРМЕ, А НЕ ИМЯ (находка №51; зеркало обязано совпасть с TS).
+  case "$h" in
+    ''|*[!0-9]*) : ;;
+    *) return 1 ;;
+  esac
   # ОДНОСЕГМЕНТНОЕ ИМЯ. Для резидентности — своё (контейнер/LAN). Для ОБЪЯВЛЕНИЙ исходящих адресов
   # (nosuffix) — НЕТ: дверь с 17.08 пускает такие имена только при явном ALLOW_LOCAL_STAND_HOSTS, а
   # гейт про флаг не знал и печатал «ok (заведомо своё)» на том, что дверь ОТКАЗЫВАЕТ. Слой 2 был
@@ -609,9 +678,7 @@ check_dsn_var REDIS_URL "$redis_schemes" \
 # попадала в ПЕРЕЧЕНЬ РАЗРЕШЁННЫХ, и гейт печатал её среди хостов, выходя rc=0. Это тот же класс,
 # что крит-находка №14 (sed-диапазон захватил чужой блок), воспроизведённый на константе, которую
 # добавил тот же пак: РАЗБОР ЧУЖОГО ЯЗЫКА РЕГУЛЯРКОЙ ЧИТАЕТ ПРОЗУ КАК ОБЪЯВЛЕНИЕ.
-provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS =/,/\] as const/p' "$env_validation" \
-                  | sed -E 's@^[[:space:]]*//.*@@; s@//.*@@' \
-                  | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"
+provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS =/,/\] as const/p' "$env_validation" | strip_comments_and_quote_hosts)"
 [ -n "$provider_hosts" ] || { echo "::error::could not parse RF_ALLOWED_PROVIDER_HOSTS from $env_validation"; exit 2; }
 echo "RF outbound provider hosts: $(echo "$provider_hosts" | tr '\n' ' ')"
 
@@ -623,9 +690,11 @@ door="$src_root/lib/providers/http.util.ts"
 # прогнаться, если дерево `backend/src` присутствует; «стенд без адаптеров» объявляется ЯВНЫМ флагом
 # `RF_GATE_EXPECT_ADAPTERS=0`, а не выводится из наличия каталога. И считаем число ПРОГНАННЫХ замков —
 # «сколько прошло» отличает «чисто» от «ничего не проверено» (класс «свод печатает OK, прогнав ноль»).
+skipped=""
 expect_adapters="${RF_GATE_EXPECT_ADAPTERS:-1}"
 if [ "$expect_adapters" = 0 ]; then
   echo "  skip axis-6: стенд ОБЪЯВЛЕН без адаптеров (RF_GATE_EXPECT_ADAPTERS=0) — исходящий периметр здесь не проверяется"
+  skipped="${skipped}ось-6 (исходящий периметр) "
 elif [ ! -d "$src_root" ]; then
   echo "::error::$src_root отсутствует, а RF_GATE_EXPECT_ADAPTERS≠0 — исходящий периметр не проверить. Это НЕ «чисто», это «не знаю»"; fail=1
 else
@@ -643,8 +712,9 @@ else
     # выдавая за хост пользовательскую часть: объявление https://sms.ru@evil.example.com/steal давало
     # «ok outbound endpoint sms.ru», rc=0 (замерено кругом 3). Дверь такой адрес отказывает, то есть
     # периметр не открыт — но гейт УТВЕРЖДАЛ имя доверенного вендора там, где адрес ведёт к чужому.
-    decl_hosts="$(grep -rhoE "(const|let|var)[[:space:]]+[A-Za-z0-9_]*(ENDPOINT|URL|BASE)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*['\"\`]https?://[A-Za-z0-9._@:-]+" "$src_root" --include='*.ts' 2>/dev/null \
-                  | sed -E "s#.*https?://##" | sed -E 's#^[^/@]*@##' | sed -E 's#[:/].*$##' | sort -u || true)"
+    decl_hosts="$(grep -rhoE "(const|let|var)[[:space:]]+[A-Za-z0-9_]*(ENDPOINT|URL|BASE)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*['\"\`]https?://(\\[[0-9A-Fa-f:]+\\]|[A-Za-z0-9._@:-]+)" "$src_root" --include='*.ts' 2>/dev/null \
+                  | sed -E "s#.*https?://##" | sed -E 's#^[^/@]*@##' \
+                  | sed -E 's#^(\[[0-9A-Fa-f:]+\]).*$#\1#; t; s#[:/].*$##' | sort -u || true)"
     if [ -z "$decl_hosts" ]; then
       echo "::error::ни одного ОБЪЯВЛЕНИЯ исходящего адреса не найдено при ЖИВОЙ двери — шаблон устарел или адаптеры переписаны. Это НЕ «чисто», это «не знаю»"; fail=1
     fi
@@ -689,7 +759,13 @@ else
       echo "::error::$door больше не зовёт assertOutboundHostAllowed перед fetch — проверка периметра снята"; fail=1
     fi
   fi
-  echo "  axis-6: прогнано замков $locks (6a объявления + 6b одна-дверь + 6c вызов); дверь=$([ -f "$door" ] && echo есть || echo НЕТ)"
+  # ЧИСЛО ПРОГНАННЫХ СВЕРЯЕТСЯ С ОЖИДАЕМЫМ, А НЕ ПРОСТО ПЕЧАТАЕТСЯ (находка круга 1; ADR-0027:
+  # «фактическое рядом с ОЖИДАЕМЫМ»). Печаталось «прогнано замков 0» при снятой двери — и это
+  # молча уезжало в зелёный вердикт: упасть по числу было НЕЛЬЗЯ.
+  echo "  axis-6: прогнано замков $locks из ожидаемых 3 (6a объявления + 6b одна-дверь + 6c вызов); дверь=$([ -f "$door" ] && echo есть || echo НЕТ)"
+  if [ "$locks" -ne 3 ]; then
+    echo "::error::ось 6 прогнала $locks замков из 3 — это НЕ «чисто», это НЕ ЗНАЮ"; fail=1
+  fi
 fi
 
 # (7) ПОСЛАБЛЕНИЕ СТЕНДОВ НЕ СМЕЕТ ЖИТЬ В БОЕВОЙ КОНФИГУРАЦИИ (решение держателя 17.08.2026).
@@ -730,5 +806,13 @@ echo "  axis-7: послабление стендов в боевой топол
 if [ "$fail" -ne 0 ]; then
   echo "::error::RF data-residency gate FAILED — prod config points a PII-bearing store, sink or CDN outside the RF (ADR-0017)."
   exit 1
+fi
+# ВЕРДИКТ НЕ СМЕЕТ БЫТЬ ШИРЕ ПРОГНАННОГО (находка круга 1). Прежде при объявленном пропуске оси 6
+# печаталась та же безусловная строка «every … value is RF-resident» — то есть утверждение о мире
+# оставалось прежним, хотя проверено было меньше. Пропуск ЗАКОННЫЙ (его объявляет вызывающий), но
+# молчать о нём в итоге нельзя: третье состояние — «чисто В ПРОВЕРЕННОМ, об остальном НЕ ЗНАЮ».
+if [ -n "$skipped" ]; then
+  echo "✅ RF data-residency gate passed В ПРОВЕРЕННОМ — но ПРОПУЩЕНО по объявлению: ${skipped}⇒ об этом гейт НЕ ЗНАЕТ, вердикт уже своего имени."
+  exit 0
 fi
 echo "✅ RF data-residency gate passed — every region- and host-bearing prod config value is RF-resident."

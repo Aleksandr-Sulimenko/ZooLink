@@ -27,24 +27,27 @@ import {
  *    'true'/'false' are accepted (a typo like '1'/'TRUE'/'yes' is a boot-blocking error, never
  *    silently truthy the way z.coerce.boolean() would treat 'false' as true).
  */
+// ФИКСТУРА ОДНА НА ФАЙЛ: второй набор осей (флаг стендов) требовал тех же обязательных полей,
+// и копия фикстуры зеленела бы вместе с оригиналом, расходясь с ним молча.
+const base = {
+  DATABASE_URL: 'postgres://u:p@localhost:5432/db',
+  REDIS_URL: 'redis://localhost:6379',
+  S3_ENDPOINT: 'http://localhost:9000',
+  S3_ACCESS_KEY: 'x',
+  S3_SECRET_KEY: 'x',
+  S3_BUCKET: 'b',
+  JWT_ACCESS_SECRET: 'a'.repeat(32),
+  JWT_REFRESH_SECRET: 'b'.repeat(32),
+  PHONE_HASH_PEPPER: 'c'.repeat(32),
+  PII_DATA_KEY: 'd'.repeat(32),
+  PII_BLIND_INDEX_KEY: 'e'.repeat(32),
+  // NODE_ENV set to development so the production-only superRefines (agent secret / Apple) are
+  // out of the way — we assert NODE_ENV/ENABLE_DEV_TOKEN behaviour, not those.
+  NODE_ENV: 'development',
+};
+
 describe('validateEnv — security defaults', () => {
   // Minimal set of the boot-required secrets so the parse reaches the fields under test.
-  const base = {
-    DATABASE_URL: 'postgres://u:p@localhost:5432/db',
-    REDIS_URL: 'redis://localhost:6379',
-    S3_ENDPOINT: 'http://localhost:9000',
-    S3_ACCESS_KEY: 'x',
-    S3_SECRET_KEY: 'x',
-    S3_BUCKET: 'b',
-    JWT_ACCESS_SECRET: 'a'.repeat(32),
-    JWT_REFRESH_SECRET: 'b'.repeat(32),
-    PHONE_HASH_PEPPER: 'c'.repeat(32),
-    PII_DATA_KEY: 'd'.repeat(32),
-    PII_BLIND_INDEX_KEY: 'e'.repeat(32),
-    // NODE_ENV set to development so the production-only superRefines (agent secret / Apple) are
-    // out of the way — we assert NODE_ENV/ENABLE_DEV_TOKEN behaviour, not those.
-    NODE_ENV: 'development',
-  };
 
   it('defaults NODE_ENV to production (fail-safe) when omitted', () => {
     const { NODE_ENV, ...noNodeEnv } = base;
@@ -1061,6 +1064,14 @@ describe('isAllowedProviderHost — односегментное имя и фл�
     else process.env.ALLOW_LOCAL_STAND_HOSTS = saved;
   });
 
+  it('ЧИСЛОВОЕ имя хоста — не «своё»: 134744072 есть 8.8.8.8 в десятичной форме (находка №51)', () => {
+    // Проверяем ОБА режима: и резидентность (DATABASE_URL/REDIS_URL), и исходящую дверь.
+    expect(isResidentHost('134744072', [], { allowRfSuffixes: false })).toBe(false);
+    expect(isAllowedProviderHost('134744072')).toBe(false);
+    // ...и не сломали односегментные имена стендов, ради которых правило вообще есть
+    expect(isResidentHost('postgres', [], { allowRfSuffixes: false })).toBe(true);
+  });
+
   it('без флага — ОТКАЗ (fail-closed по умолчанию)', () => {
     delete process.env.ALLOW_LOCAL_STAND_HOSTS;
     expect(isAllowedProviderHost('mock-sms')).toBe(false);
@@ -1071,6 +1082,15 @@ describe('isAllowedProviderHost — односегментное имя и фл�
     process.env.ALLOW_LOCAL_STAND_HOSTS = v;
     expect(isAllowedProviderHost('mock-sms')).toBe(true);
   });
+
+  it.each(['TRUE', 'True', ' Yes '])(
+    'СХЕМА принимает «%s» так же, как дверь — два читателя одной переменной не расходятся',
+    (v) => {
+      // До круга 4 схема брала только строчные, а дверь приводила к нижнему регистру: `TRUE` роняло
+      // СТАРТ, хотя дверь его понимала. Расхождение fail-closed, но всё равно расхождение.
+      expect(() => validateEnv({ ...base, ALLOW_LOCAL_STAND_HOSTS: v })).not.toThrow();
+    },
+  );
 
   it.each(['0', 'false', '', 'да', 'Production'])(
     'значение «%s» выглядит как выключение либо мусор — СТРОГО',
@@ -1117,8 +1137,29 @@ describe('isAllowedProviderHost — *.localhost закрыт для двери (
     expect(isAllowedProviderHost('localhost')).toBe(true);
   });
 
-  it('РЕЗИДЕНТНОСТЬ *.localhost принимает — правило действует только у двери', () => {
+  /**
+   * ЯВНО ПРИНЯТЫЙ РИСК, А НЕ «ПРАВИЛО ДЕЙСТВУЕТ ТОЛЬКО У ДВЕРИ» (решение держателя 20.08.2026,
+   * круг 4). Прежнее имя оси несло ОБОСНОВАНИЕ, которое сгорело: «RFC 6761 обещает петлю» опровергнут
+   * замером в том же файле — в нашем образе имя разрешил РЕЗОЛВЕР СРЕДЫ и вернул публичный адрес.
+   * Держатель: «решение, чьё основание опровергнуто, больше не связывает» — и поставил условие:
+   * закрываем КЛАСС целиком либо не закрываем ничего и называем риск вслух, потому что полумера
+   * меняет не защиту, а самоощущение.
+   * ЗАМЕР ЦЕНЫ (20.08, по его прямой просьбе): у `*.localhost` цена нулевая — ни одного вхождения.
+   * У РАВНОЗНАЧНОГО случая — односегментных имён — цена НЕ нулевая: `postgres`, `redis`, `minio`
+   * несут ВСЮ объявленную топологию (.env.example:34/43/55, deploy/gen-env.sh:140/240/355/357,
+   * живой .env стенда). То есть закрыть класс целиком сегодня нельзя, а закрыть половину — хуже,
+   * чем ничего: цена та же, а в голове остаётся «класс закрыт».
+   * ПОЭТОМУ: резидентность принимает и `*.localhost`, и односегментные имена; свойство у них ОДНО —
+   * разрешение отдано резолверу среды. Риск принят ИМЕНЕМ ДЕРЖАТЕЛЯ (архитектор-4724c583).
+   * Что его снимет: переход резидентных адресов на литералы/FQDN — тогда класс закрывается разом.
+   */
+  it('РИСК ПРИНЯТ ЯВНО: резидентность принимает *.localhost И односегментные имена — свойство у них одно', () => {
     expect(isResidentHost('evil.localhost')).toBe(true);
+    expect(isResidentHost('postgres')).toBe(true); // равнозначный случай — тот же резолвер среды
+    // ...и у ДВЕРИ закрыты оба (там цена снятия нулевая и она уплачена флагом стендов)
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    expect(isAllowedProviderHost('evil.localhost')).toBe(false);
+    expect(isAllowedProviderHost('postgres')).toBe(false);
   });
 });
 
