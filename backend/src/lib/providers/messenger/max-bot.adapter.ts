@@ -102,8 +102,37 @@ export class MaxBotAdapter implements MessengerProvider {
       this.logger.log(`MAX message sent (accepted=${mid !== null})`);
       return { accepted: mid !== null, providerMessageId: mid };
     } catch (err) {
-      throw translateCertificateFailure(err);
+      throw this.безСекрета(translateCertificateFailure(err));
     }
+  }
+
+  /**
+   * ВТОРОЙ СЛОЙ ПРОТИВ УТЕЧКИ ТОКЕНА (крит круга 5). Первый слой — отказ на старте при управляющем
+   * знаке в MAX_BOT_TOKEN (env.validation.ts) — закрывает ИЗВЕСТНЫЙ путь: undici эхом возвращает
+   * значение заголовка в тексте ошибки. Но `err.message` есть ПРОИЗВОЛЬНАЯ строка рантайма, о
+   * содержимом которой мы не знаем ничего, и завтрашняя версия зависимости может вернуть секрет
+   * иным путём. Перечислять пути — это ловить ПРИЗНАКИ; здесь мы закрываем СПОСОБНОСТЬ.
+   *
+   * ПОЧЕМУ ИМЕННО ЗДЕСЬ, А НЕ В ДВЕРИ: `http.util.ts` токена НЕ ЗНАЕТ и знать не должен —
+   * ему пришлось бы УГАДЫВАТЬ секрет регэкспом, а замазывание регэкспом над свободным текстом
+   * структурно неполно (замерено у нас же). Адаптер секретом ВЛАДЕЕТ, поэтому сверяет ТОЧНЫМ
+   * совпадением, без догадок: КТО ВЛАДЕЕТ СЕКРЕТОМ, ТОТ И ОТВЕЧАЕТ ЗА ЕГО НЕВЫНОС.
+   *
+   * ЧЕГО ЭТО НЕ ДЕЛАЕТ, ГОВОРЮ ВСЛУХ: не защищает от ЧАСТИ токена в сообщении (обрезанного,
+   * перекодированного, поэлементно экранированного) — точное совпадение такого не увидит.
+   * Против этого работает первый слой; здесь честная страховка, а не полный замок.
+   */
+  private безСекрета(err: unknown): unknown {
+    if (!this.botToken || !(err instanceof ProviderError)) return err;
+    if (!err.message.includes(this.botToken)) return err;
+    return new ProviderError(
+      err.provider,
+      err.kind,
+      err.message.split(this.botToken).join('<СЕКРЕТ ВЫРЕЗАН: MAX_BOT_TOKEN>'),
+      err.cause,
+      err.code,
+      err.mayHaveArrived,
+    );
   }
 }
 

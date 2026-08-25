@@ -126,6 +126,64 @@ describe('MaxBotAdapter', () => {
     expect(res).toEqual({ accepted: true, providerMessageId: null });
     expect(seen).toHaveLength(0);
   });
+  // ── ВТОРОЙ СЛОЙ ПРОТИВ УТЕЧКИ ТОКЕНА (крит круга 5) ──────────────────────────────────────────
+  // Первый слой — отказ на старте (env.validation) — закрывает ИЗВЕСТНЫЙ путь: undici эхом
+  // возвращает значение заголовка. Здесь стережём СПОСОБНОСТЬ: что бы ни принёс рантайм, секрет
+  // не уйдёт в текст ошибки, потому что адаптер им ВЛАДЕЕТ и сверяет ТОЧНЫМ совпадением.
+  describe('секрет не выносится в текст ошибки: владелец секрета вырезает свой секрет', () => {
+    it('🔴 сообщение рантайма, НЕСУЩЕЕ токен, приходит вызывающему БЕЗ него', async () => {
+      const секрет = 'BOEVOY-TOKEN-4f81ac';
+      // Рантайм отдаёт ровно то, что undici отдаёт живьём при негодном заголовке — с секретом внутри.
+      reply = () => {
+        throw new TypeError(`Headers.append: "Bearer ${секрет}" is an invalid header value.`);
+      };
+      const err = (await new MaxBotAdapter(секрет)
+        .sendMessage({ chatId: '1', text: 'x' })
+        .catch((e: unknown) => e)) as ProviderError;
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.message).not.toContain(секрет);
+      expect(err.message).toContain('<СЕКРЕТ ВЫРЕЗАН: MAX_BOT_TOKEN>');
+    });
+
+    it('диагноз НЕ обесценен: всё, кроме секрета, остаётся на месте', async () => {
+      const секрет = 'BOEVOY-TOKEN-4f81ac';
+      reply = () => {
+        throw new TypeError(`Headers.append: "Bearer ${секрет}" is an invalid header value.`);
+      };
+      const err = (await new MaxBotAdapter(секрет)
+        .sendMessage({ chatId: '1', text: 'x' })
+        .catch((e: unknown) => e)) as ProviderError;
+      expect(err.message).toContain('Headers.append');
+      expect(err.message).toContain('is an invalid header value');
+      expect(err.provider).toBe('max');
+    });
+
+    it('ЧИСТОЕ сообщение не трогается вовсе — вырезание не должно быть шумом', async () => {
+      reply = () => {
+        throw new TypeError('socket hang up');
+      };
+      const err = (await new MaxBotAdapter('BOEVOY-TOKEN-4f81ac')
+        .sendMessage({ chatId: '1', text: 'x' })
+        .catch((e: unknown) => e)) as ProviderError;
+      expect(err.message).toContain('socket hang up');
+      expect(err.message).not.toContain('ВЫРЕЗАН');
+    });
+
+    it('ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: ЧАСТЬ токена точным совпадением НЕ ловится', async () => {
+      const секрет = 'BOEVOY-TOKEN-4f81ac';
+      reply = () => {
+        throw new TypeError('Headers.append: "Bearer BOEVOY-TOKEN" is an invalid header value.');
+      };
+      const err = (await new MaxBotAdapter(секрет)
+        .sendMessage({ chatId: '1', text: 'x' })
+        .catch((e: unknown) => e)) as ProviderError;
+      // Это НЕ дефект оси, а честно названный предел второго слоя: обрезанный секрет он не увидит.
+      // Против такого работает ПЕРВЫЙ слой (негодное значение не доживает до заголовка).
+      expect(err.message).toContain('BOEVOY-TOKEN');
+      expect(err.message).not.toContain('ВЫРЕЗАН');
+    });
+  });
+
 });
 
 /**
