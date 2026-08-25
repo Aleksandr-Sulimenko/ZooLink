@@ -25,6 +25,30 @@ export function isRfRegion(value: string): boolean {
 }
 
 /**
+ * ДВЕРЬ ПЕРЕЧНЕЙ ХОСТОВ — единственное место, где из списка выбрасываются пустые и пробельные
+ * элементы. Решение держателя 24.08.2026 по находке №119, и оно шире самой находки: лечить
+ * ЧИТАТЕЛЯ значит чинить список, а не его читателя, — второй, третий и будущий пятый едок
+ * рождаются дырявыми (класс сработал у флота трижды за день 24.08).
+ *
+ * ЧЕМ ОПАСЕН ПУСТОЙ ЭЛЕМЕНТ. Он не «ни с чем не совпадает», он СОВПАДАЕТ СО ВСЕМ:
+ * `'evil.example.com'.endsWith('')` === true. В bash тот же класс виден глазами как звёздочка
+ * (`*""` — это `*`, см. check-rf-residency.sh:403, вылечено 17.08), а в JS вырождение НЕ ВИДНО
+ * в тексте вовсе — сопоставитель не строит никакого шаблона и всё равно отвечает «да» на пустоте.
+ * Замер до лечения (мутант: '' первым элементом перечня суффиксов): `evil.example.com` и
+ * `s3.us-west-004.backblazeb2.com` объявлялись РЕЗИДЕНТНЫМИ. IP-литералы при этом отвергались —
+ * их отсекает правило выше, поэтому «резидентным становится ЛЮБОЙ хост» было бы шире факта:
+ * любой ДОМЕННЫЙ, но не любой адрес.
+ *
+ * Сегодня перечни ниже — константы, и пустой строки в них нет: дверь стоит НЕ против сегодняшнего
+ * состояния, а против одной строки правки, которая отделяет «не несёт» от «несёт». Если завтра
+ * перечень начнёт приходить из данных, править читателей не придётся — дверь уже здесь.
+ * Ось на саму дверь: env.validation.spec, «пустой элемент не делает резидентность всеобщей».
+ */
+export function sanitizedHostList(items: readonly string[]): readonly string[] {
+  return Object.freeze(items.map((s) => s.trim()).filter((s) => s.length > 0));
+}
+
+/**
  * ADR-0017 (clauses 1, 4 and 6 — the primary PII store, PII-bearing object storage, and observability
  * sinks are all RF-resident) — the SINGLE canonical allowlist of DNS suffixes ANY host-bearing config
  * value may carry.
@@ -50,12 +74,12 @@ export function isRfRegion(value: string): boolean {
  * (`cdn.cloudflare.com`) into `.env`. `.рф` is listed in both its Unicode and punycode form because
  * `new URL()` normalises to punycode while the CI gate matches the raw text of a config file.
  */
-export const RF_ALLOWED_HOST_SUFFIXES = Object.freeze([
+export const RF_ALLOWED_HOST_SUFFIXES = sanitizedHostList([
   '.ru',
   '.su',
   '.рф',
   '.xn--p1ai',
-] as const);
+]);
 
 /**
  * ADR-0017 п.4 — EXACT hostnames of RF-resident STORAGE/CDN providers whose FQDN does not sit under
@@ -70,7 +94,7 @@ export const RF_ALLOWED_HOST_SUFFIXES = Object.freeze([
  * host here is a code change that goes through the ADR/security gate, which is the entire point of
  * keeping the list out of `.env`.
  */
-export const RF_ALLOWED_STORAGE_HOSTS = Object.freeze(['storage.yandexcloud.net'] as const);
+export const RF_ALLOWED_STORAGE_HOSTS = sanitizedHostList(['storage.yandexcloud.net']);
 
 /**
  * ИСХОДЯЩИЙ ПЕРИМЕТР: адреса провайдеров, ЗАШИТЫЕ В КОД адаптеров (ADR-0008). До 13.08.2026 они были

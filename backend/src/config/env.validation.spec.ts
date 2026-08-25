@@ -17,6 +17,7 @@ import {
   checkRedisUrl,
   isAllowedProviderHost,
   isResidentHost,
+  sanitizedHostList,
 } from './env.validation';
 
 /**
@@ -1183,5 +1184,49 @@ describe('перечни резидентности заморожены (кру
   ])('%s не расширяется в рантайме', (_name, list) => {
     expect(Object.isFrozen(list)).toBe(true);
     expect(() => (list as unknown as string[]).push('.evil')).toThrow();
+  });
+});
+
+// ── ДВЕРЬ ПЕРЕЧНЕЙ (находка №119; решение держателя 24.08 — лечить перечень, а не читателя) ──
+// Класс: пустой элемент перечня не «ни с чем не совпадает», а СОВПАДАЕТ СО ВСЕМ, потому что
+// `'evil.example.com'.endsWith('')` === true. В bash он виден как звёздочка, в JS — не виден вовсе.
+// Оси стоят НА ДВЕРИ, а не у каждого читателя: читателей перечня уже двое (:275 и :286), и
+// следующего найдут не глазами.
+describe('дверь перечней хостов: пустой элемент не доживает до сопоставителя', () => {
+  it('выбрасывает пустые и пробельные элементы, остальное сохраняет по порядку', () => {
+    expect(sanitizedHostList(['.ru', '', '  ', '\t', '.su'])).toEqual(['.ru', '.su']);
+  });
+
+  it('обрезает пробелы по краям — «.ru » и «.ru» это один суффикс', () => {
+    expect(sanitizedHostList([' .ru '])).toEqual(['.ru']);
+  });
+
+  it('ПОЛОЖИТЕЛЬНЫЙ КОНТРОЛЬ: без двери пустой элемент совпадает с чем угодно, с дверью — нет', () => {
+    // Красное-до, замеренное на живом коде 24.08 (мутант: '' первым элементом суффиксов):
+    // evil.example.com и s3.us-west-004.backblazeb2.com объявлялись РЕЗИДЕНТНЫМИ.
+    const сырой = ['', '.ru'];
+    expect(сырой.some((s) => 'evil.example.com'.endsWith(s))).toBe(true);
+    expect(
+      sanitizedHostList(сырой).some((s) => 'evil.example.com'.endsWith(s)),
+    ).toBe(false);
+  });
+
+  it('БОЕВЫЕ перечни пусты от пустых — утверждение об ИСТОЧНИКЕ, не о его копии', () => {
+    // Тест читает сами константы, а не воспроизводит их у себя: общий эталон даёт зелёный свод,
+    // пока обе стороны ошибаются одинаково (урок 14.08).
+    for (const перечень of [
+      RF_ALLOWED_HOST_SUFFIXES,
+      RF_ALLOWED_STORAGE_HOSTS,
+      RF_ALLOWED_PROVIDER_HOSTS,
+    ]) {
+      expect((перечень as readonly string[]).filter((s) => s.trim() === '')).toEqual([]);
+    }
+  });
+
+  it('ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: суффиксы читаются isResidentHost из модульной константы, поэтому '
+    + 'поведенческой оси на них без подмены модуля нет — дверь закрывает их РОЖДЕНИЕМ', () => {
+    expect(RF_ALLOWED_HOST_SUFFIXES).toContain('.ru');
+    expect(isResidentHost('evil.example.com')).toBe(false);
+    expect(isResidentHost('s3.us-west-004.backblazeb2.com')).toBe(false);
   });
 });

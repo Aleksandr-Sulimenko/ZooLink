@@ -221,7 +221,12 @@ fi
 # случай «лечение в одном файле ломает прибор в другом»: шаблон, привязанный к форме записи чужого
 # языка, хрупок по построению. Терпимость к обеим формам — заплата; настоящее лечение (разбор через
 # tsc/ts-node, а не sed) названо долгом.
-allow="$(sed -n '/RF_ALLOWED_REGIONS = \(Object.freeze(\)\?\[/,/\]/p' "$env_validation" \
+# 🔴 КЛАСС ПОВТОРИЛСЯ 24.08.2026, ТРЕТИЙ РАЗ: перечни переехали на ДВЕРЬ `sanitizedHostList([...])`
+# (находка №119 — пустой элемент перечня совпадает со ВСЕМ, лечим рождение перечня, а не каждого
+# читателя), и гейт снова выдал rc=2 «could not parse». Прибор опять сработал верно, а заплата
+# опять расширена третьей формой. Пока разбор идёт sed'ом по чужому языку, КАЖДОЕ лечение в
+# env.validation.ts обязано проверять ЭТОТ файл — иначе лечение чинит дом и ломает сторожа.
+allow="$(sed -n '/RF_ALLOWED_REGIONS = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
          | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u || true)"
 [ -n "$allow" ] || { echo "::error::could not parse RF_ALLOWED_REGIONS from $env_validation"; exit 2; }
 echo "RF allowlist (from $env_validation): $(echo "$allow" | tr '\n' ' ')"
@@ -304,7 +309,7 @@ done < <(grep -nHiE "$foreign" "${files[@]}" || true)
 #     ships stack traces — and the PII inside them — across the border. EMPTY value = sink disabled
 #     (lawful, and the MVP default). Allowlist comes from the SAME single source of truth as the
 #     regions: RF_ALLOWED_HOST_SUFFIXES in env.validation.ts.
-suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\)\?\[/,/\]/p' "$env_validation" \
+suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
             | grep -oE "'\.[^']+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
 [ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_HOST_SUFFIXES from $env_validation"; exit 2; }
 
