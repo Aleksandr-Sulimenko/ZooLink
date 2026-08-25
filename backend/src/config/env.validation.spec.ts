@@ -1219,7 +1219,7 @@ describe('дверь перечней хостов: пустой элемент 
       RF_ALLOWED_STORAGE_HOSTS,
       RF_ALLOWED_PROVIDER_HOSTS,
     ]) {
-      expect((перечень as readonly string[]).filter((s) => s.trim() === '')).toEqual([]);
+      expect(перечень.filter((s) => s.trim() === '')).toEqual([]);
     }
   });
 

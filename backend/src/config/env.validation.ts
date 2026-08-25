@@ -307,9 +307,7 @@ export function isResidentHost(
   // с любым .ru-хостом прошёл бы БЕЗ код-ревью. Резидентности он не нарушает — но класс
   // «новый адаптер тихо добавил хост» закрывается только явным перечнем.
   if (!allowRfSuffixes) return false;
-  return (RF_ALLOWED_HOST_SUFFIXES as readonly string[]).some((s) =>
-    host.endsWith(s),
-  );
+  return RF_ALLOWED_HOST_SUFFIXES.some((s) => host.endsWith(s));
 }
 
 /**
@@ -558,7 +556,7 @@ export function checkTelemetryDsn(dsn: string): TelemetryDsnVerdict {
  * dropped: `.рф` and `.xn--p1ai` are the same TLD, and printing both only confuses the operator.
  */
 function allowedSuffixesForMessage(): string {
-  return (RF_ALLOWED_HOST_SUFFIXES as readonly string[])
+  return RF_ALLOWED_HOST_SUFFIXES
     .filter((s) => !s.startsWith('.xn--'))
     .join(', ');
 }
@@ -621,7 +619,7 @@ export function storageEndpointRejectionMessage(
   verdict: HostResidencyVerdict,
 ): string {
   const allowed = allowedSuffixesForMessage();
-  const providers = (RF_ALLOWED_STORAGE_HOSTS as readonly string[]).join(', ');
+  const providers = RF_ALLOWED_STORAGE_HOSTS.join(', ');
   if (verdict.reason === 'unparseable') {
     return `S3_ENDPOINT is not a parseable http(s) endpoint — refusing (fail-closed): an object store whose host cannot be read cannot be shown to be RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5). Use the form http(s)://host[:port], e.g. http://minio:9000.`;
   }
@@ -673,7 +671,7 @@ export function mediaCdnHostRejectionMessage(
   verdict: HostResidencyVerdict,
 ): string {
   const allowed = allowedSuffixesForMessage();
-  const providers = (RF_ALLOWED_STORAGE_HOSTS as readonly string[]).join(', ');
+  const providers = RF_ALLOWED_STORAGE_HOSTS.join(', ');
   if (verdict.reason === 'unparseable') {
     return `MEDIA_CDN_HOST must be a bare host[:port] — no scheme, no path, no credentials (e.g. cdn.zoolink.ru) — refusing (fail-closed): a CDN host that cannot be read cannot be shown to be RF-resident (ADR-0017 п.4 / ФЗ-152 ст.18 ч.5). Leave it empty to serve media straight from the S3 origin.`;
   }
