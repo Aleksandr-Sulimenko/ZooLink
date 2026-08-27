@@ -7,6 +7,10 @@ import {
   maxTrustRootWarning,
 } from './providers.module';
 import {
+  STAND_HOSTS_TOGGLE_ON,
+  STAND_HOSTS_TOGGLE_OFF,
+} from '../../config/env.validation';
+import {
   EMAIL_PROVIDER,
   MAPS_PROVIDER,
   OBJECT_STORAGE,
@@ -60,13 +64,21 @@ describe('ProvidersModule (default env selection)', () => {
  * Проверяем ЧТО СКАЗАНО ЧЕЛОВЕКУ, а не только rc.
  */
 describe('предупреждения проводки — текст и условие (круг 4)', () => {
-  it('послабление периметра: молчит без флага, говорит при 1/true/yes', () => {
+  it('послабление периметра: условие судится СЛОВАРЁМ тумблера, а не своей копией (находка №165)', () => {
+    // Пробы берутся из ЕДИНСТВЕННОГО словаря (env.validation), а не переписаны рукой: рукописный
+    // перечень здесь и был третьей копией — расхождение с дверью он проверить не мог по построению.
     expect(standHostsWarning({})).toBeNull();
-    expect(standHostsWarning({ ALLOW_LOCAL_STAND_HOSTS: 'false' })).toBeNull();
-    for (const v of ['1', 'true', 'YES', ' true ']) {
-      const t = standHostsWarning({ ALLOW_LOCAL_STAND_HOSTS: v });
-      expect(t).toContain('ПЕРИМЕТР ОСЛАБЛЕН');
-      expect(t).toContain('ALLOW_LOCAL_STAND_HOSTS');
+    for (const v of STAND_HOSTS_TOGGLE_ON) {
+      for (const dressed of [v, v.toUpperCase(), ` ${v} `]) {
+        const t = standHostsWarning({ ALLOW_LOCAL_STAND_HOSTS: dressed });
+        expect(t).toContain('ПЕРИМЕТР ОСЛАБЛЕН');
+        expect(t).toContain('ALLOW_LOCAL_STAND_HOSTS');
+      }
+    }
+    // ВЫКЛ-половина словаря и значения ВНЕ словаря (включая 'on' — ровно мутант М1 круга 5,
+    // на котором дверь расширялась, а это предупреждение молчало) — молчание.
+    for (const v of [...STAND_HOSTS_TOGGLE_OFF, 'on', '', '  ', 'да']) {
+      expect(standHostsWarning({ ALLOW_LOCAL_STAND_HOSTS: v })).toBeNull();
     }
   });
 

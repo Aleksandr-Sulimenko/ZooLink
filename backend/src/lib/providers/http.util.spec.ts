@@ -133,9 +133,15 @@ describe('дверь и редирект (живой loopback)', () => {
     const ap = await listen(a);
     aUrl = `http://127.0.0.1:${ap}`;
   });
-  afterAll(() => {
-    a.close();
-    b.close();
+  afterAll(async () => {
+    // ДОЖДАННОЕ закрытие + сброс keep-alive (находка №169): недожданный close() не закрывает живые
+    // соединения undici, серверы оставались с сокетами, и jest ДОБИВАЛ рабочий процесс («force
+    // exited») при любом соседе по прогону. Свидетель, чей процесс добивает рантайм, годен ровно
+    // до первого случая, когда добивание случится раньше выгрузки отчёта.
+    a.closeAllConnections();
+    b.closeAllConnections();
+    await new Promise<void>((r) => a.close(() => r()));
+    await new Promise<void>((r) => b.close(() => r()));
   });
   beforeEach(() => {
     bHits = [];

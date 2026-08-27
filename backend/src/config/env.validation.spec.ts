@@ -15,9 +15,16 @@ import {
   checkMediaCdnHost,
   checkDatabaseUrl,
   checkRedisUrl,
+  databaseUrlRejectionMessage,
+  redisUrlRejectionMessage,
   isAllowedProviderHost,
   isResidentHost,
   sanitizedHostList,
+  STAND_HOSTS_TOGGLE_ON,
+  STAND_HOSTS_TOGGLE_OFF,
+  STAND_HOSTS_TOGGLE_VALUES,
+  standHostsToggleOn,
+  standHostsAllowed,
 } from './env.validation';
 
 /**
@@ -822,10 +829,18 @@ describe('validateEnv — primary-store residency (ADR-0017 п.1)', () => {
     // `postgres-evil://…`, i.e. a value whose host slot would be read under the wrong grammar.
     expect(RF_DATABASE_URL_SCHEMES).toEqual(['postgresql', 'postgres']);
     expect(RF_REDIS_URL_SCHEMES).toEqual(['redis', 'rediss']);
-    expect(checkDatabaseUrl('postgres-evil://u:p@postgres:5432/db').reason).toBe(
-      'unparseable',
-    );
-    expect(checkRedisUrl('rediss-evil://x@redis:6379').reason).toBe('unparseable');
+    // ПРИЧИНА НАЗЫВАЕТСЯ ТОЧНО (находка №136): не «хост нечитаем», а «схема не наша» — и вердикт
+    // несёт саму схему, чтобы текст отказа мог её напечатать.
+    expect(checkDatabaseUrl('postgres-evil://u:p@postgres:5432/db')).toMatchObject({
+      ok: false,
+      reason: 'bad-scheme',
+      scheme: 'postgres-evil',
+    });
+    expect(checkRedisUrl('rediss-evil://x@redis:6379')).toMatchObject({
+      ok: false,
+      reason: 'bad-scheme',
+      scheme: 'rediss-evil',
+    });
     // …and the legitimate schemes are all still accepted.
     expect(checkDatabaseUrl('postgresql://u:p@postgres:5432/db').ok).toBe(true);
     expect(checkDatabaseUrl('postgres://u:p@postgres:5432/db').ok).toBe(true);
@@ -978,28 +993,257 @@ describe('checkDatabaseUrl / checkRedisUrl / isResidentDataStoreHost', () => {
       targets: ['pg-a.zoolink.ru', 'pg-b.zoolink.ru'],
       offending: null,
       reason: 'resident',
+      scheme: null,
     });
     expect(checkDatabaseUrl('postgresql:///db?host=/var/run/postgresql')).toEqual({
       ok: true,
       targets: ['unix:/var/run/postgresql'],
       offending: null,
       reason: 'resident',
+      scheme: null,
     });
   });
 
   it('has NO lawful empty mode (both DSNs are boot-required)', () => {
+    // …и беда названа СВОИМ именем: `empty`, а не сваленное в кучу «нечитаемо» (находка №136).
     expect(checkDatabaseUrl('')).toEqual({
       ok: false,
       targets: [],
       offending: null,
-      reason: 'unparseable',
+      reason: 'empty',
+      scheme: null,
     });
     expect(checkRedisUrl('   ')).toEqual({
       ok: false,
       targets: [],
       offending: null,
-      reason: 'unparseable',
+      reason: 'empty',
+      scheme: null,
     });
+  });
+});
+
+/**
+ * ОТКАЗ СТАРТА ОБЯЗАН НАЗЫВАТЬ СВОЮ ПРИЧИНУ, А НЕ ЧУЖУЮ (находка №136, круг 5).
+ *
+ * ЗАМЕР ДО ЛЕЧЕНИЯ (jiti, прямой вызов `checkDatabaseUrl` + `databaseUrlRejectionMessage`):
+ *   mysql://zoolink:pw@postgres:5432/zoolink → reason=unparseable
+ *     → «DATABASE_URL names no readable database host …»
+ *   postgres:5432/zoolink                    → тот же вердикт, тот же текст
+ *   postgresql://                            → тот же вердикт, тот же текст
+ *   ''                                       → тот же вердикт, тот же текст
+ *   postgresql://u:p@%ZZbroken/db            → тот же вердикт, тот же текст
+ * Пять разных бед — один диагноз, и он ЛОЖЕН в четырёх случаях из пяти: хост `postgres` стоит в
+ * строке и ВЕРЕН. Читающий первое предложение идёт пинговать исправный хост, проверять compose и
+ * сеть докера — всё исправно, и отказ выглядит поломкой валидатора, а не собственной опечаткой.
+ *
+ * ЧЕМ ОПРОВЕРГАЛОСЬ (дословно из находки): «Прогон с `mysql://…@postgres:5432/db`, где отказ
+ * называет СХЕМУ, а не нечитаемость хоста». Ось ниже — этот прогон, поставленный на обе переменные.
+ *
+ * ФОРМА ОСИ ДВУХПОЛЮСНАЯ, и второй полюс важнее первого: мало проверить, что верное слово
+ * ПОЯВИЛОСЬ — надо проверить, что ложное слово ИСЧЕЗЛО. Поэтому каждая проба утверждает и то, что
+ * текст называет свою беду, и то, что он БОЛЬШЕ НЕ обвиняет хост.
+ */
+describe('отказ DATABASE_URL/REDIS_URL называет ИСТИННУЮ причину (находка №136)', () => {
+  const ЛОЖНЫЙ_ДИАГНОЗ = /names no readable (database|Redis) host/;
+
+  const пробы: ReadonlyArray<{
+    значение: string;
+    причина: string;
+    ждём: RegExp;
+  }> = [
+    {
+      значение: 'mysql://zoolink:pw@postgres:5432/zoolink',
+      причина: 'bad-scheme',
+      ждём: /unsupported scheme "mysql:\/\/"/,
+    },
+    {
+      значение: 'postgres-evil://u:p@postgres:5432/db',
+      причина: 'bad-scheme',
+      ждём: /unsupported scheme "postgres-evil:\/\/"/,
+    },
+    {
+      значение: 'postgres:5432/zoolink',
+      причина: 'no-scheme',
+      ждём: /has no postgresql:\/\/ or postgres:\/\/ scheme/,
+    },
+    {
+      значение: 'postgresql://',
+      причина: 'no-host',
+      ждём: /names no host at all/,
+    },
+    { значение: '', причина: 'empty', ждём: /is empty/ },
+    {
+      значение: 'postgresql://u:p@%ZZbroken/db',
+      причина: 'unreadable-host',
+      ждём: /names a host that cannot be read/,
+    },
+  ];
+
+  it.each(пробы)(
+    'DATABASE_URL=«$значение» → $причина, и текст называет ЕЁ',
+    ({ значение, причина, ждём }) => {
+      const вердикт = checkDatabaseUrl(значение);
+      expect(вердикт.reason).toBe(причина);
+      const текст = databaseUrlRejectionMessage(вердикт);
+      expect(текст).toMatch(ждём);
+      // ВТОРОЙ ПОЛЮС: прежний ложный диагноз про нечитаемый хост здесь больше не звучит.
+      expect(текст).not.toMatch(ЛОЖНЫЙ_ДИАГНОЗ);
+    },
+  );
+
+  it('REDIS_URL ломается тем же классом и лечится тем же разбором (:708 находки)', () => {
+    const схема = checkRedisUrl('mysql://x@redis:6379');
+    expect(схема.reason).toBe('bad-scheme');
+    expect(redisUrlRejectionMessage(схема)).toMatch(
+      /REDIS_URL uses the unsupported scheme "mysql:\/\/"/,
+    );
+    expect(redisUrlRejectionMessage(схема)).not.toMatch(ЛОЖНЫЙ_ДИАГНОЗ);
+
+    const безСхемы = checkRedisUrl('redis:6379');
+    expect(безСхемы.reason).toBe('no-scheme');
+    expect(redisUrlRejectionMessage(безСхемы)).toMatch(
+      /has no redis:\/\/ or rediss:\/\/ scheme/,
+    );
+  });
+
+  it('«нечитаемый хост» ОСТАЛСЯ — но только там, где он правда (единственный честный случай)', () => {
+    const вердикт = checkDatabaseUrl('postgresql://u:p@%ZZbroken/db');
+    expect(вердикт.reason).toBe('unreadable-host');
+    expect(databaseUrlRejectionMessage(вердикт)).toMatch(/cannot be read/);
+  });
+
+  it('ТЕКСТ НЕ НЕСЁТ СЕКРЕТА: DSN — это учётные данные, в отказ попадает ИМЯ переменной', () => {
+    const вердикт = checkDatabaseUrl('mysql://zoolink:s3cr3t-pw@postgres:5432/zoolink');
+    const текст = databaseUrlRejectionMessage(вердикт);
+    expect(текст).toContain('DATABASE_URL');
+    expect(текст).not.toContain('s3cr3t-pw');
+    expect(текст).not.toContain('zoolink:s3cr3t-pw');
+    // Имя схемы — единственное, что берётся из значения, и по построению регулярного выражения
+    // `^([A-Za-z][A-Za-z0-9+.-]*)://` секретом быть не может.
+    expect(вердикт.scheme).toBe('mysql');
+  });
+
+  it('НЕ РАСШИРИЛ БАЙПАС: dev-послабление по-прежнему смягчает ТОЛЬКО non-rf-host', () => {
+    // Пять новых причин — это пять новых значений, каждое из которых обязано остаться fail-closed
+    // в ЛЮБОЙ среде. Ось стережёт ровно это: флаг выставлен, среда не боевая — и всё равно отказ.
+    const dev = {
+      ...base,
+      NODE_ENV: 'development',
+      RESIDENCY_ALLOW_NON_RF_DEV: 'true',
+    };
+    for (const плохой of [
+      'mysql://u:p@postgres:5432/db',
+      'postgres:5432/db',
+      'postgresql://',
+      'postgresql://u:p@%ZZbroken/db',
+    ]) {
+      expect(() => validateEnv({ ...dev, DATABASE_URL: плохой })).toThrow(
+        /Invalid environment configuration/,
+      );
+    }
+    // …а то, что байпас действительно смягчает, он смягчает по-прежнему (способность не отнята).
+    expect(() =>
+      validateEnv({ ...dev, DATABASE_URL: 'postgresql://u:p@ep-x.aws.neon.tech/db' }),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * ЛЕСТНИЦА ОТКАЗОВ СТАРТА СВЕДЕНА В ОДИН ОТЧЁТ, А НЕПОЛНЫЙ ОТЧЁТ НАЗЫВАЕТ СЕБЯ НЕПОЛНЫМ
+ * (находка №138, круг 5).
+ *
+ * ЗАМЕР ДО ЛЕЧЕНИЯ (jiti, боевой конфиг, три прод-требования не выставлены) — три ПЕРЕЗАПУСКА:
+ *   A → «Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: …»
+ *   B → «…:\n  - METRICS_TOKEN: …»
+ *   C → «…:\n  - OAUTH_APPLE_TEAM_ID / KEY_ID / PRIVATE_KEY: …»
+ * При этом ветка zod те же три беды печатала РАЗОМ, а заголовок у всех четырёх отчётов был
+ * ПОБУКВЕННО один — значит «полный список» и «первый из очереди» выглядели одинаково.
+ *
+ * ЧЕМ ОПРОВЕРГАЛОСЬ (дословно из находки): «прогон, где при пустых AGENT_SERVICE_SIGNING_SECRET и
+ * METRICS_TOKEN одновременно печатаются ОБЕ строки (либо где заголовок второй половины честно
+ * говорит, что список не полон)». Ось ниже закрывает ОБА условия сразу.
+ */
+describe('отказ старта: один отчёт вместо лестницы перезапусков (находка №138)', () => {
+  const прод = {
+    ...base,
+    NODE_ENV: 'production',
+    OAUTH_APPLE_CLIENT_ID: 'ru.zoolink.app',
+  };
+
+  const текстОтказа = (env: Record<string, unknown>): string => {
+    try {
+      validateEnv(env);
+      throw new Error('ОСЬ СЛОМАНА: конфиг обязан был отвергнуться, а старт прошёл');
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  it('ВСЕ прод-требования называются РАЗОМ — один старт вместо трёх', () => {
+    const текст = текстОтказа(прод);
+    // Ровно тот прогон, которым находка опровергалась: обе строки в ОДНОМ отчёте…
+    expect(текст).toContain('AGENT_SERVICE_SIGNING_SECRET');
+    expect(текст).toContain('METRICS_TOKEN');
+    // …и третья беда, которая раньше ждала второго перезапуска, тоже здесь.
+    expect(текст).toContain('OAUTH_APPLE_TEAM_ID');
+    expect(текст).toContain('OAUTH_APPLE_KEY_ID');
+    expect(текст).toContain('OAUTH_APPLE_PRIVATE_KEY');
+  });
+
+  it('лечение НЕ ОТНЯЛО отказа: каждая беда по отдельности по-прежнему роняет старт', () => {
+    // Закон храповика: сведение в один отчёт не смеет превратиться в «пропустили две из трёх».
+    const безАгента = текстОтказа({
+      ...прод,
+      METRICS_TOKEN: 'm'.repeat(16),
+      OAUTH_APPLE_CLIENT_ID: '',
+    });
+    expect(безАгента).toContain('AGENT_SERVICE_SIGNING_SECRET');
+
+    const безМетрик = текстОтказа({
+      ...прод,
+      AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+      OAUTH_APPLE_CLIENT_ID: '',
+    });
+    expect(безМетрик).toContain('METRICS_TOKEN');
+
+    const половинаApple = текстОтказа({
+      ...прод,
+      AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+      METRICS_TOKEN: 'm'.repeat(16),
+    });
+    expect(половинаApple).toContain('OAUTH_APPLE_TEAM_ID');
+  });
+
+  it('ПОЛНЫЙ конфиг проходит — способность стартовать не отнята', () => {
+    expect(() =>
+      validateEnv({
+        ...прод,
+        AGENT_SERVICE_SIGNING_SECRET: 'f'.repeat(32),
+        METRICS_TOKEN: 'm'.repeat(16),
+        OAUTH_APPLE_TEAM_ID: 'TEAMID1234',
+        OAUTH_APPLE_KEY_ID: 'KEYID12345',
+        OAUTH_APPLE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----',
+      }),
+    ).not.toThrow();
+  });
+
+  it('ДВЕ ШАПКИ РАЗЛИЧИМЫ: неполный отчёт объявляет себя неполным, полный — полным', () => {
+    // Половина zod физически не может слиться со второй (вторая читает parsed.data, которого при
+    // провале zod нет). Раз слить нельзя — форма обязана СКАЗАТЬ, а не молчать.
+    const zodОтчёт = текстОтказа({ ...прод, S3_REGION: 'us-east-1' });
+    expect(zodОтчёт).toMatch(/stage 1 of 2/);
+    expect(zodОтчёт).toMatch(/have NOT run yet/);
+    expect(zodОтчёт).not.toMatch(/complete list/);
+
+    const продОтчёт = текстОтказа(прод);
+    expect(продОтчёт).toMatch(/stage 2 of 2/);
+    expect(продОтчёт).toMatch(/complete list/);
+    expect(продОтчёт).not.toMatch(/stage 1 of 2/);
+
+    // ГРАНИЦА: обе шапки сохраняют прежний префикс — по нему ищут CI (ci.yml:527,532) и оси файла.
+    expect(zodОтчёт.startsWith('Invalid environment configuration')).toBe(true);
+    expect(продОтчёт.startsWith('Invalid environment configuration')).toBe(true);
   });
 });
 
@@ -1106,6 +1350,115 @@ describe('isAllowedProviderHost — односегментное имя и фл�
     expect(isResidentHost('postgres')).toBe(true);
     expect(isResidentHost('redis')).toBe(true);
     expect(isResidentHost('minio')).toBe(true);
+  });
+});
+
+/**
+ * СОГЛАСИЕ ЧИТАТЕЛЕЙ ТУМБЛЕРА ПО МНОЖЕСТВУ ЗНАЧЕНИЙ (находка №165, круг 5).
+ *
+ * ЧТО БЫЛО ЗАМЕРЕНО ДО ЛЕЧЕНИЯ: в дверь дописан `|| raw === 'on'` (применение доказано грепом
+ * строки 170) — `npx jest src/config/env.validation.spec.ts` дал 220 passed, 220 total, 0 КРАСНЫХ,
+ * при том что дверь начинала пускать односегментные имена стендов по значению, которого схема не
+ * знает. Соседние оси мимо: `it.each(['TRUE','True',' Yes '])` спрашивала ТОЛЬКО схему («не
+ * бросила»), а `it.each(['1','true','TRUE','yes',' 1 '])` — ТОЛЬКО дверь. Ни одна не сверяла ДВА
+ * ОТВЕТА НА ОДНО ЗНАЧЕНИЕ: классика «ось меряет ПРИЗНАК, а не СПОСОБНОСТЬ».
+ *
+ * ЧТО СТЕРЕЖЁТ ЭТА ОСЬ (двухсторонне, на ОДНОМ и том же значении):
+ *  (1) дверь не смеет ОТКРЫТЬСЯ на значении, которое схема отвергает — ровно форма мутанта `'on'`;
+ *  (2) схема не смеет ПРИНЯТЬ значение, о котором дверь не имеет мнения (словарь = ВКЛ ∪ ВЫКЛ);
+ *  (3) словарь объявлен один раз: ВКЛ и ВЫКЛ не пересекаются и в сумме дают полный перечень.
+ *
+ * Третий читатель — `standHostsWarning` в `lib/providers/providers.module.ts` — переведён на
+ * `standHostsToggleOn` 25.08 (после обрыва сессии-автора этой оси; «другой агент», правивший его
+ * файл, умер вместе с ней, не записав ни строки). Его собственная ось живёт в
+ * `providers.module.spec.ts` и судит предупреждение ПО СЛОВАРЮ, а не рукописной копией. Копий
+ * разбора не осталось: схема · дверь · предупреждение зовут ОДИН `standHostsToggleOn`.
+ */
+describe('тумблер стендов: ОДИН разбор на всех читателей (находка №165)', () => {
+  const saved = process.env.ALLOW_LOCAL_STAND_HOSTS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    else process.env.ALLOW_LOCAL_STAND_HOSTS = saved;
+  });
+
+  it('словарь объявлен ОДИН раз: ВКЛ ∪ ВЫКЛ = полный перечень, пересечение пусто', () => {
+    expect([...STAND_HOSTS_TOGGLE_VALUES]).toEqual([
+      ...STAND_HOSTS_TOGGLE_ON,
+      ...STAND_HOSTS_TOGGLE_OFF,
+    ]);
+    const on = new Set<string>(STAND_HOSTS_TOGGLE_ON);
+    expect(STAND_HOSTS_TOGGLE_OFF.filter((v) => on.has(v))).toEqual([]);
+    // Перечни заморожены — дозапись обязана бросать, иначе «один источник» дописывается в рантайме.
+    expect(() =>
+      (STAND_HOSTS_TOGGLE_ON as unknown as string[]).push('on'),
+    ).toThrow();
+  });
+
+  // Пробы: весь словарь + значения ВНЕ него (в т.ч. `'on'` — ровно мутант круга 5) + регистр и
+  // пробелы, которые обе стороны обязаны съедать ОДНОЙ нормализацией.
+  const ПРОБЫ = [
+    '1',
+    'true',
+    'yes',
+    '0',
+    'false',
+    'no',
+    'TRUE',
+    'True',
+    ' Yes ',
+    ' 1 ',
+    'NO',
+    'on',
+    'off',
+    'enabled',
+    '',
+    'да',
+    'Production',
+    '2',
+  ];
+
+  it.each(ПРОБЫ)(
+    'значение «%s»: дверь и схема решают СОГЛАСОВАННО (мутант «on» краснит именно здесь)',
+    (v) => {
+      process.env.ALLOW_LOCAL_STAND_HOSTS = v;
+      const дверьОткрыта = isAllowedProviderHost('mock-sms');
+      expect(standHostsAllowed()).toBe(дверьОткрыта);
+
+      const схемаПриняла = (() => {
+        try {
+          validateEnv({ ...base, ALLOW_LOCAL_STAND_HOSTS: v });
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+
+      // (1) ГЛАВНОЕ: открытая дверь на значении, которого схема не знает, — молчащее послабление.
+      if (дверьОткрыта) expect(схемаПриняла).toBe(true);
+
+      // (2) схема принимает РОВНО словарь (после той же нормализации), не шире и не уже;
+      const норм = v.trim().toLowerCase();
+      expect(схемаПриняла).toBe(
+        (STAND_HOSTS_TOGGLE_VALUES as readonly string[]).includes(норм),
+      );
+
+      // (3) …а дверь открыта РОВНО на половине ВКЛ того же словаря.
+      expect(дверьОткрыта).toBe(
+        (STAND_HOSTS_TOGGLE_ON as readonly string[]).includes(норм),
+      );
+    },
+  );
+
+  it('разбор ЭКСПОРТИРОВАН и не читает process.env — его может позвать любой третий читатель', () => {
+    delete process.env.ALLOW_LOCAL_STAND_HOSTS;
+    expect(standHostsToggleOn('1')).toBe(true);
+    expect(standHostsToggleOn(' TRUE ')).toBe(true);
+    expect(standHostsToggleOn('on')).toBe(false);
+    expect(standHostsToggleOn(undefined)).toBe(false);
+    expect(standHostsToggleOn(1)).toBe(false); // не-строка — СТРОГИЙ режим, не «истинно»
+    // …и дверь — ровно этот разбор, приложенный к process.env (способность не изменилась).
+    process.env.ALLOW_LOCAL_STAND_HOSTS = 'yes';
+    expect(standHostsAllowed()).toBe(standHostsToggleOn('yes'));
   });
 });
 
@@ -1265,6 +1618,11 @@ describe('дверь перечней хостов: пустой элемент 
       RF_ALLOWED_PROVIDER_HOSTS,
     ]) {
       expect(перечень.filter((s) => s.trim() === '')).toEqual([]);
+      // И вторая половина класса (находка №170): пробельная ОБВЯЗКА не пустой элемент, но запись
+      // с ней МЕРТВА для сопоставителя (host === h / endsWith не режут пробелы). До этой строки
+      // `' sms.ru '` в перечне двери ловился только СОВПАДЕНИЕМ — тем, что поведенческие оси
+      // называют все хосты поимённо.
+      expect(перечень.filter((s) => s !== s.trim())).toEqual([]);
     }
   });
 

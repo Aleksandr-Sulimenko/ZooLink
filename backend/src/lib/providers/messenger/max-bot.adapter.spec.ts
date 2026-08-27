@@ -44,7 +44,11 @@ describe('MaxBotAdapter', () => {
   it('ТОКЕН НЕ ПОПАДАЕТ В URL — он идёт заголовком (у СМС и геокодера ключ в адресе, здесь так не надо)', async () => {
     await new MaxBotAdapter(TOKEN).sendMessage({ chatId: '1', text: 'x' });
     expect(seen[0].url).not.toContain(TOKEN);
-    expect(String((seen[0].init?.headers as Record<string, string>).Authorization)).toContain(TOKEN);
+    // ТОЧНАЯ форма, а не toContain (находка №166): toContain истинно и для «Bearer ТОКЕН», и для
+    // голого «ТОКЕН» — мутант М8 (снятие Bearer) проходил зелёным, форма единственного секрета
+    // канала не держалась ни в одну сторону. Прижата ТЕКУЩАЯ форма; №58 спорит, ВЕРНА ли она для
+    // нашего хоста — когда живой вызов ответит, эту строку меняют ОСОЗНАННО, вместе с адаптером.
+    expect((seen[0].init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`);
   });
 
   it('текст сообщения уходит в ТЕЛЕ, а не в адресе (в тексте бывает код)', async () => {
@@ -223,6 +227,19 @@ describe('MaxBotAdapter — 200 не значит «принято» (ре-ге�
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     const res = await new MaxBotAdapter('t').sendMessage({ chatId: '1', text: 'x' });
     expect(res.accepted).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('200 с mid=ПУСТОЙ СТРОКОЙ — не идентификатор: accepted:false, providerMessageId:null (находка №168)', async () => {
+    // Соседняя ось меряет только ОТСУТСТВИЕ mid — мутант М9 (снятие `&& rawMid !== ''`) проходил
+    // её зелёным, и домен получал accepted:true с providerMessageId:'' — значение, которое не null
+    // («идентификатор есть») и не идентификатор. Тот же вред, что у ветки №24: отправлено ≠ не отправлено.
+    body = { message: { body: { mid: '' } } };
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const res = await new MaxBotAdapter('t').sendMessage({ chatId: '1', text: 'x' });
+    expect(res.accepted).toBe(false);
+    expect(res.providerMessageId).toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

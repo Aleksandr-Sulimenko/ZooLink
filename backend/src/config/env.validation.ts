@@ -112,10 +112,14 @@ export const RF_ALLOWED_STORAGE_HOSTS = sanitizedHostList(['storage.yandexcloud.
  * Утечки на 13.08 НЕТ: все три провайдера российские. Это слепое место, а не нарушение — и замок
  * ставится ради КЛАССА, а не ради трёх случаев.
  */
-// `Object.freeze` — прибор, а не соглашение: `as const` живёт только в типах, и в рантайме в перечень
-// можно было ДОПИСАТЬ хост (замерено спецом — дверь начинала его пропускать). Заморозка делает «новый
-// провайдер только код-ревью» проверяемым, а не обещанным.
-export const RF_ALLOWED_PROVIDER_HOSTS = Object.freeze([
+// Рождение — через ДВЕРЬ ПЕРЕЧНЕЙ (находка №170: лечение №119 провело через sanitizedHostList два
+// перечня из трёх, а обойдён был ровно тот, которым живёт исходящий периметр — и пробельная запись
+// `' sms.ru '` была бы МЁРТВОЙ: сопоставитель пробелов не режет). Заморозка при этом не потеряна —
+// прибор, а не соглашение: sanitizedHostList возвращает Object.freeze, и в рантайме в перечень
+// по-прежнему нельзя ДОПИСАТЬ хост (замерено спецом — дверь начинала его пропускать).
+// `as const` на литерале ниже НЕСУЩИЙ для стороннего читателя: check-rf-residency.sh:710 берёт
+// перечень из ТЕКСТА до маркера `] as const` — снятие «лишних» слов ослепит сторожа.
+export const RF_ALLOWED_PROVIDER_HOSTS = sanitizedHostList([
   'sms.ru',
   'api.unisender.com',
   'geocode-maps.yandex.ru',
@@ -164,10 +168,53 @@ export const RF_ALLOWED_PROVIDER_HOSTS = Object.freeze([
  * Пустая строка, `0`, `false`, опечатка — это СТРОГИЙ режим, а не «включено». Третий полюс оси
  * поставлен по прямому требованию держателя и по свежему уроку находки №60: значение, которое
  * ВЫГЛЯДИТ как выключение, не смеет включать.
+ *
+ * ═══ ОДИН РАЗБОР ВМЕСТО ТРЁХ (находка №165, круг 5). ═══
+ * Правило разбора этого тумблера было записано ТРИЖДЫ, каждый раз своим кодом: схема (`envSchema`)
+ * перечисляла допустимый словарь, дверь (`standHostsAllowed`) сравнивала с тремя литералами, а
+ * стартовое предупреждение (`providers.module.ts::standHostsWarning`) — со своими тремя. Согласия
+ * этих трёх не стерегла НИ ОДНА ось: замер круга 5 дописал в дверь `|| raw === 'on'` и получил
+ * 301 зелёный из 301 при РАСШИРЕННОМ периметре и МОЛЧАЩЕМ предупреждении.
+ *
+ * Лечение — не новая проверка, а снятие копий: словарь объявлен ОДИН раз (`STAND_HOSTS_TOGGLE_ON`
+ * и `..._OFF`), из него же собран enum схемы, и он же — единственный разбор `standHostsToggleOn`.
+ * ГРАНИЦА НАЗВАНА ВСЛУХ: источником значения у двери ОСТАЁТСЯ `process.env`, а не валидированный
+ * конфиг. Дверь зовётся из статической функции ВНЕ DI (`lib/providers/http.util.ts`) и из воркера,
+ * то есть в процессах, где `validateEnv` мог не отработать; перевод её на конфиг менял бы не
+ * источник, а ПОВЕДЕНИЕ (что дверь пускает и когда), и это решение не моё. Здесь снят только
+ * ДУБЛЬ РАЗБОРА — множество принимаемых значений не изменилось ни на один литерал (доказано
+ * осью «словарь двери побайтно равен словарю схемы» ниже в спеке).
  */
+export const STAND_HOSTS_TOGGLE_ON = Object.freeze(['1', 'true', 'yes'] as const);
+export const STAND_HOSTS_TOGGLE_OFF = Object.freeze(['0', 'false', 'no'] as const);
+/** Полный словарь тумблера = ВКЛ ∪ ВЫКЛ. Единственный источник для enum схемы. */
+export const STAND_HOSTS_TOGGLE_VALUES = Object.freeze([
+  ...STAND_HOSTS_TOGGLE_ON,
+  ...STAND_HOSTS_TOGGLE_OFF,
+] as const);
+
+/**
+ * Нормализация значения тумблера — ТА ЖЕ для схемы и для двери (`trim` + нижний регистр).
+ * Не-строка проходит НАСКВОЗЬ (схема обязана сама сказать «ожидалась строка», а не получить '').
+ */
+export function normalizeStandHostsToggle(raw: unknown): unknown {
+  return typeof raw === 'string' ? raw.trim().toLowerCase() : raw;
+}
+
+/**
+ * ЕДИНСТВЕННЫЙ разбор тумблера: «включено» ⇔ значение после нормализации лежит в `..._ON`.
+ * Всё прочее — включая `undefined`, пустое, опечатку и значение ВНЕ словаря — СТРОГИЙ режим.
+ */
+export function standHostsToggleOn(raw: unknown): boolean {
+  const value = normalizeStandHostsToggle(raw);
+  return (
+    typeof value === 'string' &&
+    (STAND_HOSTS_TOGGLE_ON as readonly string[]).includes(value)
+  );
+}
+
 export function standHostsAllowed(): boolean {
-  const raw = (process.env.ALLOW_LOCAL_STAND_HOSTS ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes';
+  return standHostsToggleOn(process.env.ALLOW_LOCAL_STAND_HOSTS);
 }
 
 export function isAllowedProviderHost(rawHost: string): boolean {
@@ -353,7 +400,37 @@ export interface DsnResidencyVerdict {
   ok: boolean;
   targets: string[];
   offending: string | null;
-  reason: 'resident' | 'unparseable' | 'non-rf-host';
+  /**
+   * ПРИЧИНА НАЗЫВАЕТСЯ ТОЧНО (находка №136, круг 5). До лечения ПЯТЬ разных бед сливались в один
+   * вердикт `unparseable`, и текст отказа обвинял ХОСТ — замерено: `mysql://zoolink:pw@postgres:5432/db`
+   * печатало «DATABASE_URL names no readable database host», хотя хост `postgres` стоит в строке и
+   * ВЕРЕН, а виновата СХЕМА. Читающий первое предложение (а в три ночи читают первое) шёл пинговать
+   * исправный хост и лезть в compose. Различитель существовал ВНУТРИ разбора и просто не выводился
+   * наружу; теперь он выведен, и каждая беда называется своим именем:
+   *  · `empty`           — значение пустое (для обеих переменных законного «пусто» нет);
+   *  · `bad-scheme`      — схема есть, но не наша (`mysql://`); `scheme` несёт её имя;
+   *  · `no-scheme`       — префикса `схема://` нет вовсе (`postgres:5432/db`);
+   *  · `no-host`         — грамматика прочитана, но цели не названо ни одной (`postgresql://`);
+   *  · `unreadable-host` — цель названа, но прочесть её нельзя (битый percent-escape) — ЕДИНСТВЕННЫЙ
+   *                        случай, в котором прежний текст про «нечитаемый хост» был правдой;
+   *  · `non-rf-host`     — прочли всё, хост НЕ резидентен (единственная причина, которую dev-байпас
+   *                        вправе смягчить; остальные fail-closed ВЕЗДЕ).
+   */
+  reason:
+    | 'resident'
+    | 'empty'
+    | 'bad-scheme'
+    | 'no-scheme'
+    | 'no-host'
+    | 'unreadable-host'
+    | 'non-rf-host';
+  /**
+   * Имя непринятой схемы при `bad-scheme`, иначе null. НЕ СЕКРЕТ ПО ПОСТРОЕНИЮ: значение берётся
+   * из группы `^([A-Za-z][A-Za-z0-9+.-]*)://`, то есть физически не может унести ни пароль, ни
+   * хост, ни путь — только слово до `://`. Остальные поля вердикта DSN не несут никогда: DSN —
+   * это учётные данные.
+   */
+  scheme: string | null;
 }
 
 /**
@@ -412,14 +489,29 @@ function dsnHostTarget(piece: string): string | null {
  * Userinfo is dropped at the LAST `@` — the delimiter WHATWG and libpq both use — so a host-shaped
  * credential (`postgres://zoolink.ru@ep-abroad.example/db`) can never be mistaken for the host.
  */
+type DsnParse =
+  | { ok: true; targets: string[] }
+  | {
+      ok: false;
+      reason: 'empty' | 'bad-scheme' | 'no-scheme' | 'no-host' | 'unreadable-host';
+      scheme: string | null;
+    };
+
 function dsnTargets(
   rawValue: string,
   allowedSchemes: readonly string[],
-): string[] | null {
+): DsnParse {
   const value = rawValue.trim();
+  // ПОРЯДОК РАЗБОРА = ПОРЯДОК ДИАГНОЗА, и он не случаен: пустое проверяется ПЕРВЫМ (иначе пустая
+  // строка получила бы диагноз «нет схемы» — формально верный и бесполезный), затем наличие
+  // схемы, затем её допустимость, и только потом хосты. Каждая ступень называет СВОЮ беду.
+  if (value === '') return { ok: false, reason: 'empty', scheme: null };
   const schemeMatch = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(value);
-  if (!schemeMatch) return null;
-  if (!allowedSchemes.includes(schemeMatch[1].toLowerCase())) return null;
+  if (!schemeMatch) return { ok: false, reason: 'no-scheme', scheme: null };
+  const scheme = schemeMatch[1].toLowerCase();
+  if (!allowedSchemes.includes(scheme)) {
+    return { ok: false, reason: 'bad-scheme', scheme };
+  }
 
   const rest = value.slice(schemeMatch[0].length);
   const authorityEnd = rest.search(/[/?#]/);
@@ -440,7 +532,9 @@ function dsnTargets(
     const trimmed = piece.trim();
     if (trimmed === '') continue;
     const target = dsnHostTarget(trimmed);
-    if (target === null) return null;
+    if (target === null) {
+      return { ok: false, reason: 'unreadable-host', scheme };
+    }
     targets.push(target);
   }
 
@@ -453,14 +547,18 @@ function dsnTargets(
       const target = trimmed.startsWith('/')
         ? `unix:${trimmed}`
         : dsnHostTarget(trimmed);
-      if (target === null) return null;
+      if (target === null) {
+        return { ok: false, reason: 'unreadable-host', scheme };
+      }
       targets.push(target);
     }
   }
 
   // No target at all (`postgres://`, `redis://`) — fail-closed: a store whose location the config does
   // not state is a store whose location cannot be cleared.
-  return targets.length > 0 ? targets : null;
+  return targets.length > 0
+    ? { ok: true, targets }
+    : { ok: false, reason: 'no-host', scheme };
 }
 
 /**
@@ -476,17 +574,24 @@ export function checkDsnResidency(
   rawValue: string,
   allowedSchemes: readonly string[],
 ): DsnResidencyVerdict {
-  const targets = dsnTargets(rawValue, allowedSchemes);
-  if (targets === null) {
-    return { ok: false, targets: [], offending: null, reason: 'unparseable' };
+  const parse = dsnTargets(rawValue, allowedSchemes);
+  if (!parse.ok) {
+    return {
+      ok: false,
+      targets: [],
+      offending: null,
+      reason: parse.reason,
+      scheme: parse.scheme,
+    };
   }
+  const { targets } = parse;
   const offending = targets.find(
     (t) => !(t.startsWith('unix:') || isResidentDataStoreHost(t)),
   );
   if (offending !== undefined) {
-    return { ok: false, targets, offending, reason: 'non-rf-host' };
+    return { ok: false, targets, offending, reason: 'non-rf-host', scheme: null };
   }
-  return { ok: true, targets, offending: null, reason: 'resident' };
+  return { ok: true, targets, offending: null, reason: 'resident', scheme: null };
 }
 
 /** ADR-0017 п.1 — the PRIMARY store of personal data. */
@@ -679,6 +784,40 @@ export function mediaCdnHostRejectionMessage(
 }
 
 /**
+ * ПЕРВОЕ ПРЕДЛОЖЕНИЕ ОТКАЗА — САМ ДИАГНОЗ (находка №136, круг 5). Возвращает текст беды ФОРМЫ для
+ * `DATABASE_URL`/`REDIS_URL`, либо null, если форма прочиталась и беда в РЕЗИДЕНТНОСТИ хоста
+ * (её текст строит вызывающий, называя хост).
+ *
+ * ЗАЧЕМ ОТДЕЛЬНОЙ ФУНКЦИЕЙ, А НЕ ДВУМЯ ВЕТКАМИ НА МЕСТЕ: обе переменные ломаются ОДИНАКОВО, и
+ * прежняя формулировка была скопирована в оба места слово в слово — а копия расходится молча.
+ * Соседи по файлу давно называют ФОРМУ честно (`S3_ENDPOINT is not a parseable http(s) endpoint`,
+ * `MEDIA_CDN_HOST must be a bare host[:port]`); эти двое единственные обвиняли выдуманное.
+ *
+ * ЧТО НЕ ПОПАДАЕТ В ТЕКСТ: ни само значение, ни его хвост, ни хост — только ИМЯ ПЕРЕМЕННОЙ и, при
+ * `bad-scheme`, слово до `://`, которое по построению регулярного выражения не может быть секретом.
+ */
+function dsnShapeFault(
+  verdict: DsnResidencyVerdict,
+  variable: 'DATABASE_URL' | 'REDIS_URL',
+  schemes: string,
+): string | null {
+  switch (verdict.reason) {
+    case 'empty':
+      return `${variable} is empty, and there is no lawful "no store" mode for it`;
+    case 'no-scheme':
+      return `${variable} has no ${schemes} scheme — the value must start with one (a bare host:port is not a DSN)`;
+    case 'bad-scheme':
+      return `${variable} uses the unsupported scheme "${verdict.scheme ?? '(unknown)'}://" — only ${schemes} are read under a known grammar, so the host slot of anything else cannot be trusted`;
+    case 'no-host':
+      return `${variable} names no host at all — the scheme is right but the value states no connection target`;
+    case 'unreadable-host':
+      return `${variable} names a host that cannot be read (malformed escape or authority)`;
+    default:
+      return null;
+  }
+}
+
+/**
  * Boot error text for a rejected `DATABASE_URL` (ADR-0017 п.1). Names the offending HOST and nothing
  * else — a DSN carries the database password.
  */
@@ -689,8 +828,9 @@ export function databaseUrlRejectionMessage(
   const schemes = (RF_DATABASE_URL_SCHEMES as readonly string[])
     .map((s) => `${s}://`)
     .join(' or ');
-  if (verdict.reason === 'unparseable') {
-    return `DATABASE_URL names no readable database host — refusing (fail-closed): the PRIMARY store of personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}user:password@host[:port]/db, e.g. postgresql://zoolink:***@postgres:5432/zoolink?schema=public (a unix socket via ?host=/var/run/postgresql is also accepted).`;
+  const shape = dsnShapeFault(verdict, 'DATABASE_URL', schemes);
+  if (shape !== null) {
+    return `${shape} — refusing (fail-closed): the PRIMARY store of personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}user:password@host[:port]/db, e.g. postgresql://zoolink:***@postgres:5432/zoolink?schema=public (a unix socket via ?host=/var/run/postgresql is also accepted).`;
   }
   return `database host "${verdict.offending ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5) — DATABASE_URL is the PRIMARY store of personal data (accounts, phone_hash, encrypted email/contact_phone per ADR-0012, listings, consents, the moderation audit trail), so ФЗ-152 ст.18 ч.5 requires it to sit on RF territory. It must be self-hosted (loopback / private address / single-label service name such as postgres:5432 / a unix socket) or under an RF domain (${allowed}). A non-RF database is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
 }
@@ -703,8 +843,9 @@ export function redisUrlRejectionMessage(verdict: DsnResidencyVerdict): string {
   const schemes = (RF_REDIS_URL_SCHEMES as readonly string[])
     .map((s) => `${s}://`)
     .join(' or ');
-  if (verdict.reason === 'unparseable') {
-    return `REDIS_URL names no readable Redis host — refusing (fail-closed): a cache that also holds personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}[:password@]host[:port], e.g. redis://:***@redis:6379.`;
+  const shape = dsnShapeFault(verdict, 'REDIS_URL', schemes);
+  if (shape !== null) {
+    return `${shape} — refusing (fail-closed): a cache that also holds personal data cannot be shown to be RF-resident if its location cannot be read (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5). Use ${schemes}[:password@]host[:port], e.g. redis://:***@redis:6379.`;
   }
   return `Redis host "${verdict.offending ?? '(unknown)'}" is NOT RF-resident (ADR-0017 п.1 / ФЗ-152 ст.18 ч.5) — Redis is not "just a cache": it stores the rate-limit and throttler counters keyed by phone/IP, the listing-creation quota keyed by user id, and cached profile/listing payloads, i.e. personal data derived from the primary store. It must be self-hosted (loopback / private address / single-label service name such as redis:6379) or under an RF domain (${allowed}). A non-RF Redis is permitted only outside production with RESIDENCY_ALLOW_NON_RF_DEV=true.`;
 }
@@ -743,10 +884,15 @@ export const envSchema = z.object({
   // значение к нижнему регистру, а схема принимала только строчные — `TRUE` роняло старт с
   // сообщением про недопустимое значение, тогда как дверь его поняла бы. Расхождение fail-closed и
   // громкое, но всё же расхождение: приводим здесь тем же способом, что и дверь.
+  // ОДИН РАЗБОР НА ТРЁХ ЧИТАТЕЛЕЙ (находка №165, круг 5): и словарь, и нормализация взяты из
+  // `STAND_HOSTS_TOGGLE_VALUES` / `normalizeStandHostsToggle` — тех же, которыми живёт дверь.
+  // Литеральный перечень здесь БОЛЬШЕ НЕ ПИШЕТСЯ: пока он стоял копией, дверь могла принять
+  // значение, которого схема не знает (замерено мутантом `'on'`: 301 зелёный при расширенном
+  // периметре). Порядок значений в тексте ошибки zod теперь «ВКЛ, затем ВЫКЛ» — множество то же.
   ALLOW_LOCAL_STAND_HOSTS: z
     .preprocess(
-      (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
-      z.enum(['true', 'false', '1', '0', 'yes', 'no']),
+      normalizeStandHostsToggle,
+      z.enum(STAND_HOSTS_TOGGLE_VALUES),
     )
     .default('false'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -1038,35 +1184,69 @@ export const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
-/** Used by @nestjs/config `validate`. Throws (boot-blocking) with a readable report. */
+/**
+ * Used by @nestjs/config `validate`. Throws (boot-blocking) with a readable report.
+ *
+ * ═══ ОТЧЁТ ОБ ОТКАЗЕ СТАРТА ОБЯЗАН БЫТЬ ПОЛНЫМ ИЛИ ЧЕСТНО СКАЗАТЬ, ЧТО ОН НЕ ПОЛОН ═══
+ * (находка №138, круг 5.)
+ *
+ * ЗАМЕР ДО ЛЕЧЕНИЯ (jiti, боевой конфиг, три прод-требования не выставлены):
+ *   A → «Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: …»   (выставили)
+ *   B → «Invalid environment configuration:\n  - METRICS_TOKEN: …»                  (выставили)
+ *   C → «Invalid environment configuration:\n  - OAUTH_APPLE_TEAM_ID/KEY_ID/PRIVATE_KEY: …»
+ * Три беды — ТРИ ПЕРЕЗАПУСКА, тогда как ветка zod те же три печатает РАЗОМ. Заголовок у всех
+ * четырёх отчётов побуквенно один, поэтому отличить «полный список» от «первого из очереди»
+ * по тексту было НЕЛЬЗЯ. Оператор, однажды увидевший отчёт из трёх строк, справедливо считает
+ * отчёт полным — чинит одну переменную, ждёт подъёма контейнера и миграций и получает следующую
+ * беду того же класса, которую можно было назвать сразу. В самый дорогой момент — первый боевой
+ * старт или подъём после аварии — это три круга ожидания вместо одного.
+ *
+ * ЛЕЧЕНИЕ ДВУСЛОЙНОЕ, потому что и беда двуслойная:
+ *  (1) вторая половина проверок (та, что читает УЖЕ разобранный конфиг) больше не бросает по
+ *      одной: все её беды копятся в `issues` и печатаются ОДНИМ отчётом. Три перезапуска → один.
+ *  (2) первая половина (zod) технически не может слиться со второй: вторая читает `parsed.data`,
+ *      которого при провале zod не существует. Раз слить нельзя — надо СКАЗАТЬ. Заголовок ветки
+ *      zod теперь прямо объявляет себя НЕПОЛНЫМ («stage 1 of 2 … not yet run»), а заголовок
+ *      второй ветки — полным. Форма отчёта больше не обещает полноты, которой у неё нет.
+ *
+ * ГРАНИЦА: обе шапки начинаются с прежней строки `Invalid environment configuration` — по ней
+ * ищут и CI (.github/workflows/ci.yml:527,532), и оси этого файла. Расширение идёт ХВОСТОМ.
+ */
 export function validateEnv(config: Record<string, unknown>): Env {
   const parsed = envSchema.safeParse(config);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('\n');
-    throw new Error(`Invalid environment configuration:\n${issues}`);
+    // ЧЕСТНАЯ ШАПКА НЕПОЛНОГО ОТЧЁТА: производственные проверки ниже читают разобранный конфиг,
+    // которого здесь ещё нет, поэтому они НЕ ПРОГНАНЫ — и отчёт обязан это сказать, а не молчать.
+    throw new Error(
+      `Invalid environment configuration (stage 1 of 2 — shape & residency; the production-readiness checks have NOT run yet, so this list may not be the last):\n${issues}`,
+    );
   }
+
+  // ВТОРАЯ ПОЛОВИНА — ОДНИМ ОТЧЁТОМ. Каждая проверка ДОПИСЫВАЕТ свою беду и идёт дальше; бросок
+  // один и в конце. Порядок строк сохранён прежний (агент-секрет → METRICS_TOKEN → Apple), чтобы
+  // диффом было видно: изменилась ПОЛНОТА отчёта, а не его содержание.
+  const issues: string[] = [];
+
   // ADR-0011 §5.2: the agent service-signing secret is optional in dev/test (form-only, gate off) but
   // MUST be present (≥32) in production so the form is boot-ready the moment the AGENT gate is enabled.
   if (
     parsed.data.NODE_ENV === 'production' &&
     !parsed.data.AGENT_SERVICE_SIGNING_SECRET
   ) {
-    throw new Error(
-      'Invalid environment configuration:\n  - AGENT_SERVICE_SIGNING_SECRET: required in production (min 32 chars)',
+    issues.push(
+      '  - AGENT_SERVICE_SIGNING_SECRET: required in production (min 32 chars)',
     );
   }
   // /metrics gate hardening (AUDIT3 security.md, D8 🟡): in production METRICS_TOKEN MUST be set (≥16,
   // shape-checked above). Without it MetricsGuard falls back to trusting req.ip — and behind the reverse
   // proxy every client looks internal — so the scrape endpoint would be world-readable. Optional in
   // dev/test (the internal-client fallback is fine there). Empty string is treated as "not set".
-  if (
-    parsed.data.NODE_ENV === 'production' &&
-    !parsed.data.METRICS_TOKEN
-  ) {
-    throw new Error(
-      'Invalid environment configuration:\n  - METRICS_TOKEN: required in production (min 16 chars) — else MetricsGuard trusts req.ip behind the proxy and /metrics is world-readable',
+  if (parsed.data.NODE_ENV === 'production' && !parsed.data.METRICS_TOKEN) {
+    issues.push(
+      '  - METRICS_TOKEN: required in production (min 16 chars) — else MetricsGuard trusts req.ip behind the proxy and /metrics is world-readable',
     );
   }
   // D3 / OPS-11: Sign in with Apple is all-or-nothing. The adapter is deferred (stub-on-empty), but if
@@ -1081,12 +1261,20 @@ export function validateEnv(config: Record<string, unknown>): Env {
     };
     const set = Object.entries(apple).filter(([, v]) => v !== '');
     if (set.length > 0 && set.length < Object.keys(apple).length) {
-      const missing = Object.entries(apple)
-        .filter(([, v]) => v === '')
-        .map(([k]) => `  - ${k}: required when any OAUTH_APPLE_* is set in production`)
-        .join('\n');
-      throw new Error(`Invalid environment configuration:\n${missing}`);
+      for (const [k] of Object.entries(apple).filter(([, v]) => v === '')) {
+        issues.push(
+          `  - ${k}: required when any OAUTH_APPLE_* is set in production`,
+        );
+      }
     }
+  }
+
+  if (issues.length > 0) {
+    // ШАПКА ПОЛНОГО ОТЧЁТА: сюда попадают ТОЛЬКО после успешного zod-разбора, значит прогнаны обе
+    // половины и список действительно последний. Второго перезапуска за следующей бедой не будет.
+    throw new Error(
+      `Invalid environment configuration (stage 2 of 2 — production readiness; complete list):\n${issues.join('\n')}`,
+    );
   }
   return parsed.data;
 }

@@ -1,5 +1,6 @@
 import { Global, Logger, Module, type Provider } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
+import { standHostsToggleOn } from '../../config/env.validation';
 import {
   EMAIL_PROVIDER,
   MAPS_PROVIDER,
@@ -88,10 +89,14 @@ const objectStorage: Provider = {
  * Функция возвращает текст или null; модуль её ЗОВЁТ и печатает. Ось стоит на ТЕКСТЕ.
  */
 
-/** Послабление периметра говорит о себе вслух при старте (находка круга 2: тумблер был невидим). */
+/**
+ * Послабление периметра говорит о себе вслух при старте (находка круга 2: тумблер был невидим).
+ * Условие — ЕДИНСТВЕННЫЙ разбор тумблера (`standHostsToggleOn`, находка №165 круга 5): до этого
+ * здесь жила ТРЕТЬЯ копия словаря своими литералами, и мутация словаря двери оставляла
+ * предупреждение молчащим при уже расширенном периметре — согласие копий не стерегла ни одна ось.
+ */
 export function standHostsWarning(env: NodeJS.ProcessEnv = process.env): string | null {
-  const raw = (env.ALLOW_LOCAL_STAND_HOSTS ?? '').trim().toLowerCase();
-  if (raw !== '1' && raw !== 'true' && raw !== 'yes') return null;
+  if (!standHostsToggleOn(env.ALLOW_LOCAL_STAND_HOSTS)) return null;
   return (
     'ПЕРИМЕТР ОСЛАБЛЕН: ALLOW_LOCAL_STAND_HOSTS включён — дверь пускает односегментные имена ' +
     'стендов (mock-sms, minio). В боевой конфигурации этого флага быть не должно; ось 7 ' +

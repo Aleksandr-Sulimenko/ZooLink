@@ -57,6 +57,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # ВСТРЕЧНАЯ СВЕРКА СТОРОЖА (решение держателя 24.08, m-20260824-180434-480c): job `residency`
+      # восстанавливает allowlist-ы из ТЕКСТА env.validation.ts (sed, без установки зависимостей) —
+      # единственный читатель перечней МИМО двери рождения. Здесь, где npm ci уже прогнан, тот ЖЕ
+      # прибор сверяет свой текст-разбор с ФАКТИЧЕСКИМ значением констант в рантайме: разошлись —
+      # красное (rc=1), не смог посмотреть — rc=2, НЕ «чисто». Оба job-а наследуют один `on:` без
+      # путевых фильтров, поэтому сверка не может отстать от сторожа ПО ПОСТРОЕНИЮ.
+      - name: Residency confront — text-parsed allowlists vs actual constant values
+        working-directory: .
+        run: bash scripts/check-rf-residency.sh --confront
+
       - name: Build
         run: npm run build
 
@@ -265,6 +275,46 @@ jobs:
         run: bash scripts/check-rf-residency.sh --selftest
       - name: RF data-residency check (fail-on-non-RF-region)
         run: bash scripts/check-rf-residency.sh
+
+  # Rollback-switch selftest (added 2026-08-25, finding #152). WHY A JOB AT ALL: the outbound-perimeter
+  # rollback switch (scripts/rollback-outbound-perimeter.sh) carries its own `--самопроверка` suite —
+  # written on 2026-08-18 precisely because BOTH of its defects had been found by other people's hands
+  # and, once fixed, were again guarded by nothing. Until today NOTHING ran that suite: `grep rollback
+  # .github/workflows/ci.yml` returned 0 matches. A tool used once a year, guarded by "someone will
+  # remember", is in the state it was in before it was fixed by the time it is needed — and you find
+  # that out DURING the incident. Cost here is seconds; the suite works on a throwaway clone and never
+  # touches the checked-out tree (measured: `git status` over the pack paths is empty afterwards).
+  #
+  # fetch-depth: 0 IS LOAD-BEARING, NOT TIDINESS. The suite replays the rollback on a clone of the
+  # pack commit, so it needs history. actions/checkout defaults to depth 1, where the pack commit does
+  # not exist and the tool exits 2 saying so (that refusal is correct and now names `git fetch
+  # --unshallow` as the remedy — finding #151). Dropping this line does not weaken the job, it DELETES
+  # it: rc=2 with "истории просто не дали". Keep it.
+  #
+  # WHEN THIS JOB REDS AND IT IS NOT A BUG: axis (3) requires the switch's PATHS list to cover every
+  # pack-area file in the live tree (backend/src/lib/providers/*, backend/src/config/*, .env.example,
+  # scripts/check-rf-residency.sh). Add a new file there and this job reds by design — the remedy is to
+  # add the path to PATHS in the switch, not to weaken the job. A rollback list that misses a file
+  # restores part of the pack and prints "✓ откат ПОЛНЫЙ"; that has already happened twice.
+  rollback-selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # see the note above — the suite needs the pack commit in history
+      - name: Outbound-perimeter rollback switch — its own suite must still pass
+        run: bash scripts/rollback-outbound-perimeter.sh --самопроверка
+      - name: The suite must not have touched the working tree (it claims to work on a clone)
+        run: |
+          # ПОЛОЖИТЕЛЬНЫЙ КОНТРОЛЬ НА САМО УТВЕРЖДЕНИЕ. Свод объявляет, что живёт на одноразовом
+          # клоне; проверяем это ПОСЛЕ него, а не верим шапке. Пустой вывод = дерево цело.
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::the rollback selftest MODIFIED the checked-out tree — it claims to work on a throwaway clone:"
+            printf '%s\n' "$dirty"
+            exit 1
+          fi
+          echo "ok: working tree byte-identical after the selftest"
 
   # Dropped-NAME reuse gate (Pack 5). Planned to become blocking (its name is not in branch protection
   # yet — until then this comment does not claim it blocks). Pure static analysis of database_schema.sql

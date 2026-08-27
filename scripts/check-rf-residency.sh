@@ -59,13 +59,80 @@ strip_comments_and_quote_hosts() {
   sed -E 's@^[[:space:]]*//.*@@; s@//.*@@' | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true
 }
 
+# РАЗБОР КАЖДОЙ КОНСТАНТЫ — ИМЕНОВАННОЙ ФУНКЦИЕЙ (встречная сверка, решение держателя 24.08,
+# m-20260824-180434-480c). Этот сторож — ЕДИНСТВЕННЫЙ читатель перечней МИМО двери рождения: он
+# восстанавливает их из ТЕКСТА исходника. Сегодня он не дыряв только потому, что его шаблоны требуют
+# минимум один знак — СОВПАДЕНИЕ, А НЕ ЗАМОК. Поэтому появился режим `--confront`: сверка того, что
+# разобрано из текста, с ФАКТИЧЕСКИМ значением констант в рантайме (гоняется в job со сборкой, где
+# зависимости уже стоят). Функции ниже зовут И обычный гейт, И сверка — разбор ОДИН: сверка через
+# копию разбора проверяла бы копию, а копия зеленеет вместе с источником (закон общего эталона).
+parse_RF_ALLOWED_REGIONS() {
+  sed -n '/RF_ALLOWED_REGIONS = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
+    | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u || true
+}
+parse_RF_ALLOWED_HOST_SUFFIXES() {
+  sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
+    | grep -oE "'\.[^']+'" | tr -d "'" | sort -u || true
+}
+# Однострочное объявление — берём ИМЕННО его строку, не sed-диапазон (регрессия оси 4: диапазон
+# добегал до `]` следующего блока и allowlist хранилищ тихо рос с 1 хоста до 5).
+parse_RF_ALLOWED_STORAGE_HOSTS() {
+  grep -E 'export const RF_ALLOWED_STORAGE_HOSTS =' "$env_validation" \
+    | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true
+}
+parse_RF_ALLOWED_PROVIDER_HOSTS() {
+  sed -n '/RF_ALLOWED_PROVIDER_HOSTS =/,/\] as const/p' "$env_validation" | strip_comments_and_quote_hosts
+}
+parse_RF_DATABASE_URL_SCHEMES() {
+  grep -oE "RF_DATABASE_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
+    | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true
+}
+parse_RF_REDIS_URL_SCHEMES() {
+  grep -oE "RF_REDIS_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
+    | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true
+}
+CONFRONT_CONSTS='RF_ALLOWED_REGIONS RF_ALLOWED_HOST_SUFFIXES RF_ALLOWED_STORAGE_HOSTS RF_ALLOWED_PROVIDER_HOSTS RF_DATABASE_URL_SCHEMES RF_REDIS_URL_SCHEMES'
+
 case "${1:-}" in
-  ''|--selftest) : ;;
+  ''|--selftest|--confront) : ;;
   *)
-    echo "::error::неизвестный аргумент «$1». Допустимо: без аргументов (гейт) или --selftest (ось на сам прибор)." >&2
+    echo "::error::неизвестный аргумент «$1». Допустимо: без аргументов (гейт), --selftest (ось на сам прибор) или --confront (сверка текст↔рантайм)." >&2
     exit 2
     ;;
 esac
+
+# --confront — ВСТРЕЧНАЯ СВЕРКА: то, что разобрано из ТЕКСТА, против ФАКТИЧЕСКОГО значения констант.
+# Три состояния (ADR-0027): 0 = сошлось · 1 = РАЗОШЛОСЬ (текст и рантайм говорят разное — гейт
+# резидентности судит НЕ ту реальность, что работает) · 2 = НЕ ЗНАЮ (не смог посмотреть: нет node
+# или ts-node — это отказ смотреть, а не «чисто»). Гоняется там, где стоят зависимости (CI job
+# build-test после npm ci); job residency без установки гонять её НЕ может — и не должен молчать
+# об этом, поэтому режим отделён от обычного гейта.
+if [ "${1:-}" = "--confront" ]; then
+  command -v node >/dev/null 2>&1 || { echo "::error::--confront: node недоступен — сверка НЕ ПРОВЕДЕНА (rc=2, НЕ ЗНАЮ)"; exit 2; }
+  [ -d backend/node_modules/ts-node ] || { echo "::error::--confront: backend/node_modules/ts-node нет (npm ci не гонялся?) — сверка НЕ ПРОВЕДЕНА (rc=2, НЕ ЗНАЮ)"; exit 2; }
+  parsed=""
+  for c in $CONFRONT_CONSTS; do
+    vals="$("parse_$c")"
+    [ -n "$vals" ] || { echo "::error::--confront: could not parse $c from $env_validation (rc=2, НЕ ЗНАЮ)"; exit 2; }
+    while IFS= read -r v; do parsed="$parsed$c $v"$'\n'; done <<<"$vals"
+  done
+  actual="$(cd backend && CONFRONT_CONSTS="$CONFRONT_CONSTS" node -r ts-node/register/transpile-only -e '
+    const m = require("./src/config/env.validation");
+    const names = process.env.CONFRONT_CONSTS.split(" ");
+    for (const n of names) {
+      const v = m[n];
+      if (!Array.isArray(v) || v.length === 0) { console.error("missing/empty " + n); process.exit(2); }
+      for (const x of v) console.log(n + " " + String(x));
+    }' 2>&1)" || { echo "::error::--confront: рантайм не отдал константы (rc=2, НЕ ЗНАЮ):"; echo "$actual"; exit 2; }
+  if diff_out="$(diff <(printf '%s' "$parsed" | sort -u) <(printf '%s\n' "$actual" | sort -u))"; then
+    echo "✅ confront: текст и рантайм согласны по всем $(echo "$CONFRONT_CONSTS" | wc -w) константам ($(printf '%s' "$parsed" | wc -l) значений)"
+    exit 0
+  else
+    echo "::error::--confront: ТЕКСТ И РАНТАЙМ РАЗОШЛИСЬ — гейт резидентности судит не ту реальность, что работает. «<» = видит только текст-разбор, «>» = видит только рантайм:"
+    echo "$diff_out"
+    exit 1
+  fi
+fi
 
 if [ "${1:-}" = "--selftest" ]; then
   work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
@@ -98,6 +165,11 @@ if [ "${1:-}" = "--selftest" ]; then
   # оказалась ложно-зелёной, поймано тем же прогоном).
   mkdir -p "$work/backend/src/lib/providers"
   cp backend/src/lib/providers/http.util.ts "$work/backend/src/lib/providers/"
+  # ВТОРАЯ ДВЕРЬ ЕДЕТ В СТЕНД ВМЕСТЕ С ПЕРВОЙ (25.08.2026, находка №122). Реестр вторых дверей
+  # двусторонний: он краснеет, если объявленный файл в дереве не найден. Стенд без sentry.ts
+  # краснел бы у КАЖДОГО мутанта не по делу — и «красное» перестало бы что-либо доказывать.
+  mkdir -p "$work/backend/src/lib/observability"
+  cp backend/src/lib/observability/sentry.ts "$work/backend/src/lib/observability/"
   cp "$env_validation" "$work/$env_validation"
   decl="$work/backend/src/lib/providers/_selftest_decls.ts"
   gate_copy="$work/scripts/$(basename "${BASH_SOURCE[0]}")"
@@ -170,6 +242,25 @@ const IMDS6_URL = 'http://[fd00:ec2::254]/latest/meta-data/';" "" FAIL \
   # userinfo: и с починкой, и без неё гейт красен — доказывает ТОЛЬКО текст (см. довод у mutant()).
   mutant "userinfo в объявлении назван по ИСТИННОМУ хосту" "$LEGIT
 const EXFIL_ENDPOINT = 'https://sms.ru@evil.example.com/steal';" "" FAIL "evil.example.com"
+
+  # ═══ ТРИ МУТАНТА НА ОСЬ 6b (добавлены 25.08.2026, находка №122). До них ось 6b не стерегло
+  # НИЧТО: ни один мутант не заставлял её краснеть, и её слепоту к пакетам с областью имён нашли
+  # чужие руки. Каждый несёт ПЯТЫЙ ДОВОД — что обязан назвать вывод.
+  rogue="$work/backend/src/lib/providers/_selftest_rogue.ts"
+  declared=$((declared+3))
+  # (1) КРАСНЫЙ ПОЛЮС НА ГОЛОЕ ИМЯ — доказывает, что ось вообще жива (без него зелёное у (2) не
+  #     отличить от «шаблон не сработал вовсе»).
+  printf "%s\n" "import https from 'node:https';" "export const rawDoor = https;" > "$rogue"
+  mutant "второй клиент голым именем (node:https) виден оси 6b" "$LEGIT" "" FAIL "_selftest_rogue.ts"
+  # (2) ТА САМАЯ СЛЕПОТА: пакет С ОБЛАСТЬЮ ИМЁН. Прежний шаблон на этом файле молчал (замерено
+  #     на стенде из четырёх файлов: ловил 1 из 4).
+  printf "%s\n" "import { S3Client } from '@aws-sdk/client-s3';" "export const scopedDoor = S3Client;" > "$rogue"
+  mutant "второй клиент С ОБЛАСТЬЮ ИМЁН (@aws-sdk) виден оси 6b" "$LEGIT" "" FAIL "_selftest_rogue.ts"
+  rm -f "$rogue"
+  # (3) ВТОРАЯ СТОРОНА РЕЕСТРА: запись, чей файл исчез, ОБЯЗАНА краснеть. Иначе перечень
+  #     прощённых протухает молча и завтра прощает чужой файл на месте ушедшего.
+  mutant "протухшая запись реестра вторых дверей краснеет" "$LEGIT" \
+    's@lib/observability/sentry\.ts|@lib/observability/sentry_GONE.ts|@' FAIL "реестр вторых дверей ПРОТУХ"
   # МУТАНТЫ НА ПОЧИНКИ ОСИ 7 (круг 3 замерил, что обе проходили selftest ЗЕЛЁНЫМИ).
   # Стенд самопроверки несёт .env.example БЕЗ флага, поэтому обе пробы ставят флаг САМИ.
   printf '%s\n' "ALLOW_LOCAL_STAND_HOSTS=1" >> "$work/.env.example"
@@ -226,8 +317,7 @@ fi
 # читателя), и гейт снова выдал rc=2 «could not parse». Прибор опять сработал верно, а заплата
 # опять расширена третьей формой. Пока разбор идёт sed'ом по чужому языку, КАЖДОЕ лечение в
 # env.validation.ts обязано проверять ЭТОТ файл — иначе лечение чинит дом и ломает сторожа.
-allow="$(sed -n '/RF_ALLOWED_REGIONS = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
-         | grep -oE "'[a-z0-9-]+'" | tr -d "'" | sort -u || true)"
+allow="$(parse_RF_ALLOWED_REGIONS)"
 [ -n "$allow" ] || { echo "::error::could not parse RF_ALLOWED_REGIONS from $env_validation"; exit 2; }
 echo "RF allowlist (from $env_validation): $(echo "$allow" | tr '\n' ' ')"
 
@@ -309,8 +399,7 @@ done < <(grep -nHiE "$foreign" "${files[@]}" || true)
 #     ships stack traces — and the PII inside them — across the border. EMPTY value = sink disabled
 #     (lawful, and the MVP default). Allowlist comes from the SAME single source of truth as the
 #     regions: RF_ALLOWED_HOST_SUFFIXES in env.validation.ts.
-suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\|sanitizedHostList(\)\?\[/,/\]/p' "$env_validation" \
-            | grep -oE "'\.[^']+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
+suffixes="$(parse_RF_ALLOWED_HOST_SUFFIXES)"
 [ -n "$suffixes" ] || { echo "::error::could not parse RF_ALLOWED_HOST_SUFFIXES from $env_validation"; exit 2; }
 
 # Approved RF provider hosts that do NOT sit under an RF TLD (today: Yandex Object Storage). Used ONLY
@@ -320,8 +409,7 @@ suffixes="$(sed -n '/RF_ALLOWED_HOST_SUFFIXES = \(Object.freeze(\|sanitizedHostL
 # `]` СЛЕДУЮЩЕГО блока (RF_ALLOWED_PROVIDER_HOSTS) — allowlist хранилищ ТИХО расширялся с 1 хоста до 5,
 # и `MEDIA_CDN_HOST=api.unisender.com` начинал проходить (замерено A/B, регрессия оси 4, ADR-0017).
 # Константа объявлена на ОДНОЙ строке → берём именно её.
-storage_hosts="$(grep -E 'export const RF_ALLOWED_STORAGE_HOSTS =' "$env_validation" \
-                 | grep -oE "'[A-Za-z0-9.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
+storage_hosts="$(parse_RF_ALLOWED_STORAGE_HOSTS)"
 [ -n "$storage_hosts" ] || { echo "::error::could not parse RF_ALLOWED_STORAGE_HOSTS from $env_validation"; exit 2; }
 echo "RF host suffixes: $(echo "$suffixes" | tr '\n' ' ')| approved provider hosts: $(echo "$storage_hosts" | tr '\n' ' ')"
 
@@ -535,11 +623,9 @@ fi
 #     carries a region string, so axes (1) and (2) are blind to them except by accident — measured
 #     2026-08-09, `ep-x.aws.neon.tech` + `eu2-x.upstash.io` produced rc=0 with no output at all.
 #     Accepted schemes come from the SAME single source of truth as every other list.
-db_schemes="$(grep -oE "RF_DATABASE_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
-              | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see RF_ALLOWED_REGIONS above
+db_schemes="$(parse_RF_DATABASE_URL_SCHEMES)"
 [ -n "$db_schemes" ] || { echo "::error::could not parse RF_DATABASE_URL_SCHEMES from $env_validation"; exit 2; }
-redis_schemes="$(grep -oE "RF_REDIS_URL_SCHEMES = (Object\.freeze\()?\[[^]]*\]" "$env_validation" \
-                 | grep -oE "'[a-z0-9+.-]+'" | tr -d "'" | sort -u || true)"   # `|| true` — see above
+redis_schemes="$(parse_RF_REDIS_URL_SCHEMES)"
 [ -n "$redis_schemes" ] || { echo "::error::could not parse RF_REDIS_URL_SCHEMES from $env_validation"; exit 2; }
 echo "DSN schemes: db=$(echo "$db_schemes" | tr '\n' ' ')| redis=$(echo "$redis_schemes" | tr '\n' ' ')"
 
@@ -683,7 +769,7 @@ check_dsn_var REDIS_URL "$redis_schemes" \
 # попадала в ПЕРЕЧЕНЬ РАЗРЕШЁННЫХ, и гейт печатал её среди хостов, выходя rc=0. Это тот же класс,
 # что крит-находка №14 (sed-диапазон захватил чужой блок), воспроизведённый на константе, которую
 # добавил тот же пак: РАЗБОР ЧУЖОГО ЯЗЫКА РЕГУЛЯРКОЙ ЧИТАЕТ ПРОЗУ КАК ОБЪЯВЛЕНИЕ.
-provider_hosts="$(sed -n '/RF_ALLOWED_PROVIDER_HOSTS =/,/\] as const/p' "$env_validation" | strip_comments_and_quote_hosts)"
+provider_hosts="$(parse_RF_ALLOWED_PROVIDER_HOSTS)"
 [ -n "$provider_hosts" ] || { echo "::error::could not parse RF_ALLOWED_PROVIDER_HOSTS from $env_validation"; exit 2; }
 echo "RF outbound provider hosts: $(echo "$provider_hosts" | tr '\n' ' ')"
 
@@ -741,16 +827,61 @@ else
     #     `.fetch(` в backend/src нет ни одного (проверено). ОСТАТОК НАЗВАН: сырой `net`/`tls` не
     #     сканируем модульным импортом — `node:net` законно используется в client-ip.ts ради `isIP`
     #     (чистая проверка, не сокет); их сырой bypass — ниже вероятностью, назван долгом.
+    #     ПАКЕТЫ С ОБЛАСТЬЮ ИМЁН ДОБАВЛЕНЫ 25.08.2026 ПО НАХОДКЕ №122 КРУГА 5, и это была не
+    #     теоретическая дыра. ЗАМЕР (стенд из четырёх файлов, шаблон прогнан дословно): `node:https`
+    #     ПОЙМАН — красный полюс есть, ось жива, — а `@sentry/node`, `@aws-sdk/client-s3` и
+    #     `@opentelemetry/exporter-trace-otlp-http` не пойман НИ ОДИН: перечень состоял из ГОЛЫХ
+    #     имён модулей, а почти все сегодняшние SDK со своим транспортом поставляются под областью.
+    #     В ЖИВОМ дереве такой клиент уже был: lib/observability/sentry.ts импортирует @sentry/node,
+    #     чей транспорт зовёт https.request мимо fetchJson и мимо assertOutboundHostAllowed, — а ось
+    #     печатала «единственный исходящий клиент». Утверждение было ШИРЕ замера.
     locks=$((locks+1))
-    others="$(grep -rlE "from '(axios|undici|got|node-fetch|node:http|node:https|node:http2|http|https|http2|ws|nodemailer)'|require\('(axios|undici|got|node-fetch|node:http|node:https|node:http2|http|https|http2|ws|nodemailer)'\)" "$src_root" --include='*.ts' 2>/dev/null | grep -v '\.spec\.ts' || true)"
+    # ═══ РЕЕСТР ВТОРЫХ ДВЕРЕЙ — ДВУСТОРОННИЙ, А НЕ СПИСОК ПРОЩЁННЫХ.
+    # Прощать молча нельзя (тогда ось снова врёт), запрещать нельзя (телеметрия — законная
+    # способность, закон храповика). Поэтому вторая дверь ОБЪЯВЛЯЕТСЯ здесь поимённо, с модулем и
+    # с указанием, ЧЕМ её хост проверяется, — и вердикт её НАЗЫВАЕТ вслух.
+    # ВТОРАЯ СТОРОНА (иначе перечень протухнет молча — закон, вынесенный из реестра расхождений
+    # seed-parity): каждая запись ОБЯЗАНА быть найдена в дереве и обязана всё ещё нести свой модуль.
+    # Запись, прощающая несуществующий файл, завтра простит ЧУЖОЙ файл на его месте.
+    # Формат: путь|модуль|чем проверяется хост
+    SECOND_DOORS=(
+      "$src_root/lib/observability/sentry.ts|@sentry/node|хост ingest проверяет checkTelemetryDsn (env.validation.ts, ADR-0017 п.6); SENTRY_DSN пуст по умолчанию. СТРОГОСТЬ У ЭТОЙ ДВЕРИ СЛАБЕЕ, чем у двери провайдеров (она допускает любой РФ-суффикс) — назван долг, не покрытие"
+    )
+    reg_missing=""; reg_named=""
+    for entry in "${SECOND_DOORS[@]}"; do
+      dpath="${entry%%|*}"; drest="${entry#*|}"; dmod="${drest%%|*}"
+      if [ -f "$dpath" ] && grep -qF "$dmod" "$dpath" 2>/dev/null; then
+        reg_named="${reg_named}${dpath} ($dmod) "
+      else
+        reg_missing="$reg_missing $dpath ($dmod)"
+      fi
+    done
+    if [ -n "$reg_missing" ]; then
+      echo "::error::реестр вторых дверей ПРОТУХ — объявлено, но в дереве не найдено (или сменился модуль):$reg_missing. Запись, прощающая несуществующий файл, завтра простит чужой файл на его месте — снимите её или почините путь"; fail=1
+    fi
+    net_bare="axios|undici|got|node-fetch|node:http|node:https|node:http2|http|https|http2|ws|nodemailer|superagent|request|needle|phin|ky"
+    net_scoped="@(sentry|aws-sdk|smithy|azure|google-cloud|opentelemetry|grpc|elastic|slack|supabase|octokit)/[A-Za-z0-9._-]+"
+    net_re="from ['\"](${net_bare}|${net_scoped})['\"]|require\(['\"](${net_bare}|${net_scoped})['\"]\)"
+    others_all="$(grep -rlE "$net_re" "$src_root" --include='*.ts' 2>/dev/null | grep -v '\.spec\.ts' || true)"
+    others=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case " $(for e in "${SECOND_DOORS[@]}"; do printf '%s ' "${e%%|*}"; done)" in
+        *" $f "*) continue ;;
+      esac
+      others="${others}${f}"$'\n'
+    done <<< "$others_all"
+    others="$(printf '%s' "$others" | sed '/^$/d')"
     if [ -n "$others" ]; then
-      echo "::error::сетевой клиент ВНЕ единственного шва: $(echo "$others" | tr '\n' ' ')"; fail=1
+      echo "::error::сетевой клиент ВНЕ единственного шва и ВНЕ реестра вторых дверей: $(echo "$others" | tr '\n' ' ')"; fail=1
     fi
     direct="$(grep -rlE "\bfetch[[:space:]]*\(|(globalThis|global|window)\.fetch[[:space:]]*\(" "$src_root" --include='*.ts' 2>/dev/null | grep -v "lib/providers/http.util.ts" | grep -v '\.spec\.ts' || true)"
     if [ -n "$direct" ]; then
       echo "::error::прямой fetch() вне lib/providers/http.util.ts — периметр перестаёт быть виден в одном месте: $(echo "$direct" | tr '\n' ' ')"; fail=1
     else
-      echo "  ok   одна дверь: единственный исходящий клиент — lib/providers/http.util.ts"
+      # ВЕРДИКТ НЕ ШИРЕ ЗАМЕРА (наш собственный класс): «одна дверь» верно про ЗАПРОСЫ ПРОВАЙДЕРОВ,
+      # а вторые двери называются поимённо, а не замалчиваются словом «единственный».
+      echo "  ok   одна дверь ДЛЯ ЗАПРОСОВ ПРОВАЙДЕРОВ: lib/providers/http.util.ts${reg_named:+; вторые двери ПО РЕЕСТРУ (не мимо гейта, а названы): $reg_named}"
     fi
 
     # 6c. ЗАМОК В ДВЕРИ. Наличие строки вызова ловится лишь в одной форме (вызов есть, а

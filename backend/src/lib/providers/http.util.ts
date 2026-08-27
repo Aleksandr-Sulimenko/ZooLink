@@ -82,7 +82,7 @@ function assertOutboundHostAllowed(provider: string, url: string): void {
       provider,
       'config',
       `хост «${host}» НЕ в перечне исходящего периметра (ADR-0017 / ФЗ-152 ст.18 ч.5) — ` +
-        `запрос не отправлен. Разрешены: ${(RF_ALLOWED_PROVIDER_HOSTS as readonly string[]).join(', ')} ` +
+        `запрос не отправлен. Разрешены: ${RF_ALLOWED_PROVIDER_HOSTS.join(', ')} ` +
         `(плюс своё: loopback / RFC1918). Односегментные имена стендов — только при ` +
         `ALLOW_LOCAL_STAND_HOSTS=1. Новый провайдер добавляется код-ревью, а не правкой .env.`,
     );
