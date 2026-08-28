@@ -83,7 +83,7 @@ if [ "${1:-}" = "--самопроверка" ]; then
   git clone --quiet --shared --no-checkout "$root" "$work/clone" 2>/dev/null || die "не смогла сделать одноразовый клон"
   git -C "$work/clone" checkout --quiet "$PACK" 2>/dev/null || die "в клоне нет коммита пака"
   cp "$me" "$work/clone/scripts/$(basename "$0")"
-  ran=0; fails=0; declared=6  # +1: ось «рубильник называет ЦЕНУ отката» (находка №33, 20.08.2026)
+  ran=0; fails=0; declared=7  # +1: ось «отказ на МЕЛКОМ дереве называет лечение» (страж №151, 28.08.2026)
 
   снимок(){ (cd "$1" && git ls-files -s | sha256sum | cut -c1-16); }
 
@@ -174,6 +174,30 @@ if [ "${1:-}" = "--самопроверка" ]; then
   else
     echo "::error::рубильник молчит о том, что снимает — «12 из 12 совпали» читается как «всё в порядке»"; fails=$((fails+1))
   fi
+  # (7) ОТКАЗ НА МЕЛКОМ ДЕРЕВЕ РАЗЛИЧАЕТ ДВА МИРА И НАЗЫВАЕТ ПУТЬ НАРУЖУ (страж находки №151).
+  #     Лечение приехало 25.08 без оси, а «починена» обязана назвать стража: без него следующая
+  #     правка текста отказа вернула бы ложный диагноз «вы в том репозитории?» молча.
+  #     ЕДИНИЦА ЗАМЕРА — МЕЛКИЙ КЛОН, а не флаг: спрашивать `--is-shallow-repository` у полного
+  #     дерева значило бы проверять СВОЮ ВЫДУМКУ о мелком дереве. Клон делаем глубиной 1 от
+  #     ЖИВОГО HEAD, где коммита пака заведомо нет, — то самое состояние, в котором оператор
+  #     дёргает рубильник в аварии (дефолт actions/checkout и любого выката).
+  ran=$((ran+1))
+  shallow_dir="$work/shallow"
+  if git clone --quiet --depth 1 "file://$root" "$shallow_dir" 2>/dev/null \
+     && [ "$(git -C "$shallow_dir" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    cp "$me" "$shallow_dir/scripts/" 2>/dev/null || true
+    refusal="$( (cd "$shallow_dir" && bash "scripts/$(basename "$0")" --проверить) 2>&1 )"; rc_shallow=$?
+    if [ "$rc_shallow" != 0 ] \
+       && printf '%s' "$refusal" | grep -q -- "--unshallow" \
+       && printf '%s' "$refusal" | grep -q "МЕЛКОЕ"; then
+      echo "  ok   мелкое дерево → отказ НАЗЫВАЕТ причину (история обрезана) и лечение (--unshallow), а не «другой репозиторий»"
+    else
+      echo "::error::на МЕЛКОМ дереве отказ не назвал ни обрезанную историю, ни git fetch --unshallow (rc=$rc_shallow) — оператор в аварии пойдёт проверять то, что и так верно. Ответ был: $(printf '%s' "$refusal" | head -2)"; fails=$((fails+1))
+    fi
+  else
+    echo "::error::не удалось собрать МЕЛКИЙ клон для оси 7 — ось НЕ ПРОГНАНА (это «не знаю», а не «пройдено»)"; fails=$((fails+1))
+  fi
+
   echo "  самопроверка: прогнано $ran из объявленных $declared"
   [ "$ran" = "$declared" ] || { echo "::error::прогнано $ran из $declared — это НЕ ЗНАЮ, а не «пройдено»"; exit 2; }
   [ "$fails" = 0 ] && { echo "✅ самопроверка рубильника пройдена"; exit 0; }
