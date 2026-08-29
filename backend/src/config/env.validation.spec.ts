@@ -1633,3 +1633,58 @@ describe('дверь перечней хостов: пустой элемент 
     expect(isResidentHost('s3.us-west-004.backblazeb2.com')).toBe(false);
   });
 });
+
+/**
+ * ШАБЛОН ОКРУЖЕНИЯ ОБЯЗАН СТАРТОВАТЬ ДОСЛОВНО (стражи находок №148, №157 и №172).
+ *
+ * ПОЧЕМУ ОСЬ, А НЕ ВЫЧИТКА ГЛАЗАМИ. `.env.example` объявлен в шапке env.validation.ts зеркалом
+ * контракта («Canonical environment contract. Mirrors ../.env.example»), и человек, впервые
+ * видящий систему, копирует его дословно. Замер 29.08 показал ДВЕ разные ловушки в одном файле,
+ * и обе прошли бы вычитку: METRICS_TOKEN стоял пустым при NODE_ENV=production (обязателен, ≥16
+ * знаков) — то есть шаблон НЕ СТАРТОВАЛ; а моя же первая правка добавила пустой
+ * ALLOW_LOCAL_STAND_HOSTS и уронила старт ВТОРОЙ раз, потому что схема принимает только словарь,
+ * и ПУСТОЕ значение отвергает, хотя ОТСУТСТВИЕ строки законно, а дверь пустое читает как
+ * «выключено». Лечение, взводящее мину, — наш повторяющийся класс; ось ставится ПРОТИВ НЕГО.
+ *
+ * ЕДИНИЦА ЗАМЕРА — САМ ФАЙЛ, А НЕ ЕГО КОПИЯ В ТЕСТЕ: копия эталона зеленеет вместе с источником
+ * (закон общего эталона), поэтому читаем настоящий `.env.example` с диска.
+ */
+describe('.env.example — контракт окружения стартует ДОСЛОВНО (№148/№157/№172)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('node:path') as typeof import('node:path');
+  const файл = path.join(__dirname, '..', '..', '..', '.env.example');
+
+  /** Разбор ровно как у оператора: KEY=VALUE, хвостовой комментарий после пробела отрезается. */
+  function изШаблона(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const строка of fs.readFileSync(файл, 'utf8').split('\n')) {
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(строка);
+      if (!m) continue;
+      let v = m[2];
+      const хвост = v.indexOf(' #');
+      if (хвост >= 0) v = v.slice(0, хвост);
+      env[m[1]] = v.trim();
+    }
+    return env;
+  }
+
+  it('файл найден и не пуст — ось не смеет пройти, не посмотрев (три состояния, не два)', () => {
+    expect(fs.existsSync(файл)).toBe(true);
+    expect(Object.keys(изШаблона()).length).toBeGreaterThan(20);
+  });
+
+  it('СКОПИРОВАННЫЙ ДОСЛОВНО ШАБЛОН ПРИНИМАЕТСЯ validateEnv — иначе первый же старт это отказ', () => {
+    expect(() => validateEnv(изШаблона())).not.toThrow();
+  });
+
+  it('переменная, которую называет отказ двери, ПРИСУТСТВУЕТ в контракте (№157)', () => {
+    expect(изШаблона()).toHaveProperty('ALLOW_LOCAL_STAND_HOSTS');
+  });
+
+  it('и её значение в шаблоне — из СЛОВАРЯ, а не пустое (№172: пустое схема отвергает)', () => {
+    const v = изШаблона().ALLOW_LOCAL_STAND_HOSTS;
+    expect([...STAND_HOSTS_TOGGLE_VALUES] as string[]).toContain(v);
+  });
+});
