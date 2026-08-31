@@ -49,8 +49,10 @@ gated in CI (`provision-heals-stale-db`). If the `./migrations:/migrations:ro` b
    ```
 
    > **`.env.example` is a FORM, not a provisioning path.** It is the commented *inventory* of every key —
-   > what exists, what it means, what shape it takes. Copying it verbatim produces `__change_me__`
-   > placeholders, so a `NODE_ENV=production` boot **fails fast** in
+   > what exists, what it means, what shape it takes. It therefore carries **`NODE_ENV=development`**:
+   > an inventory is never a production configuration, and **production-ness is MINTED by
+   > `deploy/gen-env.sh`, never inherited from the form**. Copying the form verbatim produces
+   > `__change_me__` placeholders, so a production boot **fails fast** in
    > `backend/src/config/env.validation.ts`. Do **not** `cp .env.example .env`. Both halves of this are
    > under test: the CI `edge-smoke` job provisions its env with `deploy/gen-env.sh` and keeps a
    > **negative control** asserting the `cp` path is rejected at boot; the unit test
@@ -64,6 +66,21 @@ gated in CI (`provision-heals-stale-db`). If the `./migrations:/migrations:ro` b
    > **Scope stated aloud:** this covers `METRICS_TOKEN` only (holder's decision, 2026-08-31).
    > Extending the same rule to every secret is a separate decision, not something this line
    > already delivers.
+   >
+   > **`NODE_ENV` comes from the ARGUMENT, never from the file (2026-08-31, holder's decision).**
+   > **What:** `deploy/gen-env.sh` writes `NODE_ENV` from `--node-env` (default `production`) in
+   > **both** modes — creating a file and `--fill-missing`. It is the one key exempt from
+   > "an existing value is never overwritten"; when the value actually changes, the run says so out
+   > loud. Every secret and `PUBLIC_DOMAIN` keep that promise unchanged.
+   > **Why:** the form now says `development`, so without this the canonical repair path
+   > (`cp` + `--fill-missing`) would hand a **production server a development-mode config** —
+   > silently disabling every production-only check at once (required `METRICS_TOKEN`, the agent
+   > signing secret, the Apple set, the placeholder refusal above). Measured, not feared: before
+   > this change that path produced `NODE_ENV=development` verbatim.
+   > **Why better:** a mode flag is not a secret. Losing an operator's minted secret would be
+   > irreversible; re-stating the mode they asked for on the command line is not, it is announced,
+   > and `--node-env development` states the other intent explicitly. The dangerous direction —
+   > production silently weakened — is the one that is now impossible.
    > **Why:** on 2026-08-29 the template was made to start verbatim (an operator-facing requirement:
    > a contract that does not boot teaches nothing), which filled `METRICS_TOKEN` with the 30-character
    > placeholder `__change_me_32_hex_or_longer__`. Shape alone was then satisfied, the production boot

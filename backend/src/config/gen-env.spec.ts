@@ -259,7 +259,10 @@ describe('deploy/gen-env.sh vs a raw `cp .env.example .env` (the provisioning ho
     // но по новому основанию, и это записано, а не подогнано молча.
     const отказ = (() => {
       try {
-        validateEnv(parseEnvFile(envPath));
+        // ПРОД-ПРИРОДА СОБИРАЕТСЯ ВНЕШНЕ (решение держателя 31.08.2026): шаблон — ФОРМА и несёт
+        // `development`, а вопрос оси — «выдержит ли сырая копия БОЕВОЙ старт». Наследовать
+        // прод-природу от описи и значило бы держать оба смысла на одном входе — тот самый узел.
+        validateEnv({ ...parseEnvFile(envPath), NODE_ENV: 'production' });
         return null;
       } catch (e: unknown) {
         return e instanceof Error ? e.message : String(e);
@@ -286,7 +289,11 @@ describe('deploy/gen-env.sh vs a raw `cp .env.example .env` (the provisioning ho
     // прямое объявление «здесь ещё не подставлено». Держать её как «существующее значение» значило
     // бы, что канонический путь пополнения обходит РОВНО те ключи, ради которых его и зовут.
     const заглушка = (v: string) => v.includes('__change_me') || v.includes('__CHANGE_ME');
+    // NODE_ENV — ЕДИНСТВЕННОЕ ОБЪЯВЛЕННОЕ ИСКЛЮЧЕНИЕ, и оно названо здесь, а не обойдено молча:
+    // режим ЧЕКАНИТСЯ из аргумента (решение держателя 31.08.2026), потому что форма несёт
+    // `development`, а боевому серверу нужен `production`. Он проверяется отдельными полюсами ниже.
     for (const [key, value] of Object.entries(before)) {
+      if (key === 'NODE_ENV') continue;
       if (value !== '' && !заглушка(value)) expect(after[key]).toBe(value);
     }
     // 🔴 НЕСУЩЕЕ: ни одной заглушки не осталось — ни в обязательных ключах, ни в кредах провайдеров
@@ -297,7 +304,24 @@ describe('deploy/gen-env.sh vs a raw `cp .env.example .env` (the provisioning ho
       .map(([k]) => k);
     expect(выжившие).toEqual([]);
     expect(after.METRICS_TOKEN.length).toBeGreaterThanOrEqual(16);
+
+    // 🔴 ВЫХОД ГЕНЕРАТОРА НЕСЁТ ПРОД-ПРИРОДУ — ЧЕКАНИТСЯ, А НЕ НАСЛЕДУЕТСЯ (решение держателя).
+    // МУТАНТ (красное-до): убрать чеканку NODE_ENV в resolve_values — ось краснеет, и вместе с
+    // ней возвращается мина: канонический путь починки выдаёт БОЕВОМУ серверу режим разработки,
+    // разом и молча снимая все прод-проверки. Форма-то теперь честно говорит `development`.
+    expect(before.NODE_ENV).toBe('development'); // вход был формой
+    expect(after.NODE_ENV).toBe('production'); // выход стал боевой конфигурацией
     expect(() => validateEnv(after)).not.toThrow();
+
+    // НЕ ОТНЯЛИ СПОСОБНОСТЬ: явное намерение оператора уважается — `--node-env development`
+    // выражает его прямо, и чеканка ему не перечит. Без этого полюса ось выше зеленела бы и на
+    // коде, который просто ЗАБИВАЕТ production всегда и не слышит человека.
+    const devPath = path.join(freshDir('example-fill-dev'), '.env');
+    fs.copyFileSync(ENV_EXAMPLE, devPath);
+    expect(
+      runGenEnv(['--env-file', devPath, '--fill-missing', '--node-env', 'development']).status,
+    ).toBe(0);
+    expect(parseEnvFile(devPath).NODE_ENV).toBe('development');
 
     // And a second --fill-missing is a no-op.
     const bytes = fs.readFileSync(envPath);

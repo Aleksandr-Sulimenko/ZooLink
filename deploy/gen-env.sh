@@ -290,6 +290,7 @@ declare -A HELD=()  # keys whose value came from the EXISTING file (never re-min
 # СНЯТА даже там, где канонического значения нет вовсе (креды провайдеров), иначе тулза считает
 # ключ незаданным, а в файле остаётся мусор — и живой адаптер поедет с ним в сеть вместо stub-режима.
 declare -A PLACEHOLDER=()
+NODE_ENV_WAS=""   # прежнее значение NODE_ENV, если чеканка его СМЕНИЛА (говорим об этом вслух)
 
 mint() { openssl rand -hex "$1"; }
 
@@ -371,7 +372,21 @@ resolve_values() {
     fi
   done
   # Argument-driven, non-secret.
-  [ -n "${HELD[NODE_ENV]+set}" ] || VAL[NODE_ENV]="$NODE_ENV_VALUE"
+  # ═══ NODE_ENV ЧЕКАНИТСЯ ИЗ АРГУМЕНТА, А НЕ НАСЛЕДУЕТСЯ ИЗ ФАЙЛА (решение держателя 31.08.2026) ═══
+  # ЕДИНСТВЕННОЕ исключение из правила «существующее значение не перезаписывается», и оно объявлено
+  # в доке (docs/06-operations/deployment-mvp.md + зеркало). ПРИЧИНА ЗАМЕРЕНА, А НЕ ПРЕДПОЛОЖЕНА:
+  # `.env.example` стал ФОРМОЙ и несёт `development`; без этой чеканки канонический путь починки
+  # (`cp` + `--fill-missing`) выдавал боевому серверу конфигурацию в режиме разработки — то есть
+  # РАЗОМ И МОЛЧА снимал все прод-проверки (обязательный METRICS_TOKEN, секрет подписи агента,
+  # набор Apple, отказ по заглушке). Проверено до правки: тот путь давал `NODE_ENV=development`.
+  # ПОЧЕМУ ЭТО НЕ НАРУШАЕТ ОБЕЩАНИЕ: флаг режима — не секрет. Потеря отчеканенного секрета
+  # необратима, а режим оператор называет в командной строке сам, смена ОБЪЯВЛЯЕТСЯ вслух (ниже),
+  # и `--node-env development` выражает другое намерение явно. Секреты и PUBLIC_DOMAIN держат
+  # прежнее правило без изменений — исключение РОВНО одно и названо.
+  if [ -n "${HELD[NODE_ENV]+set}" ] && [ "${VAL[NODE_ENV]}" != "$NODE_ENV_VALUE" ]; then
+    NODE_ENV_WAS="${VAL[NODE_ENV]}"
+  fi
+  VAL[NODE_ENV]="$NODE_ENV_VALUE"
   [ -n "${HELD[PUBLIC_DOMAIN]+set}" ] || VAL[PUBLIC_DOMAIN]="$DOMAIN"
   # Derived AFTER the credentials above, so a held POSTGRES_PASSWORD is reused rather than a fresh
   # mint leaking into a connection string that no longer matches the database.
@@ -454,7 +469,7 @@ fill_into() {
       line_comment="$(printf '%s' "${line#*=}" | sed -n 's/.*\([[:space:]]#.*\)$/\1/p')"
     fi
     if [ -n "$key" ] && [ -n "${fill_set[$key]+set}" ] &&
-       { [ -z "$line_value" ] || is_placeholder "$line_value"; }; then
+       { [ -z "$line_value" ] || is_placeholder "$line_value" || [ "$key" = NODE_ENV ]; }; then
       printf '%s=%s%s\n' "$key" "${VAL[$key]}" "$line_comment"
       seen["$key"]=1
     else
@@ -537,6 +552,9 @@ for key in ${candidates[@]+"${candidates[@]}"}; do
   # уезжал бы к вендору строкой `__change_me__` — замерено на копии шаблона.
   if [ -n "${VAL[$key]}" ] || [ -n "${PLACEHOLDER[$key]+set}" ]; then to_fill+=("$key"); fi
 done
+# NODE_ENV попадает в переписываемые ВСЕГДА: он единственный ключ, чьё значение чеканится поверх
+# существующего, а `candidates` собирается по «не held» и его бы не содержал.
+case " ${to_fill[*]-} " in *" NODE_ENV "*) : ;; *) to_fill+=("NODE_ENV") ;; esac
 
 if [ "${#to_fill[@]}" -eq 0 ]; then
   note "$ENV_FILE already carries every key that has a value — nothing to fill, file untouched."
@@ -546,4 +564,6 @@ fi
 fill_into "$ENV_FILE" "${to_fill[@]}"
 note "filled ${#to_fill[@]} missing key(s) in $ENV_FILE (names only): ${to_fill[*]}"
 note "existing real values were preserved verbatim (no secret re-minted); template placeholders were replaced."
+[ -z "$NODE_ENV_WAS" ] ||
+  note "NODE_ENV: было «$NODE_ENV_WAS», отчеканено «$NODE_ENV_VALUE» — режим берётся из аргумента, а не из файла (--node-env задаёт другое намерение явно)."
 exit 0

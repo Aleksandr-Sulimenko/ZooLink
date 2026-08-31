@@ -562,27 +562,35 @@ jobs:
       # Isolation: `-p zoolink-negctl` (separate compose project + network) and `rm -f .env` before the
       # real run generates its own. Nothing here is a real secret — `.env.example` is committed
       # placeholder material — and the log is grep-filtered to validation lines, never dumped whole.
+      # ПРОД-ПРИРОДА СОБИРАЕТСЯ ВНЕШНЕ, А НЕ НАСЛЕДУЕТСЯ ОТ ОПИСИ (решение держателя 31.08.2026).
+      # `.env.example` — ФОРМА и с 31.08 несёт `NODE_ENV=development`: опись никогда не является
+      # боевой конфигурацией. Прежде этот шаг брал прод-природу ИЗ САМОГО ШАБЛОНА — то есть тот же
+      # вход обязан был одновременно «стартовать как контракт» и «быть отвергнутым как прод»,
+      # и это ровно тот узел, который распутан 31.08. Поэтому режим задаётся ЗДЕСЬ, флагом.
+      # ПРИЧИНА ОТКАЗА ТОЖЕ СМЕНИЛАСЬ: сырую копию теперь отвергает ИМЯ заглушки, а не пустое
+      # значение (находка №174) — заполненная заглушка форму проходит, а замок при ней СЛАБЕЕ,
+      # чем при пустом значении. Шаг сторожит ТУ ЖЕ способность по НОВОМУ основанию.
       - name: NEGATIVE CONTROL — `cp .env.example .env` must FAIL the prod boot on METRICS_TOKEN
         run: |
           cp .env.example .env
           docker compose -p zoolink-negctl build api
           set +e
-          docker compose -p zoolink-negctl run --rm --no-deps api > negctl.log 2>&1
+          docker compose -p zoolink-negctl run --rm --no-deps -e NODE_ENV=production api > negctl.log 2>&1
           rc=$?
           set -e
           rm -f .env
           echo "production boot on a raw .env.example copy exited: $rc"
           if [ "$rc" -eq 0 ]; then
-            echo "::error::The provisioning hole is NOT reproducible: a raw 'cp .env.example .env' booted successfully in production. Either .env.example now carries a METRICS_TOKEN (it must stay an empty FORM) or the env.validation.ts prod gate was removed."
+            echo "::error::The provisioning hole is NOT reproducible: a raw 'cp .env.example .env' booted successfully in production. Either .env.example no longer carries a placeholder METRICS_TOKEN (it must stay a FORM), or the env.validation.ts prod gate was removed."
             grep -E 'Invalid environment configuration|^  - [A-Z_]+:|Error' negctl.log | head -20 || true
             exit 1
           fi
-          if ! grep -q 'METRICS_TOKEN: required in production' negctl.log; then
-            echo "::error::The prod boot failed, but NOT on the expected METRICS_TOKEN env-validation error — this step only certifies that ONE failure mode, so any other cause is a red."
+          if ! grep -q 'METRICS_TOKEN' negctl.log || ! grep -q 'ЗАГЛУШКА ШАБЛОНА' negctl.log; then
+            echo "::error::The prod boot failed, but NOT on the expected METRICS_TOKEN placeholder refusal — this step only certifies that ONE failure mode, so any other cause is a red."
             grep -E 'Invalid environment configuration|^  - [A-Z_]+:|Error' negctl.log | head -20 || true
             exit 1
           fi
-          echo "OK: the raw .env.example path is rejected at boot on METRICS_TOKEN, as documented."
+          echo "OK: the raw .env.example path is rejected at boot on the METRICS_TOKEN placeholder, as documented."
       - name: NEGATIVE CONTROL — tear down its isolated project
         if: always()
         run: docker compose -p zoolink-negctl down -v --remove-orphans || true
