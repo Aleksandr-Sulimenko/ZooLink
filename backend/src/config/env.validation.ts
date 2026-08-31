@@ -45,7 +45,17 @@ export function isRfRegion(value: string): boolean {
  * Ось на саму дверь: env.validation.spec, «пустой элемент не делает резидентность всеобщей».
  */
 export function sanitizedHostList(items: readonly string[]): readonly string[] {
-  return Object.freeze(items.map((s) => s.trim()).filter((s) => s.length > 0));
+  // РЕГИСТР НОРМАЛИЗУЕТСЯ ПРИ РОЖДЕНИИ ПЕРЕЧНЯ (находка №140). Прежде `isResidentHost` звал
+  // `h.toLowerCase()` для КАЖДОГО элемента внутри `.some(...)` при КАЖДОМ вызове — над
+  // ЗАМОРОЖЕННЫМИ константами, то есть считал одно и то же заново. Замер находки: 86 нс на вызов,
+  // ~12% цены isAllowedProviderHost, и цена растёт ЛИНЕЙНО с длиной перечня (при 40 хостах — уже
+  // ~860 нс только на нормализацию констант).
+  // ЭТО ТА ЖЕ ФОРМА, ЧТО ЛЕЧИЛ №119, И ТЕПЕРЬ ОНА ВЫЛЕЧЕНА В ТУ ЖЕ СТОРОНУ: пустой элемент там
+  // убрали В РОЖДЕНИИ, а не у читателей; регистр здесь был вылечен НАОБОРОТ — у читателя.
+  // Дверь рождения одна, читателей много: чинить надо дверь.
+  return Object.freeze(
+    items.map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0),
+  );
 }
 
 /**
@@ -385,7 +395,9 @@ export function isResidentHost(
   // `.` is prepended so `storage.yandexcloud.net.evil.com` cannot pass as a subdomain.
   if (
     allowedExactHosts.some(
-      (h) => host === h.toLowerCase() || host.endsWith(`.${h.toLowerCase()}`),
+      // Перечень приходит УЖЕ нормализованным (sanitizedHostList, находка №140) — второй
+      // toLowerCase здесь был работой над константой на каждом проходе.
+      (h) => host === h || host.endsWith(`.${h}`),
     )
   ) {
     return true;

@@ -103,7 +103,7 @@ describe('предупреждения проводки — текст и усл
     expect(t).not.toMatch(/если .{0,20}NODE_EXTRA_CA_CERTS задан/i);
   });
 
-  it('модуль ЗОВЁТ эти функции, а не хранит их мёртвыми: при флаге стенда предупреждение печатается', async () => {
+  it('🔴 №146: модуль МОЛЧИТ на импорте и ГОВОРИТ в onModuleInit — там, где логгер уже pino', async () => {
     const prev = process.env.ALLOW_LOCAL_STAND_HOSTS;
     const prevCa = process.env.NODE_EXTRA_CA_CERTS;
     process.env.ALLOW_LOCAL_STAND_HOSTS = 'true';
@@ -124,6 +124,14 @@ describe('предупреждения проводки — текст и усл
           .mockImplementation((msg: unknown) => void сказано.push(String(msg)));
         const m = await import('./providers.module');
         expect(m.ProvidersModule).toBeDefined();
+        // 🔴 НА ИМПОРТЕ — МОЛЧИМ (находка №146). Прежде цикл стоял на верхнем уровне модуля и
+        // печатал ЗДЕСЬ — то есть до `NestFactory.create(..., {bufferLogs:true})`, мимо pino:
+        // в журнал уходила ANSI-строка Nest ConsoleLogger вместо JSON, и сборщик логов боевого
+        // стенда её терял. МУТАНТ (красное-до): вернуть цикл на верхний уровень — ось краснеет.
+        expect(сказано.join('\n')).not.toContain('ПЕРИМЕТР ОСЛАБЛЕН');
+        // …А В ХУКЕ ЖИЗНЕННОГО ЦИКЛА — ГОВОРИМ. Он идёт ВНУТРИ create(), в окне bufferLogs,
+        // значит накопленное отдаётся уже установленному pino.
+        new m.ProvidersModule().onModuleInit();
       });
       expect(сказано.join('\n')).toContain('ПЕРИМЕТР ОСЛАБЛЕН');
       expect(сказано.join('\n')).toContain('ДОВЕРИЕ ПРОЦЕССА РАСШИРЕНО');
@@ -286,5 +294,56 @@ describe('№123 на ЖИВОЙ фабрике: канал спит при оп
     const всё = await поднять({ MESSENGER_PROVIDER: 'max', MAX_BOT_TOKEN: '' });
     expect(всё).toContain('MAX_BOT_TOKEN пуст');
     expect(всё).not.toContain('ожидается');
+  });
+});
+
+/**
+ * ═══ СОВЕТ «СМЕНИТЕ ХОСТ» ИСПОЛНИМ ЦЕЛИКОМ (страж находки №142) ═══
+ *
+ * Замер находки: оба рабочих хоста флота дверь ОТВЕРГАЕТ (botapi.max.ru и platform-api.max.ru →
+ * isAllowedProviderHost = false), а оба текста пака советовали смену хоста как ОДНО доступное
+ * действие. Оператор, поймавший в бою сертификатный отказ, следовал совету и получал ВТОРОЙ отказ
+ * другого рода — без единой подсказки, что делать дальше. Цена — потерянное время ровно в аварии.
+ *
+ * Ось меряет ОБА текста разом: и тот, что печатается при включении канала, и тот, что человек
+ * видит в момент сертификатного отказа. Лечение одного из двух оставило бы второй тупик живым.
+ */
+describe('совет «смените хост» называет ОБА действия, а не одно (№142)', () => {
+  it('🔴 предупреждение при включении канала называет перечень и код-ревью', () => {
+    // МУТАНТ (красное-до): убрать врезку про перечень — ось краснеет.
+    const t = maxTrustRootWarning();
+    expect(t).toContain('RF_ALLOWED_PROVIDER_HOSTS');
+    expect(t).toContain('код-ревью');
+    expect(t).toContain('НЕ ПУСКАЕТ'); // замер назван, а не обещание
+  });
+
+  it('🔴 сертификатный отказ адаптера — тоже (человек видит его ИМЕННО в момент смены хоста)', async () => {
+    const { MaxBotAdapter } = await import('./messenger/max-bot.adapter');
+    const real = globalThis.fetch;
+    globalThis.fetch = () =>
+      Promise.reject(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('boom'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }),
+        }),
+      );
+    try {
+      const err = (await new MaxBotAdapter('токен-боевой-формы-91824577')
+        .sendMessage({ chatId: '1', text: 'x' })
+        .catch((e: unknown) => e)) as Error;
+      expect(err.message).toContain('RF_ALLOWED_PROVIDER_HOSTS');
+      expect(err.message).toContain('ВТОРЫМ отказом');
+      expect(err.message).toContain('НЕ ПУСКАЕТ');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it('и замер, на который оба текста ссылаются, ВЕРЕН: дверь эти хосты действительно не пускает', async () => {
+    // Обратный полюс: без него оба текста могли бы утверждать «не пускает» про хосты, которые
+    // дверь пускает, — и совет снова стал бы ложным, только в другую сторону.
+    const { isAllowedProviderHost } = await import('../../config/env.validation');
+    expect(isAllowedProviderHost('botapi.max.ru')).toBe(false);
+    expect(isAllowedProviderHost('platform-api.max.ru')).toBe(false);
+    expect(isAllowedProviderHost(MAX_API_HOST)).toBe(true);
   });
 });

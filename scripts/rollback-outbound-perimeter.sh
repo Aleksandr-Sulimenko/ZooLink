@@ -57,6 +57,16 @@ PATHS=(
   backend/src/lib/providers/messenger/max-bot.adapter.spec.ts
   backend/src/lib/providers/messenger/stub-messenger.adapter.ts
   scripts/check-rf-residency.sh
+  # ── Дописано 31.08.2026 лечением №145 (род отказа доживает до приборов дежурного) ──────────────
+  # ТРИ ФАЙЛА ИДУТ ВМЕСТЕ ИЛИ НЕ ИДУТ ВОВСЕ. Счётчик — новый файл; фильтр берёт его типом; main.ts
+  # строит его РАНТАЙМОМ. Откат, унёсший счётчик и оставивший main.ts, дал бы НЕСОБИРАЕМОЕ дерево —
+  # вторая авария поверх первой, ровно то, ради предотвращения чего ось покрытия и писалась.
+  # ЧУЖОГО НЕ БЕРЁМ, И ЭТО ЗАМЕРЕНО: с базы пака (PACK^) ни filter, ни main.ts не трогал НИКТО
+  # (git log по обоим — ноль коммитов), значит откат вернёт их ровно в то состояние, из которого их
+  # взяло это лечение.
+  backend/src/lib/providers/provider-failure.metrics.ts
+  backend/src/lib/http/problem.filter.ts
+  backend/src/main.ts
 )
 
 die(){ printf 'rollback: ОТКАЗ — %s\n' "$1" >&2; exit 2; }
@@ -131,8 +141,17 @@ if [ "${1:-}" = "--самопроверка" ]; then
       scripts/rollback-outbound-perimeter.sh|scripts/rollback-perimeter-docs.sh) continue ;;
     esac
     case " ${PATHS[*]} " in *" $f "*) ;; *) missing="$missing $f" ;; esac
+  # ТРЕТИЙ ИСТОЧНИК — НЕОТСЛЕЖИВАЕМЫЕ (находка №178, замер 31.08.2026). Лечение №118 расширило
+  # единицу замера с коммита на ЖИВОЕ ДЕРЕВО, но инструмент остался прежним: `git diff` показывает
+  # изменения ОТСЛЕЖИВАЕМОГО, а рождение файла — не изменение. Замер: новый файл в области пака
+  # (backend/src/lib/providers/provider-failure.metrics.ts) не давал НИ ОДНОЙ строки, и ось
+  # печатала «покрывает все пути». Пак, добавивший файл, откатывался бы НЕПОЛНО под вердикт
+  # «✓ откат ПОЛНЫЙ» — а достаточно, чтобы новый файл импортировался кодом вне перечня, и после
+  # «полного» отката дерево не соберётся: вторая авария поверх первой.
+  # `--exclude-standard` намеренно: игнорируемое (node_modules, dist) паку не принадлежит.
   done < <( { git -C "$work/clone" diff --name-only "$PACK^" "$PACK" 2>/dev/null
-              git -C "$root" diff --name-only "$PACK" -- 2>/dev/null; } | sort -u )
+              git -C "$root" diff --name-only "$PACK" -- 2>/dev/null
+              git -C "$root" ls-files --others --exclude-standard 2>/dev/null; } | sort -u )
   ran=$((ran+1))
   if [ -z "$missing" ]; then echo "  ok   перечень покрывает все пути коммита пака (${#PATHS[@]} шт.)"
   else echo "::error::в перечне НЕТ путей коммита пака:$missing — откат вернёт часть и напечатает «полный»"; fails=$((fails+1)); fi

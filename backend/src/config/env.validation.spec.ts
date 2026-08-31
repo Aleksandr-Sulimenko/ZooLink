@@ -1718,3 +1718,35 @@ describe('.env.example — контракт окружения стартует 
     expect([...STAND_HOSTS_TOGGLE_VALUES] as string[]).toContain(v);
   });
 });
+
+/**
+ * ═══ РЕГИСТР НОРМАЛИЗОВАН ПРИ РОЖДЕНИИ ПЕРЕЧНЯ, А НЕ У ЧИТАТЕЛЯ (страж находки №140) ═══
+ * Предмет находки — цена работы над КОНСТАНТОЙ на каждом проходе двери. Но ось меряет не время
+ * (оно шумит на общей машине и стерегло бы стенд, а не код), а СВОЙСТВО, из которого цена следует:
+ * перечень УЖЕ нормализован, и способность различать хосты при этом НЕ отнята.
+ */
+describe('перечни хостов нормализованы В РОЖДЕНИИ (№140)', () => {
+  it('🔴 sanitizedHostList отдаёт нижний регистр — читателю нечего доводить', () => {
+    // МУТАНТ (красное-до): убрать .toLowerCase() из sanitizedHostList — ось краснеет, и вместе с
+    // ней возвращается работа над константой у каждого читателя на каждом вызове.
+    expect(sanitizedHostList(['SMS.RU', ' Api.Unisender.COM '])).toEqual([
+      'sms.ru',
+      'api.unisender.com',
+    ]);
+  });
+
+  it('🔴 СПОСОБНОСТЬ НЕ ОТНЯТА: дверь по-прежнему пускает хост в ЛЮБОМ регистре', () => {
+    // Несущее: нормализовав перечень, легко было забыть, что ВХОД тоже приходит от человека.
+    // Без этого полюса лечение цены молча сломало бы поведение.
+    expect(isAllowedProviderHost('SMS.RU')).toBe(true);
+    expect(isAllowedProviderHost('Sms.Ru')).toBe(true);
+    expect(isAllowedProviderHost('sub.SMS.ru')).toBe(true);
+    // и «свой, а не похожий» держится
+    expect(isAllowedProviderHost('sms.ru.evil.com')).toBe(false);
+    expect(isAllowedProviderHost('evilsms.ru')).toBe(false);
+  });
+
+  it('перечень двери ФАКТИЧЕСКИ нормализован (а не только функция, которой его собирали)', () => {
+    for (const h of RF_ALLOWED_PROVIDER_HOSTS) expect(h).toBe(h.toLowerCase());
+  });
+});

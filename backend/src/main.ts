@@ -7,6 +7,8 @@ import { AppModule } from './app.module';
 import { API_VERSION, applyGlobalApiPrefix } from './config/api-base';
 import { AppConfigService } from './config/app-config.service';
 import { ProblemExceptionFilter } from './lib/http/problem.filter';
+import { MetricsService } from './lib/metrics/metrics.service';
+import { ProviderFailureMetrics } from './lib/providers/provider-failure.metrics';
 import { installProcessGuards } from './lib/observability/process-guards';
 import { Sentry, initSentry } from './lib/observability/sentry';
 
@@ -44,7 +46,10 @@ async function bootstrap(): Promise<void> {
   );
 
   // RFC 7807 error envelope for every thrown error.
-  app.useGlobalFilters(new ProblemExceptionFilter());
+  // СЧЁТЧИК ОТКАЗОВ ПРОВАЙДЕРОВ ПОДАЁТСЯ ЯВНО (находка №145): фильтр вне DI, поэтому реестр
+  // метрик приходит к нему отсюда. Без этой строки тревога «периметр сломан» была бы слепа —
+  // и сказала бы об этом в лог при старте, а не промолчала.
+  app.useGlobalFilters(new ProblemExceptionFilter(new ProviderFailureMetrics(app.get(MetricsService))));
 
   // Global route prefix `api` (single source: config/api-base) → the product routes are served at
   // /api/v1/*, matching the published contract base (`servers:` ×13 + API_CONVENTIONS) and Caddy's

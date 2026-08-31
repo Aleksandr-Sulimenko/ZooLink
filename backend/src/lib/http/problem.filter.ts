@@ -14,6 +14,7 @@ import {
   type ProblemFieldError,
 } from './problem.types';
 import { ProviderError } from '../providers/provider-error';
+import type { ProviderFailureMetrics } from '../providers/provider-failure.metrics';
 import { Sentry } from '../observability/sentry';
 
 /**
@@ -60,6 +61,14 @@ const KNOWN_PAYLOAD_KEYS: ReadonlySet<string> = new Set<string>([
 @Catch()
 export class ProblemExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(ProblemExceptionFilter.name);
+
+  /**
+   * Счётчик отказов провайдеров — НЕОБЯЗАТЕЛЕН по построению (находка №145). Фильтр ставится руками
+   * в main.ts (`useGlobalFilters`), вне DI, и живёт также в сводах, где реестра метрик нет вовсе.
+   * Отсутствие счётчика ОБЪЯВЛЯЕТСЯ вслух самим ProviderFailureMetrics при построении, а не молча
+   * ослепляет тревогу.
+   */
+  constructor(private readonly providerFailures?: Pick<ProviderFailureMetrics, 'record'>) {}
 
   /**
    * Signatures (route + dropped-key set) already reported once. Bounded: when the cap is reached the
@@ -124,6 +133,22 @@ export class ProblemExceptionFilter implements ExceptionFilter {
       this.logger.error(
         `Provider error [${exception.provider}/${exception.kind}] on ${req.method} ${req.originalUrl}: ${exception.message}`,
       );
+      // ═══ РОД ОТКАЗА ДОЖИВАЕТ ДО ПРИБОРОВ ДЕЖУРНОГО (находка №145) ═══
+      // Различение «чинить или ждать» существовало В ТИПЕ и терялось на последнем метре: один
+      // logger.error и один 503 на все четыре рода, Sentry — только для «неожиданной ошибки».
+      // Теперь: счётчик с метками provider/kind (правило тревоги — в provider-failure.metrics.ts),
+      // а kind=config поднимает ТРЕВОГУ, потому что это ПОСТОЯННЫЙ отказ НАШЕЙ конфигурации —
+      // ждать вендора бесполезно, а выглядит оно как вендорская сетевая шумиха.
+      this.providerFailures?.record(exception.provider, exception.kind);
+      if (exception.kind === 'config') {
+        Sentry.captureException(exception, {
+          tags: {
+            requestId: requestId ?? 'unknown',
+            provider: exception.provider,
+            providerErrorKind: exception.kind,
+          },
+        });
+      }
       problem.detail = 'An upstream service is temporarily unavailable. Please retry shortly.';
     } else {
       // Unexpected error: log full detail, report to Sentry, expose nothing.

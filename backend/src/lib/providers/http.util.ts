@@ -30,11 +30,13 @@ const DEFAULT_TIMEOUT_MS = 5000;
  * FAIL-CLOSED: неразбираемый адрес, не-http(s) схема и любой хост вне перечня — отказ ДО запроса,
  * а не после. Перечень — `RF_ALLOWED_PROVIDER_HOSTS`, тот же, что парсит CI-гейт.
  */
-function assertOutboundHostAllowed(provider: string, url: string): void {
+function assertOutboundHostAllowed(provider: string, url: string): URL {
   let host: string;
   let scheme: string;
+  let parsed: URL;
   try {
     const u = new URL(url);
+    parsed = u;
     host = u.hostname;
     scheme = u.protocol;
   } catch {
@@ -94,6 +96,13 @@ function assertOutboundHostAllowed(provider: string, url: string): void {
         `ALLOW_LOCAL_STAND_HOSTS=1. Новый провайдер добавляется код-ревью, а не правкой .env.`,
     );
   }
+  // РАЗОБРАННЫЙ АДРЕС ВОЗВРАЩАЕТСЯ ВЫЗЫВАЮЩЕМУ (находка №135): дальше он идёт прямо в `fetch`, и
+  // ВТОРОГО разбора той же строки не происходит. Замер находки: короткий адрес — 954 нс на разбор,
+  // адрес с 4096-символьным параметром — 66 мкс, с 65536 — 1,4 мс, рост ЛИНЕЙНЫЙ. У геокодера
+  // пользовательская строка уходит в АДРЕСНУЮ строку без ограничения длины, то есть цена второго
+  // разбора управляется ИЗВНЕ. Путь сегодня недостижим (потребителя MAPS_PROVIDER нет), но форма
+  // дефекта не зависит от того, есть ли сегодня потребитель.
+  return parsed;
 }
 
 /**
@@ -108,7 +117,9 @@ export async function fetchJson<T>(
   init: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
-  assertOutboundHostAllowed(provider, url); // ДО запроса: отказ, а не «поймаем по ответу»
+  // ДО запроса: отказ, а не «поймаем по ответу». Разобранный адрес забираем себе — второй разбор
+  // той же строки внутри fetch устраним, и его цена линейна по длине адреса (находка №135).
+  const адрес = assertOutboundHostAllowed(provider, url);
 
   let res: Response;
   try {
@@ -131,7 +142,7 @@ export async function fetchJson<T>(
     // для 3xx, и запрос упадёт в общую ветку отказа. Fail-closed держится ДВУМЯ этажами.
     const собственный = AbortSignal.timeout(timeoutMs);
     const сигнал = init?.signal ? AbortSignal.any([собственный, init.signal]) : собственный;
-    res = await fetch(url, { ...init, signal: сигнал, redirect: 'manual' });
+    res = await fetch(адрес, { ...init, signal: сигнал, redirect: 'manual' });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     // РЕДИРЕКТ — ПОСТОЯННЫЙ ОТКАЗ, А НЕ ВРЕМЕННЫЙ СБОЙ СЕТИ (находка круга 1). undici приносит его
@@ -220,6 +231,14 @@ export async function fetchJson<T>(
     // при нужде смотрят на стороне провайдера — у нас его нет и быть не должно.
     const declared = res.headers.get('content-length') ?? 'н/д';
     const ctype = (res.headers.get('content-type') ?? 'н/д').split(';')[0];
+    // УКАЗАНИЕ ВЕНДОРА «КОГДА ВЕРНУТЬСЯ» БЕРЁМ ЗДЕСЬ (находка №147) — дальше этой границы его уже
+    // нет. Политика повторов приедет в Phase 3 и будет УГАДЫВАТЬ паузу, а на 429 угадывание и есть
+    // способ добить вендора и получить бан ключа. Заголовок необязателен и приходит от чужой
+    // стороны, поэтому читается СТРОГО: только целые секунды, только неотрицательные, с потолком
+    // (сутки) — иначе «Retry-After: 999999999» превратился бы в вечную паузу нашей же политики.
+    // Форму HTTP-date намеренно НЕ разбираем: это второй формат с часовыми поясами и рассинхроном
+    // часов, и молча угадывать его хуже, чем честно не знать. Отсутствие = undefined, не ноль.
+    const retryAfterSeconds = разобратьRetryAfter(res.headers.get('retry-after'));
     // ОТМЕНА ТЕЛА ПЕРЕД БРОСКОМ. Непрочитанное тело держит соединение: круг 3 замерил 200 ответов
     // 500 подряд — 198 НОВЫХ сокетов, а на 300 отказах дескрипторы 20 → 620, и после принудительной
     // сборки мусора ТЕ ЖЕ 620. Это не удержание до GC, а удержание бессрочно, и приходит оно ровно
@@ -229,10 +248,14 @@ export async function fetchJson<T>(
     throw new ProviderError(
       provider,
       'http',
-      `HTTP ${res.status} (тип ${ctype}, длина ${declared}; тело не логируется — правило разглашения)`,
+      `HTTP ${res.status} (тип ${ctype}, длина ${declared}; тело не логируется — правило разглашения)` +
+        (retryAfterSeconds === undefined
+          ? ''
+          : `. Вендор просит вернуться через ${retryAfterSeconds} с (Retry-After)`),
       undefined,
       undefined,
       true, // mayHaveArrived: заголовки пришли ⇒ площадка запрос ПРИНЯЛА
+      retryAfterSeconds,
     );
   }
 
@@ -301,6 +324,25 @@ export async function fetchJson<T>(
  */
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 МиБ — на два порядка больше любого ответа наших вендоров
 
+/** Один декодер на модуль (находка №139): он не хранит состояния между вызовами `decode`. */
+const DECODER = new TextDecoder();
+
+/** Сутки: потолок паузы, чтобы чужой заголовок не назначил нашей политике вечное ожидание. */
+const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
+
+/**
+ * `Retry-After` в СЕКУНДАХ, если вендор назвал их числом (находка №147). Всё прочее — undefined,
+ * то есть ЧЕСТНОЕ «не знаю», а не ноль: ноль читался бы политикой как «возвращайся немедленно».
+ */
+function разобратьRetryAfter(raw: string | null): number | undefined {
+  if (raw === null) return undefined;
+  const t = raw.trim();
+  if (!/^\d+$/.test(t)) return undefined; // HTTP-date не разбираем — см. довод у места вызова
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n < 0 || n > MAX_RETRY_AFTER_SECONDS) return undefined;
+  return n;
+}
+
 async function readCappedBody(provider: string, res: Response): Promise<string> {
   const declared = Number(res.headers.get('content-length') ?? NaN);
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
@@ -351,11 +393,19 @@ async function readCappedBody(provider: string, res: Response): Promise<string> 
     reader.releaseLock();
   }
 
+  // ЛИШНЕЙ КОПИИ НЕТ НА ЧАСТОМ ПУТИ, И ДЕКОДЕР ОДИН НА МОДУЛЬ (находка №139).
+  // ЧТО БЫЛО ЗАМЕРЕНО находкой: типичный ответ вендора 41 Б — 410 нс, из них 246 нс съедал НОВЫЙ
+  // TextDecoder на каждый ответ, а ещё 98 нс — вторая аллокация того же объёма. На теле у потолка
+  // копия УДВАИВАЛА пик: 1 МиБ в кусках + 1 МиБ в merged = ~2,1 МиБ на один запрос, то есть
+  // лечение потолка удваивало расход ровно на том теле, от которого защищает.
+  // ПОЧЕМУ ОДИН КУСОК — ЧАСТЫЙ СЛУЧАЙ, А НЕ ДОГАДКА: undici отдаёт куски до 64 КиБ, а ответы всех
+  // наших четырёх вендоров на два порядка меньше потолка. Склейка остаётся для остальных.
+  if (chunks.length === 1) return DECODER.decode(chunks[0]);
   const merged = new Uint8Array(total);
   let at = 0;
   for (const c of chunks) {
     merged.set(c, at);
     at += c.byteLength;
   }
-  return new TextDecoder().decode(merged);
+  return DECODER.decode(merged);
 }

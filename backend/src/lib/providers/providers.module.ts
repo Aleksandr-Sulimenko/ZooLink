@@ -1,4 +1,4 @@
-import { Global, Logger, Module, type Provider } from '@nestjs/common';
+import { Global, Logger, Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
 import { MAX_API_HOST, standHostsToggleOn } from '../../config/env.validation';
 import {
@@ -178,14 +178,29 @@ export function maxTrustRootWarning(): string {
   return (
     `MAX включён. Хост ${MAX_API_HOST} подписан НУЦ Минцифры (замерено 17.08.2026), и без ` +
     'российского корня TLS не поднимется — разрешённый хост ещё не значит работающий канал. ' +
-    'Доверие добавлять УЗКИМ БАНДЛОМ НА ЭТОТ ВЫЗОВ, а не NODE_EXTRA_CA_CERTS. Сменили хост — ' +
-    'перемерьте: у botapi.max.ru издатель обычный, и русский корень там ЛОМАЕТ доверие.'
+    'Доверие добавлять УЗКИМ БАНДЛОМ НА ЭТОТ ВЫЗОВ, а не NODE_EXTRA_CA_CERTS. СМЕНА ХОСТА — ДВА ' +
+    'ДЕЙСТВИЯ, А НЕ ОДНО (находка №142): адрес в адаптере И перечень RF_ALLOWED_PROVIDER_HOSTS, ' +
+    'который заморожен и меняется код-ревью, а не правкой .env — иначе дверь даст ВТОРОЙ отказ. ' +
+    'Замерено: botapi.max.ru и platform-api.max.ru дверь сегодня НЕ ПУСКАЕТ. И перемерьте ' +
+    'доверие: у botapi.max.ru издатель обычный, и русский корень там ЛОМАЕТ доверие.'
   );
 }
 
-// Печатаем ОДИН раз при загрузке модуля: молчащее послабление хуже отсутствующего.
-for (const text of [standHostsWarning(), extraCaCertsWarning()]) {
-  if (text !== null) log.warn(text);
+// ПРЕДУПРЕЖДЕНИЯ ПЕЧАТАЮТСЯ В onModuleInit, А НЕ НА ИМПОРТЕ (находка №146, 31.08.2026).
+// ЧТО БЫЛО ЗАМЕРЕНО: цикл стоял на ВЕРХНЕМ УРОВНЕ модуля, то есть выполнялся при РАЗБОРЕ ИМПОРТОВ
+// — раньше, чем `NestFactory.create(AppModule, { bufferLogs: true })` в main.ts, и потому мимо
+// pino. В журнал уходила ANSI-раскрашенная строка Nest ConsoleLogger вместо JSON: сборщик логов
+// боевого стенда либо теряет её, либо кладёт в «неразобранное», правило тревоги по level/context
+// не совпадает, pino.redact к ней не применяется вовсе.
+// ЧЕМ ЭТО БЫЛО ПЛОХО ИМЕННО ЗДЕСЬ: это ЕДИНСТВЕННЫЙ runtime-сигнал «периметр ослаблен»
+// (ALLOW_LOCAL_STAND_HOSTS) и «доверие процесса расширено» (NODE_EXTRA_CA_CERTS). Молчащее
+// послабление — ровно то, ради чего круг 4 это предупреждение и заводил; лечение было выполнено
+// в месте, откуда голоса не слышно.
+// ПОЧЕМУ onModuleInit: хуки жизненного цикла идут ВНУТРИ `create()`, то есть в окне, которое
+// накрывает `bufferLogs` — накопленное отдаётся уже установленному pino (main.ts:29-32).
+// Сами функции остаются ЧИСТЫМИ и экспортируемыми: их своды не зависят от подъёма Nest.
+export function периметрПредупреждения(): string[] {
+  return [standHostsWarning(), extraCaCertsWarning()].filter((t): t is string => t !== null);
 }
 
 const messengerProvider: Provider = {
@@ -240,4 +255,9 @@ const paymentProvider: Provider = {
     MESSENGER_PROVIDER,
   ],
 })
-export class ProvidersModule {}
+export class ProvidersModule implements OnModuleInit {
+  onModuleInit(): void {
+    // Молчащее послабление хуже отсутствующего — но и сказанное мимо конвейера почти то же самое.
+    for (const text of периметрПредупреждения()) log.warn(text);
+  }
+}
