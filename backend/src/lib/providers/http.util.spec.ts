@@ -127,7 +127,16 @@ describe('дверь и редирект (живой loopback)', () => {
         return;
       }
       res.statusCode = req.url?.includes('307') ? 307 : 302;
-      res.setHeader('location', `http://127.0.0.1:${bp}/landed`);
+      // Две цели: своя (loopback — дверь его знает) и ЧУЖАЯ. Без второй ось не отличила бы
+      // «переезд вендора» от «увода на посторонний хост», а советы им нужны РАЗНЫЕ (находка №144).
+      res.setHeader(
+        'location',
+        // МАРКЕР В ПУТИ — ТОЛЬКО ASCII: кириллица не переживает шов (fetch кодирует её в
+        // percent-encoding, и сравнение на сервере не совпадает — ось краснела на исправном коде).
+        req.url?.includes('outside')
+          ? 'https://evil.example.com/landed'
+          : `http://127.0.0.1:${bp}/landed`,
+      );
       res.end();
     });
     const ap = await listen(a);
@@ -167,6 +176,31 @@ describe('дверь и редирект (живой loopback)', () => {
     expect(err.message).toContain('ПЕРЕНАПРАВЛЕНИЕМ');
     expect(err.message).toContain('ПОСТОЯННЫЙ');
     expect(err.mayHaveArrived).toBe(true); // 3xx — это ОТВЕТ: площадка запрос приняла
+  });
+
+  it('🔴 №144: отказ НАЗЫВАЕТ, КУДА ВЕЛО, — а не утверждает про хоп, которого не смотрел', async () => {
+    // МУТАНТ (красное-до): вернуть `redirect: 'error'` в fetchJson — Location до нас не доходит
+    // ВООБЩЕ, и ось краснеет. Прежний текст утверждал «на хост, КОТОРОГО ДВЕРЬ НЕ ВИДЕЛА» — в
+    // самом вероятном случае (вендор завёл обычный 301) это ЛОЖЬ, а лечение (сменить адрес в
+    // адаптере) не называлось. Стенд ведёт на 127.0.0.1 — дверь его знает, значит ось меряет
+    // ИМЕННО ветку «переезд внутри своего периметра».
+    const err = (await fetchJson('проба', `${aUrl}/302`).catch((e: unknown) => e)) as ProviderError;
+    expect(err.message).toContain('КУДА ВЕЛО — СМОТРЕЛИ');
+    expect(err.message).toContain('127.0.0.1');
+    expect(err.message).toContain('поправить адрес в АДАПТЕРЕ');
+    expect(bHits).toHaveLength(0); // и при этом на второй хоп НЕ ушло ничего
+  });
+
+  it('🔴 №144: цель ВНЕ перечня названа иначе — «входит код-ревью», а не «поправьте адаптер»', async () => {
+    // Второй полюс обязателен: без него ось выше зеленела бы на коде, который советует «поправить
+    // адаптер» ВСЕГДА — в том числе когда вендор уводит нас на чужой хост, и это уже не переезд.
+    const err = (await fetchJson('проба', `${aUrl}/302-outside`).catch(
+      (e: unknown) => e,
+    )) as ProviderError;
+    expect(err.message).toContain('этого хоста в перечне НЕТ');
+    expect(err.message).toContain('код-ревью');
+    expect(err.message).not.toContain('поправить адрес в АДАПТЕРЕ');
+    expect(bHits).toHaveLength(0);
   });
 
   it('сигнал ВЫЗЫВАЮЩЕГО не съедается нашим таймаутом (отмена работает)', async () => {
