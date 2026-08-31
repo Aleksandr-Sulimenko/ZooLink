@@ -23,6 +23,10 @@ export class StubMessengerProvider implements MessengerProvider {
     this.logger.warn(
       '[STUB] сообщение в мессенджер НЕ отправлено: провайдер не настроен (токен пуст)',
     );
-    return Promise.resolve({ accepted: true, providerMessageId: null });
+    // ИСХОД НАЗЫВАЕТСЯ СВОИМ ИМЕНЕМ (находка №131). Прежде заглушка возвращала `accepted:true` —
+    // то же значение, каким боевой адаптер сообщает о ПОДТВЕРЖДЁННОМ приёме, хотя здесь не
+    // отправлено НИЧЕГО. Порт теперь различает «принято» и «не отправляли», и вызывающий не может
+    // прочесть сон канала как успешную доставку.
+    return Promise.resolve({ outcome: 'not-sent' as const, providerMessageId: null });
   }
 }

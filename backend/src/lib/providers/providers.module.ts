@@ -1,6 +1,6 @@
 import { Global, Logger, Module, type Provider } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
-import { standHostsToggleOn } from '../../config/env.validation';
+import { MAX_API_HOST, standHostsToggleOn } from '../../config/env.validation';
 import {
   EMAIL_PROVIDER,
   MAPS_PROVIDER,
@@ -22,6 +22,39 @@ import { StubMessengerProvider } from './messenger/stub-messenger.adapter';
 
 const log = new Logger('ProvidersModule');
 
+/**
+ * ПОЧЕМУ КАНАЛ СПИТ — ОТВЕТ НАЗЫВАЕТ ПРИЧИНУ, А НЕ ПЕРВУЮ ИЗ ДВУХ (находка №123).
+ *
+ * ЧТО БЫЛО ЗАМЕРЕНО. Все три шва печатали ОДИН текст на ДВЕ разные причины, и напечатанная была
+ * ложной во втором случае: `MESSENGER_PROVIDER=MAX` (заглавными — так называется площадка) при
+ * ЖИВОМ токене давало «no bot token configured». Схема имя провайдера не enum'ит (это риск,
+ * ПРИНЯТЫЙ держателем, находка №13) — значит «Max», «MAX», «maks» проходят загрузку молча и
+ * доходят сюда. Оператор читает про токен, которого не трогал, перевыпускает его у площадки,
+ * кладёт заново, перезапускает и получает ТУ ЖЕ строку: отличить причины по тексту нельзя ПО
+ * ПОСТРОЕНИЮ — сообщение не называло ни прочитанное имя, ни того, что имя вообще проверялось.
+ * Ровно этот класс стоил соседнему треку недели 17–24.08.
+ *
+ * ЛЕЧИМ ВСЕ ТРИ ШВА, А НЕ ОДИН: у СМС и почты та же ложь теми же словами — вылечив мессенджер в
+ * одиночку, мы оставили бы соседей с ней и научили читателя, что класс закрыт.
+ *
+ * ИМЯ ПРОВАЙДЕРА — НЕ СЕКРЕТ и печатается ДОСЛОВНО (в кавычках, чтобы пробел был виден); ключи и
+ * токены не печатаются НИКОГДА — про них говорится только «пусто/задано».
+ */
+export function причинаЗаглушки(
+  переменная: string,
+  прочитанное: string,
+  ожидаемое: string,
+  чегоНеХватает: string,
+): string {
+  if (прочитанное !== ожидаемое) {
+    return (
+      `${переменная}=«${прочитанное}» — сверка ТОЧНАЯ, ожидается «${ожидаемое}» (регистр и ` +
+      'пробелы значимы). Учётные данные при этом НЕ ПРОВЕРЯЛИСЬ: до них дело не дошло.'
+    );
+  }
+  return `${переменная}=«${ожидаемое}», но ${чегоНеХватает}`;
+}
+
 const smsProvider: Provider = {
   provide: SMS_PROVIDER,
   inject: [AppConfigService],
@@ -30,7 +63,10 @@ const smsProvider: Provider = {
       log.log('SMS provider: SMS.RU');
       return new SmsRuAdapter(cfg.get('SMSRU_API_ID'), cfg.get('SMS_FROM'));
     }
-    log.warn('SMS provider: STUB (no credential configured)');
+    log.warn(
+      'SMS provider: STUB — ' +
+        причинаЗаглушки('SMS_PROVIDER', cfg.get('SMS_PROVIDER'), 'smsru', 'SMSRU_API_ID пуст'),
+    );
     return new StubSmsProvider();
   },
 };
@@ -48,7 +84,15 @@ const emailProvider: Provider = {
         listId: cfg.get('UNISENDER_LIST_ID'),
       });
     }
-    log.warn('Email provider: STUB (no credential / sender configured)');
+    log.warn(
+      'Email provider: STUB — ' +
+        причинаЗаглушки(
+          'EMAIL_PROVIDER',
+          cfg.get('EMAIL_PROVIDER'),
+          'unisender',
+          'пусты UNISENDER_API_KEY и/или EMAIL_FROM',
+        ),
+    );
     return new StubEmailProvider();
   },
 };
@@ -132,7 +176,7 @@ export function extraCaCertsWarning(env: NodeJS.ProcessEnv = process.env): strin
  */
 export function maxTrustRootWarning(): string {
   return (
-    'MAX включён. Хост platform-api2.max.ru подписан НУЦ Минцифры (замерено 17.08.2026), и без ' +
+    `MAX включён. Хост ${MAX_API_HOST} подписан НУЦ Минцифры (замерено 17.08.2026), и без ` +
     'российского корня TLS не поднимется — разрешённый хост ещё не значит работающий канал. ' +
     'Доверие добавлять УЗКИМ БАНДЛОМ НА ЭТОТ ВЫЗОВ, а не NODE_EXTRA_CA_CERTS. Сменили хост — ' +
     'перемерьте: у botapi.max.ru издатель обычный, и русский корень там ЛОМАЕТ доверие.'
@@ -153,7 +197,15 @@ const messengerProvider: Provider = {
       log.warn(maxTrustRootWarning());
       return new MaxBotAdapter(cfg.get('MAX_BOT_TOKEN'));
     }
-    log.warn('Messenger provider: STUB (no bot token configured)');
+    log.warn(
+      'Messenger provider: STUB — ' +
+        причинаЗаглушки(
+          'MESSENGER_PROVIDER',
+          cfg.get('MESSENGER_PROVIDER'),
+          'max',
+          'MAX_BOT_TOKEN пуст',
+        ),
+    );
     return new StubMessengerProvider();
   },
 };

@@ -1,6 +1,6 @@
 import { fetchJson } from './http.util';
 import { ProviderError } from './provider-error';
-import { RF_ALLOWED_PROVIDER_HOSTS } from '../../config/env.validation';
+import { MAX_API_HOST, RF_ALLOWED_PROVIDER_HOSTS } from '../../config/env.validation';
 
 /**
  * ИСХОДЯЩИЙ ПЕРИМЕТР (ADR-0017, 13.08.2026). Оси стоят на ЕДИНСТВЕННОЙ двери наружу.
@@ -39,7 +39,7 @@ describe('исходящий периметр в двери fetchJson', () => {
   it.each([
     ['зарубежный хост', 'https://evil.example.com/steal'],
     ['похожий на наш (суффиксная подмена)', 'https://sms.ru.evil.com/x'],
-    ['подделка под MAX', 'https://platform-api2.max.ru.evil.com/messages'],
+    ['подделка под MAX', `https://${MAX_API_HOST}.evil.com/messages`],
     ['портал регистрации MAX, а не API', 'https://business.max.ru/settings'],
     ['api.telegram.org', 'http://api.telegram.org/x'],
     ['другой .ru без код-ревью', 'https://api.sberbank.ru/x'],
@@ -50,7 +50,7 @@ describe('исходящий периметр в двери fetchJson', () => {
     // Приклейка СЛЕВА: `evilsms.ru` / `notplatform-api2.max.ru` — регистрируемые кем угодно домены,
     // и БЕЗ ведущей точки в `.${h}` они прошли бы как «поддомен». Мутант снятия точки должен краснеть.
     ['приклейка слева к sms.ru', 'https://evilsms.ru/x'],
-    ['приклейка слева к MAX', 'https://notplatform-api2.max.ru/messages'],
+    ['приклейка слева к MAX', `https://not${MAX_API_HOST}/messages`],
     // IMDS облака: 169.254.169.254 выдаёт IAM-токены инстанса — link-local закрыт целиком (ADR-0017).
     ['метаданные облака (IMDS)', 'http://169.254.169.254/latest/meta-data/'],
     // HTTPS-ONLY для публичных: у СМС/геокодера ключ в адресной строке → по http ушёл бы открытым.
@@ -63,7 +63,7 @@ describe('исходящий периметр в двери fetchJson', () => {
     ['sms.ru', 'https://sms.ru/sms/send?api_id=x'],
     ['api.unisender.com', 'https://api.unisender.com/ru/api/sendEmail'],
     ['geocode-maps.yandex.ru', 'https://geocode-maps.yandex.ru/1.x/?apikey=x'],
-    ['MAX Bot API (канал сообщений)', 'https://platform-api2.max.ru/messages'],
+    ['MAX Bot API (канал сообщений)', `https://${MAX_API_HOST}/messages`],
     ['поддомен разрешённого', 'https://gate.sms.ru/x'],
     ['localhost (мок/стенд)', 'http://localhost:9999/x'],
     ['RFC1918', 'http://10.0.0.5/x'],

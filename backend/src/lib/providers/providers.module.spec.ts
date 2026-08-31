@@ -5,8 +5,10 @@ import {
   standHostsWarning,
   extraCaCertsWarning,
   maxTrustRootWarning,
+  причинаЗаглушки,
 } from './providers.module';
 import {
+  MAX_API_HOST,
   STAND_HOSTS_TOGGLE_ON,
   STAND_HOSTS_TOGGLE_OFF,
 } from '../../config/env.validation';
@@ -94,7 +96,7 @@ describe('предупреждения проводки — текст и усл
 
   it('доверие к корню при живом MAX: текст БЕЗУСЛОВЕН и назван хостом с датой замера', () => {
     const t = maxTrustRootWarning();
-    expect(t).toContain('platform-api2.max.ru'); // хост, а не «домен MAX»: свойство хоста
+    expect(t).toContain(MAX_API_HOST); // хост, а не «домен MAX»: свойство хоста
     expect(t).toContain('17.08.2026'); // замер имеет дату — иначе он не перемеряется
     expect(t).toContain('УЗКИМ БАНДЛОМ');
     expect(t).toContain('botapi.max.ru'); // сменили хост — перемерьте, там корень ВРЕДЕН
@@ -158,7 +160,7 @@ describe('предупреждения проводки — текст и усл
         expect(ref.get(TOKEN)).toBeInstanceOf(A);
       });
       const всё = сказано.join('\n');
-      expect(всё).toContain('platform-api2.max.ru');
+      expect(всё).toContain(MAX_API_HOST);
       expect(всё).toContain('УЗКИМ БАНДЛОМ');
       // и НЕ печатаем предупреждение про переменную, которой нет — иначе совет теряет адресата
       expect(всё).not.toContain('ДОВЕРИЕ ПРОЦЕССА РАСШИРЕНО');
@@ -173,5 +175,116 @@ describe('предупреждения проводки — текст и усл
       }
       jest.restoreAllMocks();
     }
+  });
+});
+
+/**
+ * ═══ ПОЧЕМУ КАНАЛ СПИТ — ОТВЕТ НАЗЫВАЕТ ПРИЧИНУ (страж находки №123) ═══
+ *
+ * Было замерено: все три шва печатали ОДИН текст на ДВЕ разные причины, и во втором случае он был
+ * ЛОЖЕН — «no bot token configured» при живом токене и опечатке в имени провайдера. Отличить
+ * причины по тексту было нельзя ПО ПОСТРОЕНИЮ, и оператор уходил чинить то, чего не трогал.
+ *
+ * ОСЬ МЕРИТ ОБА ПОЛЮСА: (1) неверное ИМЯ — текст говорит про имя и прямо снимает подозрение с
+ * учётных данных; (2) верное имя и пустой ключ — текст говорит про ключ. Одного полюса не хватило
+ * бы: сообщение «причина неизвестна» прошло бы половину оси.
+ */
+describe('Заглушка называет ПРИЧИНУ, а не первую из двух (№123)', () => {
+  it('🔴 ИМЯ ПРОВАЙДЕРА НАБРАНО ИНАЧЕ — текст говорит про ИМЯ и снимает подозрение с ключа', () => {
+    // МУТАНТ (красное-до): вернуть прежнюю константу 'STUB (no bot token configured)' — ось
+    // краснеет на обоих полюсах сразу.
+    const текст = причинаЗаглушки('MESSENGER_PROVIDER', 'MAX', 'max', 'MAX_BOT_TOKEN пуст');
+    expect(текст).toContain('MESSENGER_PROVIDER=«MAX»');
+    expect(текст).toContain('ожидается «max»');
+    expect(текст).toContain('НЕ ПРОВЕРЯЛИСЬ');
+    // НЕСУЩЕЕ: про токен здесь не должно быть НИ СЛОВА — ровно это и уводило оператора.
+    expect(текст).not.toContain('MAX_BOT_TOKEN пуст');
+  });
+
+  it('🔴 ИМЯ ВЕРНОЕ, КЛЮЧ ПУСТ — текст говорит про КЛЮЧ (законный сон канала)', () => {
+    const текст = причинаЗаглушки('MESSENGER_PROVIDER', 'max', 'max', 'MAX_BOT_TOKEN пуст');
+    expect(текст).toContain('MAX_BOT_TOKEN пуст');
+    expect(текст).not.toContain('ожидается');
+  });
+
+  it('🔴 ПРОБЕЛ ВИДЕН: значение печатается в кавычках, иначе « max» неотличимо от «max»', () => {
+    // МУТАНТ: убрать кавычки — ось краснеет. Невидимый пробел в .env — живой класс отказов.
+    const текст = причинаЗаглушки('MESSENGER_PROVIDER', ' max', 'max', 'MAX_BOT_TOKEN пуст');
+    expect(текст).toContain('« max»');
+  });
+
+  it('КЛАСС ЗАКРЫТ У ВСЕХ ТРЁХ ШВОВ, а не у одного (СМС и почта — та же ложь теми же словами)', () => {
+    for (const [пер, ожид, нет] of [
+      ['SMS_PROVIDER', 'smsru', 'SMSRU_API_ID пуст'],
+      ['EMAIL_PROVIDER', 'unisender', 'пусты UNISENDER_API_KEY и/или EMAIL_FROM'],
+      ['MESSENGER_PROVIDER', 'max', 'MAX_BOT_TOKEN пуст'],
+    ]) {
+      expect(причинаЗаглушки(пер, 'ОПЕЧАТКА', ожид, нет)).toContain(`${пер}=«ОПЕЧАТКА»`);
+      expect(причинаЗаглушки(пер, ожид, ожид, нет)).toContain(нет);
+    }
+  });
+
+  it('СЕКРЕТ НЕ ПЕЧАТАЕТСЯ НИКОГДА: в тексте только имя переменной, не её значение', () => {
+    const текст = причинаЗаглушки('MESSENGER_PROVIDER', 'max', 'max', 'MAX_BOT_TOKEN пуст');
+    expect(текст).not.toContain('9f3a1c'); // форма боевого токена
+    expect(текст).toMatch(/MAX_BOT_TOKEN пуст$/);
+  });
+});
+
+/**
+ * ОСЬ НА ПРОВОДКУ, А НЕ НА ПОМОЩНИКА (иначе повторили бы находку №5: ось проверяет НАЛИЧИЕ
+ * строки, а не поведение). Здесь поднимается НАСТОЯЩИЙ модуль с настоящим окружением, и
+ * проверяется то, что увидит оператор в журнале.
+ */
+describe('№123 на ЖИВОЙ фабрике: канал спит при опечатке в имени — журнал говорит про ИМЯ', () => {
+  const поднять = async (env: Record<string, string>) => {
+    const было: Record<string, string | undefined> = {};
+    for (const k of Object.keys(env)) {
+      было[k] = process.env[k];
+      process.env[k] = env[k];
+    }
+    const сказано: string[] = [];
+    try {
+      jest.resetModules();
+      await jest.isolateModulesAsync(async () => {
+        const nest = await import('@nestjs/common');
+        jest
+          .spyOn(nest.Logger.prototype, 'warn')
+          .mockImplementation((msg: unknown) => void сказано.push(String(msg)));
+        const { Test: T } = await import('@nestjs/testing');
+        const { AppConfigModule: C } = await import('../../config/config.module');
+        const { ProvidersModule: P } = await import('./providers.module');
+        const { MESSENGER_PROVIDER: TOKEN } = await import('./provider.tokens');
+        const { StubMessengerProvider: S } = await import('./messenger/stub-messenger.adapter');
+        const ref = await T.createTestingModule({ imports: [C, P] }).compile();
+        expect(ref.get(TOKEN)).toBeInstanceOf(S); // канал ДЕЙСТВИТЕЛЬНО спит
+      });
+    } finally {
+      for (const [k, v] of Object.entries(было)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      jest.restoreAllMocks();
+    }
+    return сказано.join('\n');
+  };
+
+  it('🔴 MESSENGER_PROVIDER=«MAX» при ЖИВОМ токене — про токен НЕ СКАЗАНО НИ СЛОВА', async () => {
+    // Ровно то, что было сломано: заглавные буквы (так называется площадка) + непустой токен
+    // давали «no bot token configured», и оператор перевыпускал токен, которого не трогал.
+    const всё = await поднять({
+      MESSENGER_PROVIDER: 'MAX',
+      MAX_BOT_TOKEN: '9f3a1c-bot-token-91824577',
+    });
+    expect(всё).toContain('MESSENGER_PROVIDER=«MAX»');
+    expect(всё).toContain('ожидается «max»');
+    expect(всё).not.toContain('MAX_BOT_TOKEN пуст');
+    expect(всё).not.toContain('9f3a1c'); // секрет в журнал не идёт
+  });
+
+  it('имя верное, токен пуст — журнал говорит про ТОКЕН (законный сон канала)', async () => {
+    const всё = await поднять({ MESSENGER_PROVIDER: 'max', MAX_BOT_TOKEN: '' });
+    expect(всё).toContain('MAX_BOT_TOKEN пуст');
+    expect(всё).not.toContain('ожидается');
   });
 });

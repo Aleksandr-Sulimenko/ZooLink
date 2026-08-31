@@ -1,4 +1,7 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Logger } from '@nestjs/common';
+import { MAX_API_HOST, RF_ALLOWED_PROVIDER_HOSTS } from '../../../config/env.validation';
 import { MaxBotAdapter } from './max-bot.adapter';
 import { StubMessengerProvider } from './stub-messenger.adapter';
 import { ProviderError } from '../provider-error';
@@ -35,9 +38,9 @@ describe('MaxBotAdapter', () => {
 
   it('отправляет на разрешённый хост и возвращает идентификатор сообщения', async () => {
     const res = await new MaxBotAdapter(TOKEN).sendMessage({ chatId: '385842011', text: 'привет' });
-    expect(res).toEqual({ accepted: true, providerMessageId: 'mid-1' });
+    expect(res).toEqual({ outcome: 'accepted', providerMessageId: 'mid-1' });
     expect(seen).toHaveLength(1);
-    expect(seen[0].url).toContain('platform-api2.max.ru');
+    expect(seen[0].url).toContain(MAX_API_HOST);
     expect(seen[0].url).toContain('chat_id=385842011');
   });
 
@@ -127,7 +130,8 @@ describe('MaxBotAdapter', () => {
 
   it('заглушка не печатает текст сообщения в журнал', async () => {
     const res = await new StubMessengerProvider().sendMessage({ chatId: '7', text: 'код 999999' });
-    expect(res).toEqual({ accepted: true, providerMessageId: null });
+    // ЗАГЛУШКА НЕ ГОВОРИТ «ПРИНЯТО» (находка №131): она не отправляла ничего, и исход у неё свой.
+    expect(res).toEqual({ outcome: 'not-sent', providerMessageId: null });
     expect(seen).toHaveLength(0);
   });
   // ── ВТОРОЙ СЛОЙ ПРОТИВ УТЕЧКИ ТОКЕНА (крит круга 5) ──────────────────────────────────────────
@@ -226,7 +230,7 @@ describe('MaxBotAdapter — 200 не значит «принято» (ре-ге�
     body = { message: { body: {} } };
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     const res = await new MaxBotAdapter('t').sendMessage({ chatId: '1', text: 'x' });
-    expect(res.accepted).toBe(false);
+    expect(res.outcome).toBe('unconfirmed');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -238,7 +242,7 @@ describe('MaxBotAdapter — 200 не значит «принято» (ре-ге�
     body = { message: { body: { mid: '' } } };
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     const res = await new MaxBotAdapter('t').sendMessage({ chatId: '1', text: 'x' });
-    expect(res.accepted).toBe(false);
+    expect(res.outcome).toBe('unconfirmed');
     expect(res.providerMessageId).toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -289,7 +293,7 @@ describe('MaxBotAdapter — форма чужого тела и молчание
     respond(JSON.stringify({ message: { body: { mid: 12345 } } }));
     const res = await new MaxBotAdapter('t').sendMessage({ chatId: '1', text: 'x' });
     expect(res.providerMessageId).toBeNull();
-    expect(res.accepted).toBe(false);
+    expect(res.outcome).toBe('unconfirmed');
   });
 
   it('ЗАГЛУШКА не пишет идентификатор получателя в журнал', async () => {
@@ -299,5 +303,318 @@ describe('MaxBotAdapter — форма чужого тела и молчание
     expect(printed).not.toContain('385842011');
     expect(printed).not.toContain('4821');
     warn.mockRestore();
+  });
+});
+
+/**
+ * ТОКЕН БОЕВОЙ ФОРМЫ, А НЕ ОДНОБУКВЕННЫЙ (найдено ЭТИМИ ЖЕ ОСЯМИ 31.08.2026).
+ * С токеном `'t'` второй слой защиты секрета вырезал букву «t» ИЗ ЧУЖОГО ТЕКСТА: причина отказа
+ * площадки «Invalid chatId» приходила как «Invalid cha<СЕКРЕТ ВЫРЕЗАН>Id». Свойство КОДА, а не
+ * свода (схема минимальной длины у MAX_BOT_TOKEN не требует) — заведено находкой; здесь же ось
+ * обязана мерить предмет, а не вырожденный вход.
+ */
+const ТОКЕН_БОЕВОЙ_ФОРМЫ = '9f3a1c-bot-token-91824577';
+
+/**
+ * ═══ СТРАЖИ КЛАСТЕРА MAX (находки №124, №125, №129, №130, №131, №132; круг 5) ═══
+ *
+ * Каждая ось поставлена ПОД конкретную находку и проверена МУТАНТОМ (красное-до): её отказ
+ * воспроизводился снятием ровно того куска лечения, ради которого она написана. Зелёное без
+ * показанного красного здесь не считается — это правило дома, а не осторожность.
+ */
+describe('MAX — исход отправки различим, а не булев (№131, №124)', () => {
+  const real = globalThis.fetch;
+  let body: unknown;
+  let вызовов: number;
+  beforeEach(() => {
+    вызовов = 0;
+    globalThis.fetch = () => {
+      вызовов += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    };
+  });
+  afterEach(() => {
+    globalThis.fetch = real;
+  });
+
+  it('приём подтверждён (mid есть) → outcome=accepted', async () => {
+    body = { message: { body: { mid: 'mid-7' } } };
+    const res = await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    expect(res).toEqual({ outcome: 'accepted', providerMessageId: 'mid-7' });
+  });
+
+  it('🔴 200 без mid → исход НЕСЁТ СОМНЕНИЕ (unconfirmed), а не «не принято»', async () => {
+    // МУТАНТ (красное-до): вернуть `outcome: mid === null ? 'not-sent' : 'accepted'` — ось краснеет.
+    // ПОЧЕМУ ЭТО НЕСУЩЕЕ: `not-sent` читается как «повтор безопасен», а запрос СКОРЕЕ ВСЕГО дошёл —
+    // именно здесь рождается ДУБЛЬ у живого человека при подключении канала к outbox.
+    body = { message: { body: {} } };
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const res = await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    expect(res.outcome).toBe('unconfirmed');
+    warn.mockRestore();
+  });
+
+  it('🔴 ЗАГЛУШКА И БОЕВОЙ АДАПТЕР НЕ МОГУТ ВЕРНУТЬ ОДИН ИСХОД НА РАЗНЫХ ПО СМЫСЛУ СОБЫТИЯХ', async () => {
+    // Ровно то, что было сломано: заглушка говорила `accepted:true` («не отправляли вовсе»), а
+    // боевой адаптер тем же полем — про ПОДТВЕРЖДЁННЫЙ приём. МУТАНТ: вернуть заглушке 'accepted'.
+    body = { message: { body: {} } };
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const боевой = await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    const заглушка = await new StubMessengerProvider().sendMessage({ chatId: '1', text: 'x' });
+    warn.mockRestore();
+    expect(заглушка.outcome).toBe('not-sent');
+    expect(боевой.outcome).not.toBe(заглушка.outcome);
+    expect(вызовов).toBe(1); // заглушка в сеть не ходила — иначе сравнивали бы не то
+  });
+
+  it('🔴 №124: при НЕподтверждённом приёме слов «message sent» в журнале НЕТ', async () => {
+    // МУТАНТ (красное-до): вернуть `log(\`MAX message sent (accepted=${mid !== null})\`)` — ось
+    // краснеет. Человек ищет в журнале «message sent»; зелёная строка с этими словами закрывает
+    // вопрос «ушло?» словом «да», хотя приём не подтверждён.
+    body = { message: { body: {} } };
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    const всёНапечатанное = [...log.mock.calls, ...warn.mock.calls]
+      .map((c) => String(c[0]))
+      .join(' | ');
+    expect(всёНапечатанное).not.toContain('message sent');
+    // и отрицание сказано ПЕРВЫМ, а не спрятано в скобку в конце
+    expect(warn.mock.calls.map((c) => String(c[0])).join(' | ')).toContain('приём НЕ подтверждён');
+    log.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('при ПОДТВЕРЖДЁННОМ приёме строка «message sent» есть — способность не отнята', async () => {
+    // ОБРАТНЫЙ ПОЛЮС: без него ось выше зеленела бы и на коде, который не печатает НИЧЕГО никогда.
+    body = { message: { body: { mid: 'mid-7' } } };
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    expect(log.mock.calls.map((c) => String(c[0])).join(' | ')).toContain('message sent');
+    log.mockRestore();
+  });
+});
+
+describe('MAX — адресат проверяется у нас, а не у вендора (№132)', () => {
+  const real = globalThis.fetch;
+  let вызовов: number;
+  beforeEach(() => {
+    вызовов = 0;
+    globalThis.fetch = () => {
+      вызовов += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify({ message: { body: { mid: 'm' } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    };
+  });
+  afterEach(() => {
+    globalThis.fetch = real;
+  });
+
+  it.each(['', '   '])(
+    '🔴 пустой chatId («%s») НЕ ПОРОЖДАЕТ исходящего вызова',
+    async (chatId) => {
+      // МУТАНТ (красное-до): снять проверку в начале sendMessage — вызов уходит в сеть адресом
+      // `…/messages?chat_id=`, площадка отвечает 200 с success:false, и НАША ошибка вызывающего
+      // приходит как отказ ПЛОЩАДКИ (503 клиенту, ложная тревога «MAX лежит» наблюдению).
+      const err = (await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ)
+        .sendMessage({ chatId, text: 'x' })
+        .catch((e: unknown) => e)) as ProviderError;
+      expect(вызовов).toBe(0);
+      expect(err).toBeInstanceOf(ProviderError);
+      expect(err.kind).toBe('config'); // ПОСТОЯННЫЙ отказ, не «сеть» и не «вендор»
+      expect(err.message).toContain('адресат не пригоден');
+      // Единственный случай, где false значит ТОЧНО «не дошло»: запрос не уходил вовсе.
+      expect(err.mayHaveArrived).toBe(false);
+    },
+  );
+
+  it('НЕ ОТНЯЛИ СПОСОБНОСТЬ: обычный chatId по-прежнему уходит в сеть', async () => {
+    const res = await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '385842011', text: 'x' });
+    expect(вызовов).toBe(1);
+    expect(res.outcome).toBe('accepted');
+  });
+});
+
+describe('MAX — причина отказа площадки доходит до оператора без адресата (№129, №130)', () => {
+  const real = globalThis.fetch;
+  let body: string;
+  beforeEach(() => {
+    globalThis.fetch = () =>
+      Promise.resolve(
+        new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
+      );
+  });
+  afterEach(() => {
+    globalThis.fetch = real;
+  });
+  const отказ = async (): Promise<ProviderError> =>
+    (await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ)
+      .sendMessage({ chatId: '1', text: 'x' })
+      .catch((e: unknown) => e)) as ProviderError;
+
+  it('🔴 ДВА РАЗНЫХ ОТКАЗА ПЛОЩАДКИ ДАЮТ ДВА РАЗЛИЧИМЫХ ТЕКСТА', async () => {
+    // МУТАНТ (красное-до): убрать `причина` из сообщения — оба отказа печатаются одной фразой,
+    // истинной для всех причин сразу и потому не сужающей поиск ни на шаг (оператор идёт
+    // перевыпускать токен, тогда как в теле лежало «Invalid chatId»).
+    body = JSON.stringify({ success: false, message: 'Invalid chatId: 0' });
+    const первый = await отказ();
+    body = JSON.stringify({ success: false, message: 'Message text is too long' });
+    const второй = await отказ();
+    expect(первый.message).not.toBe(второй.message);
+    expect(первый.message).toContain('Invalid chatId');
+    expect(второй.message).toContain('too long');
+  });
+
+  it('🔴 АДРЕСАТ НЕ УХОДИТ: цифровые последовательности вырезаны', async () => {
+    // МУТАНТ: отдать `data.message` как есть — в текст уедет идентификатор чата, который этот же
+    // файл сознательно не пишет в журнал (правило разглашения).
+    body = JSON.stringify({ success: false, message: 'Invalid chatId: 385842011' });
+    const err = await отказ();
+    expect(err.message).not.toContain('385842011');
+    expect(err.message).toContain('Invalid chatId: #');
+  });
+
+  it('🔴 ЧУЖОЙ ТЕКСТ НЕ ПОДДЕЛЫВАЕТ СТРОКИ ЖУРНАЛА: переводы строк вырезаны', async () => {
+    body = JSON.stringify({ success: false, message: 'boom\n2026-08-15 FAKE LOG LINE' });
+    const err = await отказ();
+    expect(err.message).not.toContain('\n');
+    expect(err.message).toContain('FAKE LOG LINE'); // текст сохранён, СТРОКА — одна
+  });
+
+  it('чужое тело не диктует размер нашей строки (обрезка по длине)', async () => {
+    body = JSON.stringify({ success: false, message: 'A'.repeat(5000) });
+    const err = await отказ();
+    expect(err.message.length).toBeLessThan(400);
+  });
+
+  it('причины нет — так и сказано, а не выдумано', async () => {
+    body = JSON.stringify({ success: false });
+    const err = await отказ();
+    expect(err.message).toContain('причину площадка не назвала');
+  });
+
+  it('🔴 №130: ОБА отказа ПОСЛЕ полученного тела помечены «мог дойти» — паритет', async () => {
+    // МУТАНТ (красное-до): снять шестой аргумент `true` у броска на success:false — возвращается
+    // ровно замеренный перекос круга 5: у битого JSON true, у явного отказа площадки false, хотя
+    // у второго свидетельство приёма СИЛЬНЕЕ (площадка разобрала наш chat_id и назвала его).
+    body = JSON.stringify({ success: false, message: 'Invalid chatId: 0' });
+    const явныйОтказ = await отказ();
+    body = 'не json';
+    const битоеТело = await отказ();
+    expect(явныйОтказ.mayHaveArrived).toBe(true);
+    expect(битоеТело.mayHaveArrived).toBe(true);
+    expect(явныйОтказ.mayHaveArrived).toBe(битоеТело.mayHaveArrived);
+  });
+
+  it('🔴 №130: ответ НЕ-объектом — тоже «мог дойти» (тело пришло целиком)', async () => {
+    body = '[]';
+    const err = await отказ();
+    expect(err.kind).toBe('response');
+    expect(err.mayHaveArrived).toBe(true);
+  });
+});
+
+/**
+ * ═══ ХОСТ КАНАЛА ЖИВЁТ В ОДНОМ МЕСТЕ (находка №125) ═══
+ *
+ * Ось отвечает ровно на то, чем находка ОПРОВЕРГАЕТСЯ: «покажите одно место, правка которого
+ * меняет хост во всех девяти». Машинно значимых копий было ДВЕ (перечень двери и ENDPOINT
+ * адаптера), и правка одной без другой давала МЁРТВЫЙ КАНАЛ — дверь отказывает раньше, чем
+ * адаптер доходит до сети. Тексты (`.env.example`, ADR и его зеркало) машиной не выводятся —
+ * поэтому они СВЕРЯЮТСЯ с константой, а не переписываются вручную и молча расходятся.
+ */
+describe('MAX — адрес выведен из перечня двери, а не скопирован (№125)', () => {
+  const real = globalThis.fetch;
+  let seenUrl: string;
+  beforeEach(() => {
+    seenUrl = '';
+    globalThis.fetch = (input: RequestInfo | URL) => {
+      seenUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return Promise.resolve(
+        new Response(JSON.stringify({ message: { body: { mid: 'm' } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    };
+  });
+  afterEach(() => {
+    globalThis.fetch = real;
+  });
+
+  it('🔴 адрес запроса СЛЕДУЕТ за перечнем двери — второй копии литерала нет', async () => {
+    // МУТАНТ (красное-до): вернуть в адаптер литерал `https://platform-api.max.ru/messages` —
+    // ось краснеет, потому что дверь такого хоста не знает и адрес перестаёт следовать за ней.
+    await new MaxBotAdapter(ТОКЕН_БОЕВОЙ_ФОРМЫ).sendMessage({ chatId: '1', text: 'x' });
+    expect(seenUrl.startsWith(`https://${MAX_API_HOST}/messages?`)).toBe(true);
+    // и сам выведенный хост ОБЯЗАН быть элементом перечня, а не похожим на него
+    expect(RF_ALLOWED_PROVIDER_HOSTS).toContain(MAX_API_HOST);
+  });
+
+  it('🔴 перечень содержит РОВНО ОДИН хост MAX — иначе вывод указывал бы на соседа', () => {
+    // МУТАНТ: дописать в перечень второй `*.max.ru` — модуль обязан упасть НА ЗАГРУЗКЕ (громко),
+    // а не молча выбрать первый попавшийся.
+    expect(RF_ALLOWED_PROVIDER_HOSTS.filter((h) => h.endsWith('.max.ru'))).toHaveLength(1);
+  });
+
+  it('🔴 ТЕКСТЫ НЕ РАСХОДЯТСЯ С КОНСТАНТОЙ: .env.example и ADR-0008 (EN+RU) называют тот же хост', () => {
+    // МУТАНТ (красное-до): сменить хост в перечне, не тронув документы, — ось краснеет и называет
+    // ФАЙЛ. Прежде расхождение кода и текста ловилось только чтением глазами, и именно тексты
+    // оператор читает ДО кода.
+    // src/lib/providers/messenger → … → backend → корень репозитория (пять шагов, а не четыре:
+    // четыре приводили в `backend/`, и ось краснела на ИСПРАВНЫХ файлах — поймано прогоном).
+    const корень = path.join(__dirname, '..', '..', '..', '..', '..');
+    const тексты = [
+      '.env.example',
+      path.join('docs', '04-decisions', '0008-rf-provider-matrix.md'),
+      path.join('docsRU', '04-decisions', '0008-rf-provider-matrix.md'),
+    ];
+    for (const имя of тексты) {
+      const путь = path.join(корень, имя);
+      const текст = fs.readFileSync(путь, 'utf8');
+      expect(`${имя}: ${текст.includes(MAX_API_HOST)}`).toBe(`${имя}: true`);
+    }
+  });
+});
+
+/**
+ * ═══ ДВА ДЕФЕКТА, НАЙДЕННЫЕ ОСЯМИ КЛАСТЕРА ПРИ ИХ ЖЕ НАПИСАНИИ (31.08.2026) ═══
+ * Оба — про ВТОРОЙ СЛОЙ ЗАЩИТЫ СЕКРЕТА, и оба нашла не вычитка, а ПРОГОН.
+ */
+describe('MAX — слой вырезания секрета не портит диагноз (найдено осями №129)', () => {
+  const real = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = real;
+  });
+  const отказПлощадки = (message: string) => {
+    globalThis.fetch = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ success: false, message }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+  };
+
+  it('🔴 ПРЕФИКС ПРОВАЙДЕРА НЕ УДВАИВАЕТСЯ при пересборке ошибки', async () => {
+    // МУТАНТ (красное-до): снять `.replace(\`[${err.provider}] \`, '')` в безСекрета — в журнал
+    // возвращается «[max] [max] …». Дефект видимый, а не смысловой, но читатель принимает его
+    // за сбой разбора и идёт искать несуществующую поломку.
+    const секрет = 'Invalid'; // секрет, совпадающий с куском чужого текста — путь пересборки жив
+    отказПлощадки('Invalid chatId: 0');
+    const err = (await new MaxBotAdapter(секрет)
+      .sendMessage({ chatId: '1', text: 'x' })
+      .catch((e: unknown) => e)) as ProviderError;
+    expect(err.message.startsWith('[max] [max]')).toBe(false);
+    expect(err.message.split('[max]')).toHaveLength(2); // ровно один префикс
   });
 });
