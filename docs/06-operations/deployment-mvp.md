@@ -49,13 +49,33 @@ gated in CI (`provision-heals-stale-db`). If the `./migrations:/migrations:ro` b
    ```
 
    > **`.env.example` is a FORM, not a provisioning path.** It is the commented *inventory* of every key —
-   > what exists, what it means, what shape it takes. Copying it verbatim produces an **empty
-   > `METRICS_TOKEN`** and `__change_me__` secrets, so a `NODE_ENV=production` boot **fails fast** in
-   > `backend/src/config/env.validation.ts` (`METRICS_TOKEN: required in production`). Do **not**
-   > `cp .env.example .env`. Both halves of this are under test: the CI `edge-smoke` job provisions its env
-   > with `deploy/gen-env.sh` and keeps a **negative control** asserting the `cp` path is rejected at boot;
-   > the unit test `backend/src/config/gen-env.spec.ts` runs the real generator against the real
-   > `validateEnv` and derives the required-key set from the zod schema, so the two cannot drift.
+   > what exists, what it means, what shape it takes. Copying it verbatim produces `__change_me__`
+   > placeholders, so a `NODE_ENV=production` boot **fails fast** in
+   > `backend/src/config/env.validation.ts`. Do **not** `cp .env.example .env`. Both halves of this are
+   > under test: the CI `edge-smoke` job provisions its env with `deploy/gen-env.sh` and keeps a
+   > **negative control** asserting the `cp` path is rejected at boot; the unit test
+   > `backend/src/config/gen-env.spec.ts` runs the real generator against the real `validateEnv` and
+   > derives the required-key set from the zod schema, so the two cannot drift.
+   >
+   > **Why a *filled* placeholder is refused BY NAME (2026-08-31, finding №176-family / №174).**
+   > **What changed:** in production `validateEnv` now rejects a `METRICS_TOKEN` whose value contains
+   > `change_me` (case-insensitive), naming the variable and the reason. Previously the only barrier
+   > was *shape* — the token had to be present and ≥16 characters.
+   > **Scope stated aloud:** this covers `METRICS_TOKEN` only (holder's decision, 2026-08-31).
+   > Extending the same rule to every secret is a separate decision, not something this line
+   > already delivers.
+   > **Why:** on 2026-08-29 the template was made to start verbatim (an operator-facing requirement:
+   > a contract that does not boot teaches nothing), which filled `METRICS_TOKEN` with the 30-character
+   > placeholder `__change_me_32_hex_or_longer__`. Shape alone was then satisfied, the production boot
+   > stopped failing, and the two negative controls above went red unnoticed.
+   > **Why this is better — measured, not argued:** `MetricsGuard` branches on *whether a token is
+   > configured*. With **no** token it falls back to INTERNAL-ONLY (loopback / private ranges, 404 for
+   > everything else). With a token **configured** it admits anyone who presents it — and this one is
+   > published in the repository. So the filled placeholder made the lock **weaker than its own
+   > absence**, and did it silently: the boot succeeded. Refusing by name restores the loud failure
+   > while keeping the template startable in dev — the only state in which both requirements hold at
+   > once. The placeholder in `.env.example` is deliberately left as it is: it must stay impassable
+   > for production.
 2. **Bring the whole stack up** — Compose orders it: `postgres` healthy → `provision` (schema + seed) exits 0 →
    `api`/`worker` start → `proxy` last.
    ```bash

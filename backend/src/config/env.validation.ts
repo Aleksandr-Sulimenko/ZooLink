@@ -1291,6 +1291,40 @@ export function validateEnv(config: Record<string, unknown>): Env {
       '  - METRICS_TOKEN: required in production (min 16 chars) — else MetricsGuard trusts req.ip behind the proxy and /metrics is world-readable',
     );
   }
+  // ЗАПОЛНЕННАЯ ЗАГЛУШКА ХУЖЕ ПУСТОГО ЗНАЧЕНИЯ — И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ (находка №174,
+  // решение держателя 31.08.2026; док-первым: docs/06-operations/deployment-mvp.md + зеркало).
+  //
+  // ЧТО СЛУЧИЛОСЬ. Проверка выше меряет ФОРМУ: «задан и ≥16 знаков». 29.08.2026 шаблон научили
+  // стартовать дословно, и `.env.example` получил `METRICS_TOKEN=__change_me_32_hex_or_longer__` —
+  // 30 знаков. Форма сошлась, боевой старт перестал падать, а два негатив-контроля в
+  // `gen-env.spec.ts` покраснели и пролежали красными двое суток (CI на паке не запускался).
+  //
+  // ПОЧЕМУ ЭТО НЕ «ПРОСТО СЛАБЫЙ СЕКРЕТ», А ОСЛАБЛЕНИЕ ЗАМКА. `MetricsGuard` (lib/metrics/
+  // metrics.guard.ts) ветвится по вопросу «ЗАДАН ЛИ токен»: НЕ задан → режим «только изнутри»
+  // (loopback / RFC1918, всему прочему 404); ЗАДАН → пускает любого, кто его предъявил. Значение
+  // этой заглушки опубликовано в нашем же репозитории. То есть заполнение сделало замок СЛАБЕЕ
+  // СОБСТВЕННОГО ОТСУТСТВИЯ — и молча, потому что старт прошёл.
+  //
+  // ПОЧЕМУ ОТКАЗ ПО ИМЕНИ, А НЕ ПО ДЛИНЕ ИЛИ ЭНТРОПИИ: длину заглушка уже прошла, а энтропию
+  // считать значило бы гадать. `change_me` — наша собственная конвенция шаблона, то есть признак
+  // НАМЕРЕНИЯ «здесь ещё не подставлено», и он не может совпасть со честно отчеканенным секретом.
+  // ОХВАТ НАЗВАН ВСЛУХ: правило покрывает ТОЛЬКО METRICS_TOKEN (решение держателя). Распространить
+  // его на все секреты — отдельное решение; молча расширить значило бы сделать утверждение шире
+  // замера, чем этот пак болеет.
+  if (
+    parsed.data.NODE_ENV === 'production' &&
+    typeof parsed.data.METRICS_TOKEN === 'string' &&
+    parsed.data.METRICS_TOKEN.toLowerCase().includes('change_me')
+  ) {
+    issues.push(
+      '  - METRICS_TOKEN: это ЗАГЛУШКА ШАБЛОНА (значение содержит «change_me»), а не секрет. ' +
+        'Значение не печатается намеренно. Заполненная заглушка ОПАСНЕЕ пустого значения: при ' +
+        'ЗАДАННОМ токене MetricsGuard пускает любого, кто его предъявил, а это значение опубликовано ' +
+        'в репозитории — тогда как при ПУСТОМ он пускает только loopback/приватные диапазоны. ' +
+        'Похоже, что сделан `cp .env.example .env`: провизионируйте через `deploy/gen-env.sh` ' +
+        '(см. docs/06-operations/deployment-mvp.md).',
+    );
+  }
   // D3 / OPS-11: Sign in with Apple is all-or-nothing. The adapter is deferred (stub-on-empty), but if
   // any Apple credential is supplied in production, the full set must be present so the form is never
   // half-configured. All-empty = Apple OAuth simply off (stub-in-dev / 503-in-prod, like other providers).

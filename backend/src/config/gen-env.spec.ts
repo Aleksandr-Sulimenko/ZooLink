@@ -252,9 +252,24 @@ describe('deploy/gen-env.sh vs a raw `cp .env.example .env` (the provisioning ho
   it('a raw .env.example copy is REJECTED by validateEnv in production (the CI negative control)', () => {
     const envPath = path.join(freshDir('example-reject'), '.env');
     fs.copyFileSync(ENV_EXAMPLE, envPath);
-    expect(() => validateEnv(parseEnvFile(envPath))).toThrow(
-      /METRICS_TOKEN: required in production/,
-    );
+    // ПРИЧИНА СМЕНИЛАСЬ ВМЕСТЕ С КОНТРАКТОМ (находка №174, решение держателя 31.08.2026): прежде
+    // сырую копию отвергала ФОРМА («METRICS_TOKEN: required in production» — значение было пусто),
+    // теперь её отвергает ИМЯ — заполненная заглушка форму проходит, а замок при ней СЛАБЕЕ, чем
+    // при пустом значении. Ось сторожит ту же способность («путь cp отвергается при старте»),
+    // но по новому основанию, и это записано, а не подогнано молча.
+    const отказ = (() => {
+      try {
+        validateEnv(parseEnvFile(envPath));
+        return null;
+      } catch (e: unknown) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    })();
+    expect(отказ).not.toBeNull();
+    expect(отказ).toContain('METRICS_TOKEN');
+    expect(отказ).toContain('ЗАГЛУШКА ШАБЛОНА');
+    // и отказ НЕ печатает само значение — правило разглашения держится и на заглушке
+    expect(отказ).not.toContain('__change_me_32_hex_or_longer__');
   });
 
   it('--fill-missing tops it up without re-minting existing values, and the result validates', () => {
@@ -266,10 +281,21 @@ describe('deploy/gen-env.sh vs a raw `cp .env.example .env` (the provisioning ho
     expect(fill.status).toBe(0);
 
     const after = parseEnvFile(envPath);
-    // Existing non-empty values survive verbatim — no secret is rotated behind the operator's back.
+    // Existing REAL values survive verbatim — no secret is rotated behind the operator's back.
+    // ЗАГЛУШКА ШАБЛОНА ИЗ ЭТОГО ПРАВИЛА ИСКЛЮЧЕНА (находка №174): `__change_me__` — не значение, а
+    // прямое объявление «здесь ещё не подставлено». Держать её как «существующее значение» значило
+    // бы, что канонический путь пополнения обходит РОВНО те ключи, ради которых его и зовут.
+    const заглушка = (v: string) => v.includes('__change_me') || v.includes('__CHANGE_ME');
     for (const [key, value] of Object.entries(before)) {
-      if (value !== '') expect(after[key]).toBe(value);
+      if (value !== '' && !заглушка(value)) expect(after[key]).toBe(value);
     }
+    // 🔴 НЕСУЩЕЕ: ни одной заглушки не осталось — ни в обязательных ключах, ни в кредах провайдеров
+    // (последние становятся ПУСТЫМИ, то есть stub-режимом, как объявлено в шапке генератора).
+    // МУТАНТ (красное-до): снять `is_placeholder` из load_existing — заглушки доживают до файла.
+    const выжившие = Object.entries(after)
+      .filter(([, v]) => заглушка(v))
+      .map(([k]) => k);
+    expect(выжившие).toEqual([]);
     expect(after.METRICS_TOKEN.length).toBeGreaterThanOrEqual(16);
     expect(() => validateEnv(after)).not.toThrow();
 

@@ -286,8 +286,23 @@ REQUIRED_KEYS=(
 # --------------------------------------------------------------------------------------------- #
 declare -A VAL=()   # final value per key
 declare -A HELD=()  # keys whose value came from the EXISTING file (never re-minted)
+# Ключи, чья строка в файле несёт ЗАГЛУШКУ ШАБЛОНА. Нужны отдельно от HELD: заглушка обязана быть
+# СНЯТА даже там, где канонического значения нет вовсе (креды провайдеров), иначе тулза считает
+# ключ незаданным, а в файле остаётся мусор — и живой адаптер поедет с ним в сеть вместо stub-режима.
+declare -A PLACEHOLDER=()
 
 mint() { openssl rand -hex "$1"; }
+
+# ЗАГЛУШКА ШАБЛОНА — ОДНО ПОНЯТИЕ, ОДНО МЕСТО (находка №174). Два места решают, «есть ли значение»:
+# `load_existing` (что держать) и `fill_into` (какую строку переписывать). Пока правило жило бы в
+# каждом своей копией, они разошлись бы молча — это ровно наш класс «решение исполняется ВЕЗДЕ, где
+# записано». Здесь оно записано один раз.
+is_placeholder() {
+  case "$1" in
+    *__change_me*|*__CHANGE_ME*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Read `KEY=VALUE` lines from an existing env file into VAL/HELD. Comments, blank lines and lines
 # without '=' are ignored. Only NON-EMPTY values are held: an empty value means "not set" (same
@@ -312,6 +327,25 @@ load_existing() {
         ;;
       *) continue ;;
     esac
+    # ЗАГЛУШКА ШАБЛОНА — НЕ ЗНАЧЕНИЕ, И ЧИТАЕТСЯ КАК «НЕ ЗАДАНО» (находка №174, 31.08.2026).
+    # Тот же довод, что абзацем выше про пустое значение, только на шаг дальше: пустое читается как
+    # «не задано», а `__change_me__` — это ПРЯМОЕ объявление «здесь ещё не подставлено». Держать его
+    # как «существующее непустое значение» значило бы, что канонический путь пополнения
+    # (`--fill-missing`) обходит ровно те ключи, ради которых его и зовут.
+    # ЗАМЕР, ПОРОДИВШИЙ ПРАВКУ: после того как 29.08 шаблон научили стартовать дословно,
+    # `cp .env.example .env && --fill-missing` давал файл, который НЕ проходит проверку прода
+    # (METRICS_TOKEN остался публичной заглушкой) — и оператору, шедшему каноническим путём, тулза
+    # не оставляла выхода. Замок, отнимающий возможность вместо проверки формы.
+    # СПОСОБНОСТЬ НЕ ОТНЯТА: настоящий секрет `change_me` не содержит и держится как прежде;
+    # очищаются РОВНО заглушки — секреты перечеканиваются, креды провайдеров становятся пустыми,
+    # то есть stub-режим, как и объявлено в шапке этого файла.
+    # ОХВАТ НАЗВАН ВСЛУХ: здесь правило покрывает ВСЕ заглушки, потому что это путь ПРОВИЗИОНИНГА и
+    # он ничего не запрещает — он ЗАПОЛНЯЕТ. Отказ старта (validateEnv) держателем сужен до одного
+    # METRICS_TOKEN, и расширять его молча нельзя: это разные механизмы с разной ценой ошибки.
+    if is_placeholder "$value"; then
+      PLACEHOLDER["$key"]=1
+      value=""
+    fi
     if [ -n "$value" ]; then
       VAL["$key"]="$value"
       HELD["$key"]=1
@@ -390,7 +424,7 @@ render_to() {
 # Rewrite an existing file in place, changing ONLY empty-valued lines whose key is being filled,
 # then append the keys that were absent entirely. Every other byte is passed through untouched.
 fill_into() {
-  local target="$1" dir tmp line key
+  local target="$1" dir tmp line key line_value line_comment
   shift
   local -A fill_set=()
   local k
@@ -410,8 +444,18 @@ fill_into() {
         [ -z "${key//[A-Za-z0-9_]/}" ] || key=""
         ;;
     esac
-    if [ -n "$key" ] && [ -n "${fill_set[$key]+set}" ] && [ -z "${line#*=}" ]; then
-      printf '%s=%s\n' "$key" "${VAL[$key]}"
+    # ХВОСТОВОЙ КОММЕНТАРИЙ СОХРАНЯЕТСЯ. Строка заглушки в шаблоне несёт пояснение оператору
+    # («← ОБЯЗАТЕЛЬНА при NODE_ENV=production…»), и потерять его при чеканке значило бы вылечить
+    # значение ценой смысла. Отделяем только комментарий, отбитый пробелом, — так его и пишет
+    # шаблон. Ветка срабатывает ТОЛЬКО там, где строка и так подлежит замене.
+    line_value=""; line_comment=""
+    if [ -n "$key" ]; then
+      line_value="$(printf '%s' "${line#*=}" | sed 's/[[:space:]]#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+      line_comment="$(printf '%s' "${line#*=}" | sed -n 's/.*\([[:space:]]#.*\)$/\1/p')"
+    fi
+    if [ -n "$key" ] && [ -n "${fill_set[$key]+set}" ] &&
+       { [ -z "$line_value" ] || is_placeholder "$line_value"; }; then
+      printf '%s=%s%s\n' "$key" "${VAL[$key]}" "$line_comment"
       seen["$key"]=1
     else
       printf '%s\n' "$line"
@@ -486,7 +530,12 @@ resolve_values
 # `KEY=` would be a no-op, and appending it would add noise without adding configuration.
 declare -a to_fill=()
 for key in ${candidates[@]+"${candidates[@]}"}; do
-  if [ -n "${VAL[$key]}" ]; then to_fill+=("$key"); fi
+  # ЗАГЛУШКА СНИМАЕТСЯ ДАЖЕ ПРИ ПУСТОМ КАНОНИЧЕСКОМ ЗНАЧЕНИИ (находка №174). Довод абзацем выше
+  # («писать `KEY=` поверх `KEY=` — пустая работа») верен ровно для пустой строки и НЕВЕРЕН для
+  # заглушки: там замена меняет содержимое файла с мусора на честное «не задано» (stub-режим,
+  # как объявлено в шапке). Без этого ключа тулза считала бы ключ незаданным, а `SMSRU_API_ID`
+  # уезжал бы к вендору строкой `__change_me__` — замерено на копии шаблона.
+  if [ -n "${VAL[$key]}" ] || [ -n "${PLACEHOLDER[$key]+set}" ]; then to_fill+=("$key"); fi
 done
 
 if [ "${#to_fill[@]}" -eq 0 ]; then
@@ -496,5 +545,5 @@ fi
 
 fill_into "$ENV_FILE" "${to_fill[@]}"
 note "filled ${#to_fill[@]} missing key(s) in $ENV_FILE (names only): ${to_fill[*]}"
-note "existing non-empty values were preserved verbatim (no secret re-minted)."
+note "existing real values were preserved verbatim (no secret re-minted); template placeholders were replaced."
 exit 0
